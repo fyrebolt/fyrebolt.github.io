@@ -1,0 +1,12 @@
+# Never commit signing material
+certs/
+node_modules/
+
+# Cert / key formats — default to ignoring all
+*.p12
+*.pem
+*.key
+*.cer
+
+# OS junk
+.DS_Store

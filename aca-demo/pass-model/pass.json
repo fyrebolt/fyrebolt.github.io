@@ -1,0 +1,66 @@
+{
+  "formatVersion": 1,
+  "passTypeIdentifier": "PASS_TYPE_ID_PLACEHOLDER",
+  "teamIdentifier": "TEAM_ID_PLACEHOLDER",
+  "serialNumber": "ACA-2025-001",
+  "organizationName": "Association of Chinese Americans",
+  "description": "ACA Membership Card",
+  "logoText": "ACA @ UCLA",
+  "foregroundColor": "rgb(255, 255, 255)",
+  "backgroundColor": "rgb(180, 0, 0)",
+  "labelColor": "rgb(255, 220, 220)",
+  "generic": {
+    "primaryFields": [
+      {
+        "key": "member",
+        "label": "MEMBER",
+        "value": "Jane Doe"
+      }
+    ],
+    "secondaryFields": [
+      {
+        "key": "memberId",
+        "label": "MEMBER ID",
+        "value": "ACA-2025-001"
+      }
+    ],
+    "auxiliaryFields": [
+      {
+        "key": "discounts",
+        "label": "DISCOUNTS",
+        "value": "Noodle St 20% · Tigawok 10% · Latea 10%"
+      }
+    ],
+    "backFields": [
+      {
+        "key": "sponsors",
+        "label": "Sponsor Discounts",
+        "value": "Noodle St — 20%\nVolcano Tea House — 20%\nTigawok — 10%\nCurry Hero — 5%\nLatea — 10%\nBruin Bowl Malatang — 5%\nOdd One Out — 10%"
+      },
+      {
+        "key": "about",
+        "label": "About",
+        "value": "The Association of Chinese Americans at UCLA is a student-run cultural organization. Show this pass at participating sponsors to redeem your member discount."
+      },
+      {
+        "key": "contact",
+        "label": "Contact",
+        "value": "instagram.com/aca.ucla"
+      }
+    ]
+  },
+  "barcodes": [
+    {
+      "format": "PKBarcodeFormatQR",
+      "message": "ACA-2025-001",
+      "messageEncoding": "iso-8859-1",
+      "altText": "ACA-2025-001"
+    }
+  ],
+  "barcode": {
+    "format": "PKBarcodeFormatQR",
+    "message": "ACA-2025-001",
+    "messageEncoding": "iso-8859-1",
+    "altText": "ACA-2025-001"
+  }
+}

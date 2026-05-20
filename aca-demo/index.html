@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#B40000" />
+  <title>ACA @ UCLA — Membership Card</title>
+  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23B40000'/><text x='50' y='62' font-size='42' font-family='Helvetica,Arial' font-weight='700' fill='white' text-anchor='middle'>ACA</text></svg>" />
+  <style>
+    :root {
+      --aca-red: #B40000;
+      --aca-red-dark: #8A0000;
+      --aca-red-light: #FFDCDC;
+      --ink: #1a1a1a;
+      --muted: #6a6a6a;
+      --bg: #fafafa;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.5;
+    }
+    .wrap {
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 64px;
+      height: 64px;
+      border-radius: 16px;
+      background: var(--aca-red);
+      color: white;
+      font-weight: 800;
+      font-size: 22px;
+      letter-spacing: 0.5px;
+      margin-bottom: 14px;
+      box-shadow: 0 6px 18px rgba(180, 0, 0, 0.25);
+    }
+    h1 {
+      font-size: 22px;
+      margin: 0 0 4px;
+      letter-spacing: -0.01em;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 14px;
+      margin: 0;
+    }
+
+    .card {
+      background: var(--aca-red);
+      background-image: linear-gradient(135deg, var(--aca-red) 0%, var(--aca-red-dark) 100%);
+      color: white;
+      border-radius: 18px;
+      padding: 18px 18px 16px;
+      box-shadow: 0 16px 40px rgba(180, 0, 0, 0.28);
+      margin-bottom: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+    .card-logo {
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: 0.4px;
+    }
+    .card-org {
+      font-size: 11px;
+      opacity: 0.85;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      text-align: right;
+    }
+    .field-label {
+      font-size: 10px;
+      letter-spacing: 1.2px;
+      color: var(--aca-red-light);
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+    .field-value {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 14px;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .row .field-value {
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .aux .field-value {
+      font-size: 12px;
+      font-weight: 500;
+      opacity: 0.95;
+    }
+    .qr {
+      margin-top: 12px;
+      background: white;
+      color: var(--aca-red);
+      border-radius: 10px;
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .qr-square {
+      width: 64px;
+      height: 64px;
+      flex: 0 0 64px;
+      background-image:
+        linear-gradient(90deg, #000 50%, transparent 50%),
+        linear-gradient(0deg, #000 50%, transparent 50%);
+      background-size: 8px 8px, 8px 8px;
+      background-color: white;
+      border: 2px solid #000;
+      border-radius: 4px;
+      position: relative;
+    }
+    .qr-square::before, .qr-square::after {
+      content: "";
+      position: absolute;
+      width: 16px; height: 16px;
+      border: 3px solid #000;
+      background: white;
+    }
+    .qr-square::before { top: 4px; left: 4px; }
+    .qr-square::after  { top: 4px; right: 4px; }
+    .qr-text {
+      font-size: 12px;
+      color: #444;
+    }
+    .qr-text strong { color: var(--aca-red); display: block; font-size: 13px; }
+
+    .discounts {
+      background: white;
+      border-radius: 14px;
+      padding: 16px 18px;
+      box-shadow: 0 1px 0 rgba(0,0,0,0.04), 0 1px 3px rgba(0,0,0,0.05);
+      margin-bottom: 24px;
+    }
+    .discounts h2 {
+      font-size: 13px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--aca-red);
+      margin: 0 0 10px;
+    }
+    .discounts ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .discounts li {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 14px;
+    }
+    .discounts li:last-child { border-bottom: none; }
+    .discounts li b { color: var(--aca-red); font-weight: 600; }
+
+    .cta { text-align: center; }
+    .wallet-btn {
+      display: inline-block;
+      transition: transform 0.15s ease, filter 0.15s ease;
+    }
+    .wallet-btn:active { transform: scale(0.97); filter: brightness(0.92); }
+    .wallet-btn svg { display: block; width: 220px; height: auto; }
+
+    .non-ios {
+      display: none;
+      margin-top: 14px;
+      font-size: 13px;
+      color: var(--muted);
+      background: #FFF6F6;
+      border: 1px solid #FFD8D8;
+      color: #8A0000;
+      border-radius: 10px;
+      padding: 10px 14px;
+    }
+    body[data-platform="non-ios"] .non-ios { display: block; }
+
+    footer {
+      margin-top: 36px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    footer a { color: var(--aca-red); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">ACA</div>
+      <h1>ACA @ UCLA</h1>
+      <p class="sub">UCLA Association of Chinese Americans</p>
+    </header>
+
+    <section class="card" aria-label="Membership card preview">
+      <div class="card-top">
+        <div class="card-logo">ACA @ UCLA</div>
+        <div class="card-org">Membership<br/>2025</div>
+      </div>
+
+      <div class="field-label">Member</div>
+      <div class="field-value">Jane Doe</div>
+
+      <div class="row">
+        <div>
+          <div class="field-label">Member ID</div>
+          <div class="field-value">ACA-2025-001</div>
+        </div>
+        <div style="text-align:right">
+          <div class="field-label">Status</div>
+          <div class="field-value">Active</div>
+        </div>
+      </div>
+
+      <div class="aux">
+        <div class="field-label">Discounts</div>
+        <div class="field-value">Noodle St 20% · Tigawok 10% · Latea 10%</div>
+      </div>
+
+      <div class="qr">
+        <div class="qr-square" aria-hidden="true"></div>
+        <div class="qr-text">
+          <strong>ACA-2025-001</strong>
+          Show at sponsor checkout
+        </div>
+      </div>
+    </section>
+
+    <section class="discounts" aria-label="Sponsor discounts">
+      <h2>Sponsor Discounts</h2>
+      <ul>
+        <li>Noodle St <b>20%</b></li>
+        <li>Volcano Tea House <b>20%</b></li>
+        <li>Tigawok <b>10%</b></li>
+        <li>Curry Hero <b>5%</b></li>
+        <li>Latea <b>10%</b></li>
+        <li>Bruin Bowl Malatang <b>5%</b></li>
+        <li>Odd One Out <b>10%</b></li>
+      </ul>
+    </section>
+
+    <div class="cta">
+      <a class="wallet-btn" href="./passes/membership.pkpass" aria-label="Add to Apple Wallet">
+        <!-- Apple "Add to Apple Wallet" badge (SVG, English) -->
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 60" role="img" aria-label="Add to Apple Wallet">
+          <rect width="220" height="60" rx="10" fill="#000"/>
+          <g transform="translate(16,16)" fill="#fff">
+            <!-- Wallet glyph -->
+            <path d="M2 4.5C2 3.12 3.12 2 4.5 2h19A2.5 2.5 0 0 1 26 4.5v3H4.5A2.5 2.5 0 0 1 2 5V4.5Z" opacity="0.95"/>
+            <path d="M2 9h22a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9Zm17 6.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/>
+          </g>
+          <g transform="translate(54,22)" fill="#fff" font-family="-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif">
+            <text x="0" y="10" font-size="10" font-weight="500" opacity="0.85">Add to</text>
+            <text x="0" y="28" font-size="17" font-weight="700">Apple Wallet</text>
+          </g>
+        </svg>
+      </a>
+      <div class="non-ios">
+        Open this page on your iPhone to add the card to Wallet.
+      </div>
+    </div>
+
+    <footer>
+      <p>Demo pass · For development &amp; testing only<br/>
+      <a href="https://instagram.com/aca.ucla">@aca.ucla</a></p>
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      var ua = navigator.userAgent || "";
+      var isIOS = /iPad|iPhone|iPod/.test(ua) && !window.MSStream;
+      // iPadOS 13+ reports as Mac; treat touch Macs as iOS-like for Wallet
+      if (!isIOS && /Macintosh/.test(ua) && "ontouchend" in document) isIOS = true;
+      document.body.setAttribute("data-platform", isIOS ? "ios" : "non-ios");
+    })();
+  </script>
+</body>
+</html>
