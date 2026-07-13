@@ -9,6 +9,9 @@ const NAV_LINKS: NavLink[] = [
   { label: 'Contact', href: '#contact' },
 ];
 
+// Standalone tool page — a real route, not an in-page section anchor.
+const VIDEO_HREF = '/video/';
+
 export default function Navbar() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [activeSection, setActiveSection] = useState('home');
@@ -93,7 +96,7 @@ export default function Navbar() {
           </a>
 
           {/* Desktop links */}
-          <div className="hidden md:flex items-center gap-8">
+          <div className="hidden md:flex items-center gap-6 lg:gap-8">
             {NAV_LINKS.map((link) => (
               <a
                 key={link.href}
@@ -115,6 +118,19 @@ export default function Navbar() {
                 )}
               </a>
             ))}
+
+            {/* Video Editor — separate tool page */}
+            <a
+              href={VIDEO_HREF}
+              data-cursor-hover
+              className="relative flex items-center gap-1.5 text-sm font-medium tracking-wide text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors duration-300"
+            >
+              <span
+                aria-hidden="true"
+                className="inline-block w-1.5 h-1.5 rounded-full bg-gradient-to-r from-[var(--color-primary-green)] to-[var(--color-primary-blue)]"
+              />
+              Video Editor
+            </a>
           </div>
 
           {/* Mobile hamburger */}
@@ -176,6 +192,22 @@ export default function Navbar() {
               {link.label}
             </a>
           ))}
+
+          {/* Video Editor — separate tool page */}
+          <a
+            href={VIDEO_HREF}
+            onClick={() => setIsMobileMenuOpen(false)}
+            className={`flex items-center gap-3 text-3xl font-semibold text-[var(--color-text-secondary)] transition-all duration-500 ${
+              isMobileMenuOpen ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
+            }`}
+            style={{ transitionDelay: isMobileMenuOpen ? `${NAV_LINKS.length * 100}ms` : '0ms' }}
+          >
+            <span
+              aria-hidden="true"
+              className="inline-block w-2 h-2 rounded-full bg-gradient-to-r from-[var(--color-primary-green)] to-[var(--color-primary-blue)]"
+            />
+            Video Editor
+          </a>
         </div>
       </div>
     </>
