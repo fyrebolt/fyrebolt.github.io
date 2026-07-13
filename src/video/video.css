@@ -1,0 +1,22 @@
+/* The shared index.css hides the native cursor (the main site draws a custom one).
+   The Video Editor has no custom cursor, so restore the native cursor here. */
+body {
+  cursor: auto;
+}
+a,
+button,
+[role='button'],
+input,
+textarea,
+select,
+[data-cursor-hover] {
+  cursor: auto;
+}
+input[type='range'],
+button,
+[role='button'] {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+}
