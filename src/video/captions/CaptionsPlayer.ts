@@ -1,11 +1,11 @@
 // ===== Captions engine: compositing + timed caption rendering + export =====
 
-import { drawSource, measureCaption, drawCaption, outputSizeFor } from '../render';
+import { drawSource, measureCaption, drawCaption, drawTypewriter, outputSizeFor } from '../render';
 import type { FillMode, OutputSize, RatioKey } from '../types';
-import type { Caption } from './types';
-import { boilFontIndex } from './types';
-import type { BoilPoolId } from './fonts';
-import { poolById } from './fonts';
+import type { CaptionEl } from './types';
+import { boilFontIndex, elementEnd, typewriterProgress } from './types';
+import type { BoilPoolId, BoilFont } from './fonts';
+import { poolById, fontByKey } from './fonts';
 
 const FPS = 30;
 
@@ -19,7 +19,7 @@ export interface LoadedMedia {
 }
 
 export interface CaptionsState {
-  captions: Caption[];
+  captions: CaptionEl[];
   fillMode: FillMode;
   ratio: RatioKey;
   boilPool: BoilPoolId;
@@ -87,8 +87,18 @@ export class CaptionsPlayer {
   totalSec(): number {
     if (!this.media) return 0;
     if (this.media.kind === 'video') return this.media.duration;
-    const ends = this.getState().captions.map((c) => c.end);
+    const ends = this.getState().captions.map(elementEnd);
     return Math.max(2, ...ends);
+  }
+
+  /** Resolve the font to render an element with at time `sec`. */
+  private fontFor(el: CaptionEl, sec: number, state: CaptionsState): BoilFont {
+    if (el.kind === 'boil') {
+      const pool = poolById(state.boilPool);
+      const fi = boilFontIndex(el, (sec - el.start) * 1000, pool.fonts.length);
+      return pool.fonts[fi] ?? pool.fonts[0];
+    }
+    return fontByKey(el.fontKey);
   }
 
   private nowSec(): number {
@@ -107,12 +117,13 @@ export class CaptionsPlayer {
     const state = this.getState();
     const src = this.media.video ?? this.media.image!;
     drawSource(this.ctx, src, this.out, state.fillMode);
-    const pool = poolById(state.boilPool);
-    for (const cap of state.captions) {
-      if (sec >= cap.start && sec < cap.end) {
-        const fi = boilFontIndex(cap, (sec - cap.start) * 1000, pool.fonts.length);
-        const font = pool.fonts[fi] ?? pool.fonts[0];
-        drawCaption(this.ctx, this.out, cap, font, state.normalize, 1);
+    for (const el of state.captions) {
+      if (sec < el.start || sec >= elementEnd(el)) continue;
+      const font = this.fontFor(el, sec, state);
+      if (el.kind === 'boil') {
+        drawCaption(this.ctx, this.out, el, font, state.normalize, 1);
+      } else {
+        drawTypewriter(this.ctx, this.out, el, font, typewriterProgress(el, sec));
       }
     }
   }
@@ -222,13 +233,11 @@ export class CaptionsPlayer {
     const px = nx * this.out.w;
     const py = ny * this.out.h;
     const state = this.getState();
-    const pool = poolById(state.boilPool);
     const sec = this.nowSec();
     for (let i = state.captions.length - 1; i >= 0; i--) {
       const cap = state.captions[i];
-      const fi = boilFontIndex(cap, (sec - cap.start) * 1000, pool.fonts.length);
-      const font = pool.fonts[fi] ?? pool.fonts[0];
-      const L = measureCaption(this.ctx, this.out, cap, font, state.normalize);
+      const font = this.fontFor(cap, sec, state);
+      const L = measureCaption(this.ctx, this.out, cap, font, cap.kind === 'boil' && state.normalize);
       const pad = L.sizePx * 0.3;
       if (px >= L.left - pad && px <= L.left + L.blockW + pad && py >= L.top - pad && py <= L.top + L.blockH + pad) {
         return cap.id;
@@ -243,11 +252,9 @@ export class CaptionsPlayer {
     const state = this.getState();
     const cap = state.captions.find((c) => c.id === id);
     if (!cap) return null;
-    const pool = poolById(state.boilPool);
     const sec = this.nowSec();
-    const fi = boilFontIndex(cap, (sec - cap.start) * 1000, pool.fonts.length);
-    const font = pool.fonts[fi] ?? pool.fonts[0];
-    const L = measureCaption(this.ctx, this.out, cap, font, state.normalize);
+    const font = this.fontFor(cap, sec, state);
+    const L = measureCaption(this.ctx, this.out, cap, font, cap.kind === 'boil' && state.normalize);
     const pad = L.sizePx * 0.25;
     return { left: L.left - pad, top: L.top - pad, width: L.blockW + pad * 2, height: L.blockH + pad * 2 };
   }

@@ -106,6 +106,23 @@ export function poolById(id: BoilPoolId): FontPool {
 /** Back-compat alias: the default pool's fonts. */
 export const BOIL_FONTS = DEFAULT_FONTS;
 
+/** A single font referenced across pools (for the typewriter's one-font pick). */
+export interface FontRef extends BoilFont {
+  /** Stable id "poolId:index". */
+  key: string;
+  /** Which pool it came from (shown in the picker). */
+  poolLabel: string;
+}
+
+/** Every font across all pools, flattened, with stable keys. */
+export const ALL_FONTS: FontRef[] = FONT_POOLS.flatMap((p) =>
+  p.fonts.map((f, i) => ({ ...f, key: `${p.id}:${i}`, poolLabel: p.label })),
+);
+
+export function fontByKey(key: string): BoilFont {
+  return ALL_FONTS.find((f) => f.key === key) ?? ALL_FONTS[0];
+}
+
 /** Canvas font shorthand for a pool entry at a given pixel size. */
 export function fontCss(font: BoilFont, sizePx: number): string {
   return `${font.weight} ${sizePx}px "${font.family}", sans-serif`;

@@ -2,10 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, PointerEvent as ReactPointerEvent } from 'react';
 import { CaptionsPlayer } from '../captions/CaptionsPlayer';
 import type { CaptionsState, LoadedMedia } from '../captions/CaptionsPlayer';
-import { FONT_POOLS, poolById, preloadAllFontPools } from '../captions/fonts';
+import { FONT_POOLS, poolById, preloadAllFontPools, ALL_FONTS } from '../captions/fonts';
 import type { BoilPoolId } from '../captions/fonts';
-import { createCaption } from '../captions/types';
-import type { BoilMode, Caption, Legibility, TextAlign } from '../captions/types';
+import { createCaption, createTypewriter, elementEnd } from '../captions/types';
+import type {
+  BoilMode,
+  Caption,
+  CaptionEl,
+  DeleteStyle,
+  Legibility,
+  TextAlign,
+  TypewriterCaption,
+} from '../captions/types';
 import MultiTrackTimeline from '../captions/MultiTrackTimeline';
 import { transcodeToMp4, ensureFFmpeg } from '../ffmpeg';
 import type { FillMode, RatioKey } from '../types';
@@ -41,7 +49,7 @@ export default function CaptionsTool() {
   const [duration, setDuration] = useState(0);
   const [currentSec, setCurrentSec] = useState(0);
 
-  const [captions, setCaptions] = useState<Caption[]>([]);
+  const [captions, setCaptions] = useState<CaptionEl[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const [ratio, setRatio] = useState<RatioKey>('9:16');
@@ -133,7 +141,7 @@ export default function CaptionsTool() {
       const image = new Image();
       image.onload = () => {
         setMediaKind('image');
-        setDuration(Math.max(2, ...captions.map((c) => c.end)));
+        setDuration(Math.max(2, ...captions.map(elementEnd)));
         const media: LoadedMedia = { kind: 'image', image, duration: 0 };
         player.attach(media);
         setStatus('Photo loaded. Add captions and set their timing.');
@@ -148,34 +156,45 @@ export default function CaptionsTool() {
     setCurrentSec(sec);
   }, []);
 
+  // Seek to a moment where the element is fully on screen (for placement).
+  const midOf = useCallback((el: CaptionEl): number => {
+    if (el.kind === 'boil') return (el.start + el.end) / 2;
+    return el.start + el.typingDur + Math.min(0.3, el.holdDur / 2);
+  }, []);
+
   const selectCaption = useCallback(
     (id: string) => {
       setSelectedId(id);
       const c = captions.find((x) => x.id === id);
-      if (c) seekTo((c.start + c.end) / 2);
+      if (c) seekTo(midOf(c));
     },
-    [captions, seekTo],
+    [captions, midOf, seekTo],
   );
 
-  const addCaption = useCallback(() => {
+  const staggerStart = useCallback(() => {
     const total = mediaKind === 'video' ? duration : Math.max(duration, 4);
-    const prevEnd = captions.reduce((m, c) => Math.max(m, c.end), 0);
-    const start = Math.min(prevEnd, Math.max(0, total - 0.5));
-    const end = Math.min(total || start + 2, start + 2);
-    const cap = createCaption({
-      text: `Caption ${captions.length + 1}`,
-      start,
-      end: end > start ? end : start + 2,
-      x: 0.5,
-      y: 0.72,
-    });
+    const prevEnd = captions.reduce((m, c) => Math.max(m, elementEnd(c)), 0);
+    return Math.min(prevEnd, Math.max(0, total - 0.5));
+  }, [captions, duration, mediaKind]);
+
+  const addBoil = useCallback(() => {
+    const start = staggerStart();
+    const cap = createCaption({ text: `Caption ${captions.length + 1}`, start, end: start + 2, x: 0.5, y: 0.72 });
     setCaptions((cs) => [...cs, cap]);
     setSelectedId(cap.id);
-    seekTo((cap.start + cap.end) / 2);
-  }, [captions, duration, mediaKind, seekTo]);
+    seekTo(midOf(cap));
+  }, [captions.length, midOf, seekTo, staggerStart]);
 
-  const updateCaption = useCallback((id: string, patch: Partial<Caption>) => {
-    setCaptions((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  const addTypewriter = useCallback(() => {
+    const start = staggerStart();
+    const cap = createTypewriter({ text: 'Typewriter', start, x: 0.5, y: 0.72 });
+    setCaptions((cs) => [...cs, cap]);
+    setSelectedId(cap.id);
+    seekTo(midOf(cap));
+  }, [midOf, seekTo, staggerStart]);
+
+  const updateCaption = useCallback((id: string, patch: Partial<Caption> | Partial<TypewriterCaption>) => {
+    setCaptions((cs) => cs.map((c) => (c.id === id ? ({ ...c, ...patch } as CaptionEl) : c)));
   }, []);
 
   const removeCaption = useCallback(
@@ -191,7 +210,7 @@ export default function CaptionsTool() {
     setBoilPool(id);
     const len = poolById(id).fonts.length;
     setCaptions((cs) =>
-      cs.map((c) => (c.settleFontIndex >= len ? { ...c, settleFontIndex: len - 1 } : c)),
+      cs.map((c) => (c.kind === 'boil' && c.settleFontIndex >= len ? { ...c, settleFontIndex: len - 1 } : c)),
     );
   }, []);
 
@@ -254,14 +273,6 @@ export default function CaptionsTool() {
     setGuides({ x: null, y: null });
   }, []);
 
-  // ---- timeline ----
-  const onChangeRange = useCallback(
-    (id: string, start: number, end: number) => {
-      updateCaption(id, { start, end });
-    },
-    [updateCaption],
-  );
-
   const play = useCallback(() => {
     setSelectedId(null);
     playerRef.current?.playPreview();
@@ -319,8 +330,6 @@ export default function CaptionsTool() {
       setStatus('Export failed. See the console for details.');
     }
   }, [mediaKind]);
-
-  const selDuration = selected ? Math.round((selected.end - selected.start) * 100) / 100 : 0;
 
   return (
     <div className="grid lg:grid-cols-[minmax(0,1fr)_360px] gap-8 items-start">
@@ -380,13 +389,13 @@ export default function CaptionsTool() {
 
           {mediaKind && (
             <MultiTrackTimeline
-              duration={mediaKind === 'video' ? duration : Math.max(2, ...captions.map((c) => c.end), duration)}
+              duration={mediaKind === 'video' ? duration : Math.max(2, ...captions.map(elementEnd), duration)}
               captions={captions}
               currentSec={currentSec}
               selectedId={selectedId}
               rowColor={rowColor}
               onSelect={selectCaption}
-              onChangeRange={onChangeRange}
+              onEdit={updateCaption}
               onScrub={seekTo}
             />
           )}
@@ -400,11 +409,18 @@ export default function CaptionsTool() {
               ▶ Play preview
             </button>
             <button
-              onClick={addCaption}
+              onClick={addBoil}
               disabled={!mediaKind || busy}
               className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium"
             >
-              + Add caption
+              + Caption
+            </button>
+            <button
+              onClick={addTypewriter}
+              disabled={!mediaKind || busy}
+              className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium"
+            >
+              + Typewriter
             </button>
             <button
               onClick={doExport}
@@ -513,7 +529,9 @@ export default function CaptionsTool() {
         </Panel>
 
         {selected ? (
-          <Panel title={`Caption${captions.length > 1 ? ` ${captions.indexOf(selected) + 1}` : ''}`}>
+          <Panel
+            title={`${selected.kind === 'typewriter' ? 'Typewriter' : 'Caption'} ${captions.indexOf(selected) + 1}`}
+          >
             <Field label="Text (line breaks respected)">
               <textarea
                 value={selected.text}
@@ -523,52 +541,139 @@ export default function CaptionsTool() {
               />
             </Field>
 
-            <Field label={`Duration — ${selDuration}s`}>
-              <input
-                type="number"
-                min={0.2}
-                max={Math.max(0.2, duration || 60)}
-                step={0.1}
-                value={selDuration}
-                onChange={(e) => {
-                  const d = Math.max(0.2, Number(e.target.value) || 0.2);
-                  updateCaption(selected.id, { end: selected.start + d });
-                }}
-                className="input"
-              />
-            </Field>
+            {selected.kind === 'boil' ? (
+              <>
+                <Field label={`Duration — ${Math.round((selected.end - selected.start) * 100) / 100}s`}>
+                  <input
+                    type="number"
+                    min={0.2}
+                    max={Math.max(0.2, duration || 60)}
+                    step={0.1}
+                    value={Math.round((selected.end - selected.start) * 100) / 100}
+                    onChange={(e) => {
+                      const d = Math.max(0.2, Number(e.target.value) || 0.2);
+                      updateCaption(selected.id, { end: selected.start + d });
+                    }}
+                    className="input"
+                  />
+                </Field>
 
-            <Field label="Font boil">
-              <div className="grid grid-cols-3 gap-1.5">
-                {(['off', 'intro', 'continuous'] as BoilMode[]).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => updateCaption(selected.id, { boil: m })}
-                    className={`px-1 py-2 rounded-md text-[11px] border capitalize ${
-                      selected.boil === m
-                        ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]'
-                        : 'border-[var(--color-glass-border)]'
-                    }`}
+                <Field label="Font boil">
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(['off', 'intro', 'continuous'] as BoilMode[]).map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => updateCaption(selected.id, { boil: m })}
+                        className={`px-1 py-2 rounded-md text-[11px] border capitalize ${
+                          selected.boil === m
+                            ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]'
+                            : 'border-[var(--color-glass-border)]'
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+
+                <Field label="Settle font">
+                  <select
+                    value={Math.min(selected.settleFontIndex, poolById(boilPool).fonts.length - 1)}
+                    onChange={(e) => updateCaption(selected.id, { settleFontIndex: Number(e.target.value) })}
+                    className="input"
                   >
-                    {m}
-                  </button>
-                ))}
-              </div>
-            </Field>
+                    {poolById(boilPool).fonts.map((f, i) => (
+                      <option key={f.family} value={i}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label="Font">
+                  <select
+                    value={selected.fontKey}
+                    onChange={(e) => updateCaption(selected.id, { fontKey: e.target.value })}
+                    className="input"
+                  >
+                    {ALL_FONTS.map((f) => (
+                      <option key={f.key} value={f.key}>
+                        {f.label} · {f.poolLabel}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
 
-            <Field label="Settle font">
-              <select
-                value={Math.min(selected.settleFontIndex, poolById(boilPool).fonts.length - 1)}
-                onChange={(e) => updateCaption(selected.id, { settleFontIndex: Number(e.target.value) })}
-                className="input"
-              >
-                {poolById(boilPool).fonts.map((f, i) => (
-                  <option key={f.family} value={i}>
-                    {f.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label={`Typing — ${selected.typingDur.toFixed(1)}s`}>
+                    <input
+                      type="number"
+                      min={0.2}
+                      max={Math.max(0.2, duration || 60)}
+                      step={0.1}
+                      value={Math.round(selected.typingDur * 100) / 100}
+                      onChange={(e) => updateCaption(selected.id, { typingDur: Math.max(0.2, Number(e.target.value) || 0.2) })}
+                      className="input"
+                    />
+                  </Field>
+                  <Field label={`Hold — ${selected.holdDur.toFixed(1)}s`}>
+                    <input
+                      type="number"
+                      min={0.2}
+                      max={Math.max(0.2, duration || 60)}
+                      step={0.1}
+                      value={Math.round(selected.holdDur * 100) / 100}
+                      onChange={(e) => updateCaption(selected.id, { holdDur: Math.max(0.2, Number(e.target.value) || 0.2) })}
+                      className="input"
+                    />
+                  </Field>
+                </div>
+
+                <Field label="Deletion">
+                  <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)] mb-2">
+                    <input
+                      type="checkbox"
+                      checked={selected.deleteEnabled}
+                      onChange={(e) => updateCaption(selected.id, { deleteEnabled: e.target.checked })}
+                    />
+                    Enable (otherwise it cuts at end of hold)
+                  </label>
+                  {selected.deleteEnabled && (
+                    <>
+                      <div className="grid grid-cols-2 gap-1.5 mb-2">
+                        {([['char', 'Backspace'], ['selectAll', 'Select all']] as [DeleteStyle, string][]).map(
+                          ([v, lbl]) => (
+                            <button
+                              key={v}
+                              onClick={() => updateCaption(selected.id, { deleteStyle: v })}
+                              className={`px-1 py-2 rounded-md text-[11px] border ${
+                                selected.deleteStyle === v
+                                  ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]'
+                                  : 'border-[var(--color-glass-border)]'
+                              }`}
+                            >
+                              {lbl}
+                            </button>
+                          ),
+                        )}
+                      </div>
+                      <input
+                        type="number"
+                        min={0.2}
+                        max={Math.max(0.2, duration || 60)}
+                        step={0.1}
+                        value={Math.round(selected.deleteDur * 100) / 100}
+                        onChange={(e) => updateCaption(selected.id, { deleteDur: Math.max(0.2, Number(e.target.value) || 0.2) })}
+                        className="input"
+                      />
+                      <div className="text-[10px] text-[var(--color-text-muted)] mt-1">Deletion duration (s)</div>
+                    </>
+                  )}
+                </Field>
+              </>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <Field label="Color">
@@ -632,21 +737,32 @@ export default function CaptionsTool() {
               onClick={() => removeCaption(selected.id)}
               className="w-full mt-1 px-3 py-2 rounded-md border border-[rgba(255,80,80,0.4)] text-[rgba(255,120,120,0.9)] text-xs font-medium hover:bg-[rgba(255,80,80,0.08)]"
             >
-              Remove caption
+              Remove {selected.kind === 'typewriter' ? 'typewriter' : 'caption'}
             </button>
           </Panel>
         ) : (
-          <Panel title="Captions">
+          <Panel title="Elements">
             <p className="text-xs text-[var(--color-text-secondary)]">
-              {mediaKind ? 'Select a caption on the timeline or canvas to edit it, or add a new one.' : 'Upload a photo or video to begin.'}
+              {mediaKind
+                ? 'Select an element on the timeline or canvas to edit it, or add one below.'
+                : 'Upload a photo or video to begin.'}
             </p>
-            <button
-              onClick={addCaption}
-              disabled={!mediaKind}
-              className="w-full px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium"
-            >
-              + Add caption
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={addBoil}
+                disabled={!mediaKind}
+                className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium"
+              >
+                + Caption
+              </button>
+              <button
+                onClick={addTypewriter}
+                disabled={!mediaKind}
+                className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium"
+              >
+                + Typewriter
+              </button>
+            </div>
           </Panel>
         )}
       </aside>
