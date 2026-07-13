@@ -6,6 +6,7 @@
 
 import type { ComponentType } from 'react';
 import EntranceBannerTool from './EntranceBannerTool';
+import CaptionsTool from './CaptionsTool';
 
 export interface VideoTool {
   /** Stable id; also the URL hash (/video/#<id>). Keep it kebab-case. */
@@ -27,6 +28,14 @@ export const TOOLS: VideoTool[] = [
     blurb:
       'Overlay a Smash-style character-intro banner on your footage and format it for vertical short-form. Upload, place the freeze point, and export an MP4.',
     component: EntranceBannerTool,
+  },
+  {
+    id: 'captions',
+    label: 'Captions',
+    icon: '💬',
+    blurb:
+      'Add any number of animated text captions with a "font boil" reveal. Drag each on the canvas, time it on the multi-track timeline, and export an MP4.',
+    component: CaptionsTool,
   },
 ];
 
