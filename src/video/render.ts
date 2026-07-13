@@ -2,6 +2,8 @@
 
 import type { BannerFrame, BannerStyle, FillMode, OutputSize, RatioKey } from './types';
 import { RATIOS } from './types';
+import type { Caption } from './captions/types';
+import { BOIL_FONTS, fontCss } from './captions/fonts';
 
 // ---- easing ----
 
@@ -295,4 +297,116 @@ export function drawBanner(
   ctx.restore(); // slide translate + alpha
 
   drawFlash(ctx, out, f.flash);
+}
+
+// ---- caption text (multi-element overlays) ----
+
+const CAPTION_BASE_FRAC = 0.055; // base font size as a fraction of frame height
+const CAPTION_MAX_WIDTH_FRAC = 0.86; // wrap width relative to frame width
+
+/** Wrap `text` to `maxWidth`, respecting manual line breaks. ctx.font must be set. */
+export function layoutCaptionLines(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+): string[] {
+  const paras = text.replace(/\r/g, '').split('\n');
+  const lines: string[] = [];
+  for (const para of paras) {
+    const words = para.split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+      lines.push('');
+      continue;
+    }
+    let cur = words[0];
+    for (let i = 1; i < words.length; i++) {
+      const test = `${cur} ${words[i]}`;
+      if (ctx.measureText(test).width <= maxWidth) cur = test;
+      else {
+        lines.push(cur);
+        cur = words[i];
+      }
+    }
+    lines.push(cur);
+  }
+  return lines;
+}
+
+export interface CaptionLayout {
+  lines: string[];
+  sizePx: number;
+  lineHeight: number;
+  blockW: number;
+  blockH: number;
+  cx: number;
+  cy: number;
+  /** Bounding box in canvas px (for hit-testing / selection). */
+  left: number;
+  top: number;
+}
+
+function scaledFont(fontIndex: number, sizePx: number): string {
+  return fontCss(BOIL_FONTS[fontIndex] ?? BOIL_FONTS[0], sizePx);
+}
+
+/** Measure a caption's wrapped layout at the current output size (no drawing). */
+export function measureCaption(
+  ctx: CanvasRenderingContext2D,
+  out: OutputSize,
+  cap: Caption,
+  fontIndex: number,
+): CaptionLayout {
+  const sizePx = out.h * CAPTION_BASE_FRAC * cap.sizeScale;
+  const maxWidth = out.w * CAPTION_MAX_WIDTH_FRAC;
+  ctx.font = scaledFont(fontIndex, sizePx);
+  const lines = layoutCaptionLines(ctx, cap.text || ' ', maxWidth);
+  const lineHeight = sizePx * 1.18;
+  let maxLineWidth = 0;
+  for (const ln of lines) maxLineWidth = Math.max(maxLineWidth, ctx.measureText(ln).width);
+  const blockW = Math.min(maxWidth, maxLineWidth);
+  const blockH = lines.length * lineHeight;
+  const cx = cap.x * out.w;
+  const cy = cap.y * out.h;
+  return { lines, sizePx, lineHeight, blockW, blockH, cx, cy, left: cx - blockW / 2, top: cy - blockH / 2 };
+}
+
+/** Draw a caption (wrapped, aligned, with the chosen legibility treatment). */
+export function drawCaption(
+  ctx: CanvasRenderingContext2D,
+  out: OutputSize,
+  cap: Caption,
+  fontIndex: number,
+  alpha = 1,
+): CaptionLayout {
+  const L = measureCaption(ctx, out, cap, fontIndex);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = cap.align;
+  ctx.font = scaledFont(fontIndex, L.sizePx);
+  ctx.lineJoin = 'round';
+
+  // Block is centred on (cap.x, cap.y); pick the per-line anchor for the alignment.
+  let anchorX = L.cx;
+  if (cap.align === 'left') anchorX = L.cx - L.blockW / 2;
+  else if (cap.align === 'right') anchorX = L.cx + L.blockW / 2;
+  const firstLineY = L.cy - L.blockH / 2 + L.lineHeight / 2;
+
+  if (cap.legibility === 'shadow') {
+    ctx.shadowColor = 'rgba(0,0,0,0.75)';
+    ctx.shadowBlur = L.sizePx * 0.18;
+    ctx.shadowOffsetY = L.sizePx * 0.06;
+  }
+  const outline = cap.legibility === 'outline';
+  ctx.lineWidth = L.sizePx * 0.16;
+  ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+
+  for (let i = 0; i < L.lines.length; i++) {
+    const y = firstLineY + i * L.lineHeight;
+    if (outline) ctx.strokeText(L.lines[i], anchorX, y);
+    ctx.fillStyle = cap.color;
+    ctx.fillText(L.lines[i], anchorX, y);
+  }
+  ctx.restore();
+  return L;
 }
