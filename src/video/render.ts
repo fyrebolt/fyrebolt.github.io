@@ -2,7 +2,7 @@
 
 import type { BannerFrame, BannerStyle, FillMode, OutputSize, RatioKey } from './types';
 import { RATIOS } from './types';
-import type { Caption } from './captions/types';
+import type { CaptionTextStyle, TypewriterProgress } from './captions/types';
 import type { BoilFont } from './captions/fonts';
 import { fontCss } from './captions/fonts';
 
@@ -382,7 +382,7 @@ function fontHeightScale(font: BoilFont, enabled: boolean): number {
 export function measureCaption(
   ctx: CanvasRenderingContext2D,
   out: OutputSize,
-  cap: Caption,
+  cap: CaptionTextStyle,
   font: BoilFont,
   normalize: boolean,
 ): CaptionLayout {
@@ -404,7 +404,7 @@ export function measureCaption(
 export function drawCaption(
   ctx: CanvasRenderingContext2D,
   out: OutputSize,
-  cap: Caption,
+  cap: CaptionTextStyle,
   font: BoilFont,
   normalize: boolean,
   alpha = 1,
@@ -440,4 +440,105 @@ export function drawCaption(
   }
   ctx.restore();
   return L;
+}
+
+function lastTextLine(lines: string[]): number {
+  for (let i = lines.length - 1; i >= 0; i--) if (lines[i].length > 0) return i;
+  return lines.length - 1;
+}
+
+/**
+ * Draw a typewriter caption for the given phase progress. Uses the full text's
+ * wrapped layout (so nothing reflows as it types), reveals a leading substring,
+ * and draws a blinking end-of-text cursor plus an optional select-all highlight.
+ */
+export function drawTypewriter(
+  ctx: CanvasRenderingContext2D,
+  out: OutputSize,
+  style: CaptionTextStyle,
+  font: BoilFont,
+  prog: TypewriterProgress,
+): void {
+  const L = measureCaption(ctx, out, style, font, false); // single font: no normalisation
+  const sizePx = L.sizePx;
+  ctx.save();
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left'; // anchor each line from a fixed left edge so text doesn't reflow while typing
+  ctx.font = fontCss(font, sizePx);
+  ctx.lineJoin = 'round';
+
+  const totalChars = L.lines.reduce((n, ln) => n + ln.length, 0);
+  const revealCount = prog.showText
+    ? Math.round(Math.max(0, Math.min(1, prog.revealFrac)) * totalChars)
+    : 0;
+  const firstLineY = L.cy - L.blockH / 2 + L.lineHeight / 2;
+
+  const outline = style.legibility === 'outline';
+  if (style.legibility === 'shadow') {
+    ctx.shadowColor = 'rgba(0,0,0,0.75)';
+    ctx.shadowBlur = sizePx * 0.18;
+    ctx.shadowOffsetY = sizePx * 0.06;
+  }
+  ctx.lineWidth = sizePx * 0.16;
+  ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+
+  const lineLeft = (fullW: number): number => {
+    if (style.align === 'center') return L.cx - fullW / 2;
+    if (style.align === 'right') return L.cx + L.blockW / 2 - fullW;
+    return L.cx - L.blockW / 2;
+  };
+
+  let seen = 0;
+  let cursorX: number | null = null;
+  let cursorY = firstLineY;
+
+  for (let i = 0; i < L.lines.length; i++) {
+    const line = L.lines[i];
+    const y = firstLineY + i * L.lineHeight;
+    const fullW = ctx.measureText(line).width;
+    const left = lineLeft(fullW);
+
+    let visible: string;
+    if (!prog.showText) visible = '';
+    else if (seen + line.length <= revealCount) visible = line;
+    else if (seen < revealCount) visible = line.slice(0, revealCount - seen);
+    else visible = '';
+
+    if (prog.selectAll && line.length > 0) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(80,140,255,0.55)';
+      ctx.fillRect(left - sizePx * 0.06, y - sizePx * 0.62, fullW + sizePx * 0.12, sizePx * 1.24);
+      ctx.restore();
+    }
+
+    if (visible) {
+      if (outline) ctx.strokeText(visible, left, y);
+      ctx.fillStyle = style.color;
+      ctx.fillText(visible, left, y);
+    }
+
+    if (prog.cursor) {
+      const endsHere = seen < revealCount && seen + line.length >= revealCount;
+      const fullyRevealedLast = revealCount >= totalChars && i === lastTextLine(L.lines);
+      if (endsHere || fullyRevealedLast) {
+        cursorX = left + ctx.measureText(visible).width;
+        cursorY = y;
+      }
+    }
+    seen += line.length;
+  }
+
+  // Cursor at the very start (nothing revealed yet).
+  if (prog.cursor && cursorX === null && prog.showText) {
+    const l0 = L.lines[0] ?? '';
+    cursorX = lineLeft(ctx.measureText(l0).width);
+    cursorY = firstLineY;
+  }
+
+  if (prog.cursor && prog.cursorOn && cursorX !== null) {
+    ctx.fillStyle = style.color;
+    ctx.fillRect(cursorX + sizePx * 0.04, cursorY - sizePx * 0.42, Math.max(2, sizePx * 0.08), sizePx * 0.84);
+  }
+
+  ctx.restore();
 }
