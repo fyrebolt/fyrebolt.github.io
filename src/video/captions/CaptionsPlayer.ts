@@ -4,6 +4,8 @@ import { drawSource, measureCaption, drawCaption, outputSizeFor } from '../rende
 import type { FillMode, OutputSize, RatioKey } from '../types';
 import type { Caption } from './types';
 import { boilFontIndex } from './types';
+import type { BoilPoolId } from './fonts';
+import { poolById } from './fonts';
 
 const FPS = 30;
 
@@ -20,6 +22,8 @@ export interface CaptionsState {
   captions: Caption[];
   fillMode: FillMode;
   ratio: RatioKey;
+  boilPool: BoilPoolId;
+  normalize: boolean;
 }
 
 export interface CaptionBounds {
@@ -103,10 +107,12 @@ export class CaptionsPlayer {
     const state = this.getState();
     const src = this.media.video ?? this.media.image!;
     drawSource(this.ctx, src, this.out, state.fillMode);
+    const pool = poolById(state.boilPool);
     for (const cap of state.captions) {
       if (sec >= cap.start && sec < cap.end) {
-        const fi = boilFontIndex(cap, (sec - cap.start) * 1000);
-        drawCaption(this.ctx, this.out, cap, fi, 1);
+        const fi = boilFontIndex(cap, (sec - cap.start) * 1000, pool.fonts.length);
+        const font = pool.fonts[fi] ?? pool.fonts[0];
+        drawCaption(this.ctx, this.out, cap, font, state.normalize, 1);
       }
     }
   }
@@ -215,12 +221,14 @@ export class CaptionsPlayer {
     if (!this.media) return null;
     const px = nx * this.out.w;
     const py = ny * this.out.h;
-    const { captions } = this.getState();
+    const state = this.getState();
+    const pool = poolById(state.boilPool);
     const sec = this.nowSec();
-    for (let i = captions.length - 1; i >= 0; i--) {
-      const cap = captions[i];
-      const fi = boilFontIndex(cap, (sec - cap.start) * 1000);
-      const L = measureCaption(this.ctx, this.out, cap, fi);
+    for (let i = state.captions.length - 1; i >= 0; i--) {
+      const cap = state.captions[i];
+      const fi = boilFontIndex(cap, (sec - cap.start) * 1000, pool.fonts.length);
+      const font = pool.fonts[fi] ?? pool.fonts[0];
+      const L = measureCaption(this.ctx, this.out, cap, font, state.normalize);
       const pad = L.sizePx * 0.3;
       if (px >= L.left - pad && px <= L.left + L.blockW + pad && py >= L.top - pad && py <= L.top + L.blockH + pad) {
         return cap.id;
@@ -232,11 +240,14 @@ export class CaptionsPlayer {
   /** Selection-box bounds for a caption, in canvas px. */
   boundsOf(id: string): CaptionBounds | null {
     if (!this.media) return null;
-    const cap = this.getState().captions.find((c) => c.id === id);
+    const state = this.getState();
+    const cap = state.captions.find((c) => c.id === id);
     if (!cap) return null;
+    const pool = poolById(state.boilPool);
     const sec = this.nowSec();
-    const fi = boilFontIndex(cap, (sec - cap.start) * 1000);
-    const L = measureCaption(this.ctx, this.out, cap, fi);
+    const fi = boilFontIndex(cap, (sec - cap.start) * 1000, pool.fonts.length);
+    const font = pool.fonts[fi] ?? pool.fonts[0];
+    const L = measureCaption(this.ctx, this.out, cap, font, state.normalize);
     const pad = L.sizePx * 0.25;
     return { left: L.left - pad, top: L.top - pad, width: L.blockW + pad * 2, height: L.blockH + pad * 2 };
   }

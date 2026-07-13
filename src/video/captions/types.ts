@@ -1,7 +1,5 @@
 // ===== Caption element model + font-boil timing =====
 
-import { BOIL_FONTS } from './fonts';
-
 export type BoilMode = 'off' | 'intro' | 'continuous';
 
 export type TextAlign = 'left' | 'center' | 'right';
@@ -35,25 +33,27 @@ const INTRO_TICKS = 18; // number of font switches packed into the burst
 const CONTINUOUS_INTERVAL_MS = 90; // steady switch interval for continuous mode
 
 /**
- * Which pool font to show for a caption at `elapsedMs` since it appeared.
+ * Which pool font (index into a pool of `poolLen` fonts) to show for a caption
+ * at `elapsedMs` since it appeared.
  * - off: always the settle font.
  * - continuous: steady cycle through the whole pool, no settle.
  * - intro: a slot-machine roll whose switch interval decelerates (via easeOut),
  *   landing on the settle font once the burst ends.
  */
-export function boilFontIndex(cap: Caption, elapsedMs: number): number {
-  const pool = BOIL_FONTS.length;
-  if (cap.boil === 'off') return cap.settleFontIndex;
+export function boilFontIndex(cap: Caption, elapsedMs: number, poolLen: number): number {
+  const n = Math.max(1, poolLen);
+  const settle = Math.max(0, Math.min(n - 1, cap.settleFontIndex));
+  if (cap.boil === 'off') return settle;
   if (cap.boil === 'continuous') {
-    return Math.floor(Math.max(0, elapsedMs) / CONTINUOUS_INTERVAL_MS) % pool;
+    return Math.floor(Math.max(0, elapsedMs) / CONTINUOUS_INTERVAL_MS) % n;
   }
   // intro burst
-  if (elapsedMs >= INTRO_BURST_MS) return cap.settleFontIndex;
+  if (elapsedMs >= INTRO_BURST_MS) return settle;
   const p = Math.max(0, elapsedMs) / INTRO_BURST_MS; // 0..1
   const eased = 1 - Math.pow(1 - p, 2); // easeOutQuad: fast early, slow near the end
   const tick = Math.floor(eased * INTRO_TICKS);
   // Step through the pool by a stride so consecutive frames look clearly different.
-  return (tick * 3 + 1) % pool;
+  return (tick * 3 + 1) % n;
 }
 
 export function createCaption(overrides: Partial<Caption> = {}): Caption {
