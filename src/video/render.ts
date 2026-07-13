@@ -3,7 +3,8 @@
 import type { BannerFrame, BannerStyle, FillMode, OutputSize, RatioKey } from './types';
 import { RATIOS } from './types';
 import type { Caption } from './captions/types';
-import { BOIL_FONTS, fontCss } from './captions/fonts';
+import type { BoilFont } from './captions/fonts';
+import { fontCss } from './captions/fonts';
 
 // ---- easing ----
 
@@ -345,8 +346,36 @@ export interface CaptionLayout {
   top: number;
 }
 
-function scaledFont(fontIndex: number, sizePx: number): string {
-  return fontCss(BOIL_FONTS[fontIndex] ?? BOIL_FONTS[0], sizePx);
+// ---- per-font height normalisation ----
+// Fonts at the same em size have very different actual glyph heights, so a boil
+// that cycles fonts looks like it changes size each frame. When enabled, we
+// scale each font so a reference string renders to a consistent visual height.
+
+const NORM_REF_TEXT = 'Hxg';
+const NORM_TARGET = 72; // target (ascent+descent) height at a 100px reference
+
+let normCtx: CanvasRenderingContext2D | null = null;
+const heightScaleCache = new Map<string, number>();
+
+function fontHeightScale(font: BoilFont, enabled: boolean): number {
+  if (!enabled) return 1;
+  const key = `${font.weight}:${font.family}`;
+  const cached = heightScaleCache.get(key);
+  if (cached !== undefined) return cached;
+  // Don't measure (or cache) until the real font is loaded, or we'd bake in the
+  // fallback font's metrics.
+  if (typeof document === 'undefined' || !document.fonts?.check(`${font.weight} 100px "${font.family}"`)) {
+    return 1;
+  }
+  if (!normCtx) normCtx = document.createElement('canvas').getContext('2d');
+  if (!normCtx) return 1;
+  normCtx.font = `${font.weight} 100px "${font.family}", sans-serif`;
+  const m = normCtx.measureText(NORM_REF_TEXT);
+  const h = (m.actualBoundingBoxAscent || 0) + (m.actualBoundingBoxDescent || 0);
+  if (!h) return 1;
+  const scale = Math.max(0.6, Math.min(1.6, NORM_TARGET / h));
+  heightScaleCache.set(key, scale);
+  return scale;
 }
 
 /** Measure a caption's wrapped layout at the current output size (no drawing). */
@@ -354,11 +383,12 @@ export function measureCaption(
   ctx: CanvasRenderingContext2D,
   out: OutputSize,
   cap: Caption,
-  fontIndex: number,
+  font: BoilFont,
+  normalize: boolean,
 ): CaptionLayout {
-  const sizePx = out.h * CAPTION_BASE_FRAC * cap.sizeScale;
+  const sizePx = out.h * CAPTION_BASE_FRAC * cap.sizeScale * fontHeightScale(font, normalize);
   const maxWidth = out.w * CAPTION_MAX_WIDTH_FRAC;
-  ctx.font = scaledFont(fontIndex, sizePx);
+  ctx.font = fontCss(font, sizePx);
   const lines = layoutCaptionLines(ctx, cap.text || ' ', maxWidth);
   const lineHeight = sizePx * 1.18;
   let maxLineWidth = 0;
@@ -375,15 +405,16 @@ export function drawCaption(
   ctx: CanvasRenderingContext2D,
   out: OutputSize,
   cap: Caption,
-  fontIndex: number,
+  font: BoilFont,
+  normalize: boolean,
   alpha = 1,
 ): CaptionLayout {
-  const L = measureCaption(ctx, out, cap, fontIndex);
+  const L = measureCaption(ctx, out, cap, font, normalize);
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.textBaseline = 'middle';
   ctx.textAlign = cap.align;
-  ctx.font = scaledFont(fontIndex, L.sizePx);
+  ctx.font = fontCss(font, L.sizePx);
   ctx.lineJoin = 'round';
 
   // Block is centred on (cap.x, cap.y); pick the per-line anchor for the alignment.

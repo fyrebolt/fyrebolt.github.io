@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, PointerEvent as ReactPointerEvent } from 'react';
 import { CaptionsPlayer } from '../captions/CaptionsPlayer';
 import type { CaptionsState, LoadedMedia } from '../captions/CaptionsPlayer';
-import { BOIL_FONTS, preloadBoilFonts } from '../captions/fonts';
+import { FONT_POOLS, poolById, preloadAllFontPools } from '../captions/fonts';
+import type { BoilPoolId } from '../captions/fonts';
 import { createCaption } from '../captions/types';
 import type { BoilMode, Caption, Legibility, TextAlign } from '../captions/types';
 import MultiTrackTimeline from '../captions/MultiTrackTimeline';
@@ -47,6 +48,8 @@ export default function CaptionsTool() {
   const [fillMode, setFillMode] = useState<FillMode>('crop');
   const [guidesOn, setGuidesOn] = useState(true);
   const [showSafeZones, setShowSafeZones] = useState(true);
+  const [boilPool, setBoilPool] = useState<BoilPoolId>('default');
+  const [normalize, setNormalize] = useState(true);
 
   const [stage, setStage] = useState<ExportStage>('idle');
   const [progress, setProgress] = useState(0);
@@ -59,21 +62,27 @@ export default function CaptionsTool() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<CaptionsPlayer | null>(null);
-  const stateRef = useRef<CaptionsState>({ captions: [], fillMode: 'crop', ratio: '9:16' });
+  const stateRef = useRef<CaptionsState>({
+    captions: [],
+    fillMode: 'crop',
+    ratio: '9:16',
+    boilPool: 'default',
+    normalize: true,
+  });
   const objectUrls = useRef<string[]>([]);
   const canvasDrag = useRef<{ id: string; grabDX: number; grabDY: number } | null>(null);
 
   const selected = captions.find((c) => c.id === selectedId) ?? null;
 
-  // Preload the font-boil pool up front.
+  // Preload every font pool up front (so switching pools is instant).
   useEffect(() => {
-    preloadBoilFonts().then(() => playerRef.current?.renderStatic());
+    preloadAllFontPools().then(() => playerRef.current?.renderStatic());
   }, []);
 
   // Keep the player's state source current, and redraw when edits change the frame.
   const stateSnapshot: CaptionsState = useMemo(
-    () => ({ captions, fillMode, ratio }),
-    [captions, fillMode, ratio],
+    () => ({ captions, fillMode, ratio, boilPool, normalize }),
+    [captions, fillMode, ratio, boilPool, normalize],
   );
   useEffect(() => {
     stateRef.current = stateSnapshot;
@@ -176,6 +185,15 @@ export default function CaptionsTool() {
     },
     [],
   );
+
+  // Switching pool globally: clamp each caption's settle-font index into the new pool.
+  const changeBoilPool = useCallback((id: BoilPoolId) => {
+    setBoilPool(id);
+    const len = poolById(id).fonts.length;
+    setCaptions((cs) =>
+      cs.map((c) => (c.settleFontIndex >= len ? { ...c, settleFontIndex: len - 1 } : c)),
+    );
+  }, []);
 
   // ---- canvas drag-to-place + guides ----
   const normFromPointer = useCallback((clientX: number, clientY: number) => {
@@ -470,6 +488,30 @@ export default function CaptionsTool() {
           </div>
         </Panel>
 
+        <Panel title="Font boil">
+          <Field label="Font pool (applies to all captions)">
+            <div className="grid grid-cols-3 gap-1.5">
+              {FONT_POOLS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => changeBoilPool(p.id)}
+                  className={`px-1 py-2 rounded-md text-[11px] border ${
+                    boilPool === p.id
+                      ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]'
+                      : 'border-[var(--color-glass-border)]'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+            <input type="checkbox" checked={normalize} onChange={(e) => setNormalize(e.target.checked)} />
+            Even sizing (normalize each font to a consistent height)
+          </label>
+        </Panel>
+
         {selected ? (
           <Panel title={`Caption${captions.length > 1 ? ` ${captions.indexOf(selected) + 1}` : ''}`}>
             <Field label="Text (line breaks respected)">
@@ -516,11 +558,11 @@ export default function CaptionsTool() {
 
             <Field label="Settle font">
               <select
-                value={selected.settleFontIndex}
+                value={Math.min(selected.settleFontIndex, poolById(boilPool).fonts.length - 1)}
                 onChange={(e) => updateCaption(selected.id, { settleFontIndex: Number(e.target.value) })}
                 className="input"
               >
-                {BOIL_FONTS.map((f, i) => (
+                {poolById(boilPool).fonts.map((f, i) => (
                   <option key={f.family} value={i}>
                     {f.label}
                   </option>
