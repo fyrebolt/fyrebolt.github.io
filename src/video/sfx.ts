@@ -96,48 +96,41 @@ export class SfxEngine {
     src.stop(t + 0.06);
   }
 
-  /** Mechanical keyboard click: a sharp high transient + a short "clack", minimal body. */
+  /**
+   * Mechanical keyboard click: ONE tight noise burst (so it stays a single
+   * click at any volume — `gain` just scales it up, never splits into two) plus
+   * a crisp high snap that overlaps it.
+   */
   private key(t: number, gain = 1): void {
     const ctx = this.ctx;
 
-    // bright click transient
-    const n1 = this.noiseSource();
+    const n = this.noiseSource();
     const hp = ctx.createBiquadFilter();
     hp.type = 'highpass';
-    hp.frequency.value = 3500 + Math.random() * 900;
-    const g1 = ctx.createGain();
-    g1.gain.setValueAtTime(0.0001, t);
-    g1.gain.exponentialRampToValueAtTime(0.6 * gain, t + 0.001);
-    g1.gain.exponentialRampToValueAtTime(0.0001, t + 0.011);
-    n1.connect(hp).connect(g1).connect(this.output);
-    n1.start(t);
-    n1.stop(t + 0.02);
-
-    // short clack body
-    const n2 = this.noiseSource();
+    hp.frequency.value = 900;
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.value = 1700 + Math.random() * 500;
-    bp.Q.value = 1.4;
-    const g2 = ctx.createGain();
-    g2.gain.setValueAtTime(0.0001, t + 0.002);
-    g2.gain.exponentialRampToValueAtTime(0.4 * gain, t + 0.005);
-    g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
-    n2.connect(bp).connect(g2).connect(this.output);
-    n2.start(t);
-    n2.stop(t + 0.04);
+    bp.frequency.value = 2100 + Math.random() * 400;
+    bp.Q.value = 0.7;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.7 * gain, t + 0.0012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.02);
+    n.connect(hp).connect(bp).connect(g).connect(this.output);
+    n.start(t);
+    n.stop(t + 0.03);
 
-    // crisp high 'snap'
+    // crisp high 'snap', fully overlapping the burst
     const o = ctx.createOscillator();
     o.type = 'square';
-    o.frequency.value = 2600 + Math.random() * 300;
+    o.frequency.value = 2600 + Math.random() * 250;
     const og = ctx.createGain();
     og.gain.setValueAtTime(0.0001, t);
     og.gain.exponentialRampToValueAtTime(0.16 * gain, t + 0.001);
-    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.018);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.015);
     o.connect(og).connect(this.output);
     o.start(t);
-    o.stop(t + 0.025);
+    o.stop(t + 0.02);
   }
 }
 
