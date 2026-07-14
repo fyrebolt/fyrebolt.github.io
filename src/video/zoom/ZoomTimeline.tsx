@@ -129,56 +129,65 @@ export default function ZoomTimeline({
         <div className="absolute top-0 bottom-0 w-[2px] bg-[var(--color-primary-blue)]" style={{ left: playLeft }} />
       </div>
 
-      {/* Zoom row */}
-      <div className="relative h-8 rounded-md bg-[var(--color-bg-elevated)] overflow-hidden">
-        <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+      {/* Zoom row: transition + derived holding segments, positioned as % of the full row */}
+      <div className="relative h-9 rounded-md bg-[var(--color-bg-elevated)] overflow-hidden">
         {sorted.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center text-[10px] text-[var(--color-text-muted)]">
             No zooms yet — add one to place it on the timeline.
           </div>
         )}
+
         {sorted.map((kf, i) => {
           const end = kf.start + kf.duration;
           const nextStart = i + 1 < sorted.length ? sorted[i + 1].start : dur;
           const holdEnd = Math.max(end, nextStart);
           const selected = kf.id === selectedId;
-          const startPct = (kf.start / dur) * 100;
-          const transW = (kf.duration / dur) * 100;
-          const holdW = (Math.max(0, holdEnd - end) / dur) * 100;
+          const startPct = clamp(0, 100, (kf.start / dur) * 100);
+          const transPct = clamp(0, 100 - startPct, (Math.min(kf.duration, dur) / dur) * 100);
+          const holdPct = clamp(0, 100, (Math.max(0, holdEnd - end) / dur) * 100);
           return (
-            <div key={kf.id} className="absolute top-0 bottom-0" style={{ left: `${startPct}%` }}>
-              {/* transition segment (drag body = move start) */}
-              <div
-                onPointerDown={(e) => onDown(e, kf, 'start')}
-                onPointerMove={onMove}
-                onPointerUp={onUp}
-                className={`absolute top-0 bottom-0 rounded-sm flex items-center justify-center cursor-grab active:cursor-grabbing touch-none ${
-                  selected ? 'ring-2 ring-[var(--color-primary-green)] z-20' : 'z-10'
-                }`}
-                style={{ left: 0, width: `${Math.max(1.5, transW)}%`, background: TRANSITION_COLOR }}
-                title="Drag to move · right edge sets transition time"
-              >
-                <span className="text-[9px] font-bold text-black/70 pointer-events-none">⤢ {i + 1}</span>
-                {/* transition-end handle (drag = duration) */}
-                <div
-                  onPointerDown={(e) => onDown(e, kf, 'dur')}
-                  onPointerMove={onMove}
-                  onPointerUp={onUp}
-                  className="absolute right-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-sm touch-none"
-                />
-              </div>
-              {/* holding segment (derived; click to select) */}
+            <div key={kf.id}>
+              {/* holding segment (derived; fills to next zoom / end) */}
               <div
                 onPointerDown={(e) => {
                   e.stopPropagation();
                   onSelect(kf.id);
                 }}
-                className="absolute top-0 bottom-0"
-                style={{ left: `${transW}%`, width: `${holdW}%`, background: HOLDING_COLOR }}
+                className="absolute top-2.5 bottom-2.5 z-[5] cursor-pointer"
+                style={{ left: `${startPct + transPct}%`, width: `${holdPct}%`, background: HOLDING_COLOR }}
+                title="Holding at this zoom (fills to the next zoom / video end)"
+              />
+              {/* transition segment (drag body = move start) */}
+              <div
+                onPointerDown={(e) => onDown(e, kf, 'start')}
+                onPointerMove={onMove}
+                onPointerUp={onUp}
+                className={`absolute top-1 bottom-1 rounded-sm flex items-center px-1.5 overflow-hidden cursor-grab active:cursor-grabbing touch-none ${
+                  selected ? 'ring-2 ring-[var(--color-primary-green)] z-20' : 'z-10'
+                }`}
+                style={{ left: `${startPct}%`, width: `${Math.max(2, transPct)}%`, background: TRANSITION_COLOR }}
+                title="Drag to move · drag the right edge to set the transition time"
+              >
+                <span className="text-[9px] font-bold text-black/70 pointer-events-none whitespace-nowrap">⤢{i + 1}</span>
+                {/* transition-end handle (drag = duration) */}
+                <div
+                  onPointerDown={(e) => onDown(e, kf, 'dur')}
+                  onPointerMove={onMove}
+                  onPointerUp={onUp}
+                  className="absolute right-0 top-0 bottom-0 w-1.5 bg-black/40 hover:bg-black/70 cursor-ew-resize touch-none"
+                />
+              </div>
+              {/* start marker */}
+              <div
+                className="absolute top-0 bottom-0 w-[2px] bg-white/80 pointer-events-none z-20"
+                style={{ left: `${startPct}%` }}
               />
             </div>
           );
         })}
+
+        {/* playhead (above segments) */}
+        <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.7)] pointer-events-none z-30" style={{ left: playLeft }} />
       </div>
     </div>
   );
