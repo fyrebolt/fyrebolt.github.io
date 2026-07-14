@@ -58,6 +58,8 @@ export default function CaptionsTool() {
   const [showSafeZones, setShowSafeZones] = useState(true);
   const [boilPool, setBoilPool] = useState<BoilPoolId>('default');
   const [normalize, setNormalize] = useState(true);
+  const [sfxEnabled, setSfxEnabled] = useState(false);
+  const [sfxVolume, setSfxVolume] = useState(0.5);
 
   const [stage, setStage] = useState<ExportStage>('idle');
   const [progress, setProgress] = useState(0);
@@ -76,6 +78,8 @@ export default function CaptionsTool() {
     ratio: '9:16',
     boilPool: 'default',
     normalize: true,
+    sfxEnabled: false,
+    sfxVolume: 0.5,
   });
   const objectUrls = useRef<string[]>([]);
   const canvasDrag = useRef<{ id: string; grabDX: number; grabDY: number } | null>(null);
@@ -89,8 +93,8 @@ export default function CaptionsTool() {
 
   // Keep the player's state source current, and redraw when edits change the frame.
   const stateSnapshot: CaptionsState = useMemo(
-    () => ({ captions, fillMode, ratio, boilPool, normalize }),
-    [captions, fillMode, ratio, boilPool, normalize],
+    () => ({ captions, fillMode, ratio, boilPool, normalize, sfxEnabled, sfxVolume }),
+    [captions, fillMode, ratio, boilPool, normalize, sfxEnabled, sfxVolume],
   );
   useEffect(() => {
     stateRef.current = stateSnapshot;
@@ -526,6 +530,26 @@ export default function CaptionsTool() {
             <input type="checkbox" checked={normalize} onChange={(e) => setNormalize(e.target.checked)} />
             Even sizing (normalize each font to a consistent height)
           </label>
+        </Panel>
+
+        <Panel title="Sound effects">
+          <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+            <input type="checkbox" checked={sfxEnabled} onChange={(e) => setSfxEnabled(e.target.checked)} />
+            Enable (riffle on font-boil, key-clicks on typewriter)
+          </label>
+          {sfxEnabled && (
+            <Field label={`SFX volume — ${Math.round(sfxVolume * 100)}%`}>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={sfxVolume}
+                onChange={(e) => setSfxVolume(Number(e.target.value))}
+                className="w-full accent-[var(--color-primary-green)]"
+              />
+            </Field>
+          )}
         </Panel>
 
         {selected ? (
