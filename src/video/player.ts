@@ -3,6 +3,7 @@
 import { drawBanner, drawSource, easeOutBack, outputSizeFor } from './render';
 import { POSITION_ANCHORS } from './types';
 import type { BannerFrame, EditorConfig, OutputSize } from './types';
+import { SfxEngine } from './sfx';
 
 const FPS = 30;
 const FLASH_MS = 150;
@@ -44,6 +45,8 @@ export class BannerPlayer {
   private audioCtx: AudioContext | null = null;
   private srcNode: MediaElementAudioSourceNode | null = null;
   private streamDest: MediaStreamAudioDestinationNode | null = null;
+  private sfx: SfxEngine | null = null;
+  private slashFired = false;
 
   private canvas: HTMLCanvasElement;
   private getConfig: () => EditorConfig;
@@ -95,20 +98,39 @@ export class BannerPlayer {
 
   // ---- audio graph ----
 
-  private ensureAudio(): MediaStream | null {
-    if (!this.media?.video) return null;
+  private ensureCtx(): AudioContext {
     if (!this.audioCtx) {
       const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.audioCtx = new AC();
-      this.srcNode = this.audioCtx.createMediaElementSource(this.media.video);
-      this.streamDest = this.audioCtx.createMediaStreamDestination();
-      // Audible during preview AND a continuous timeline for the recorder,
-      // so the paused-video gap stays A/V-synced.
-      this.srcNode.connect(this.audioCtx.destination);
-      this.srcNode.connect(this.streamDest);
     }
     if (this.audioCtx.state === 'suspended') void this.audioCtx.resume();
-    return this.streamDest?.stream ?? null;
+    return this.audioCtx;
+  }
+
+  /** Build the SFX engine (shared context). Does NOT route the media element,
+   *  so preview playback isn't tied to the AudioContext. Call on a gesture. */
+  private ensureSfx(): void {
+    const ctx = this.ensureCtx();
+    if (!this.sfx) {
+      this.sfx = new SfxEngine(ctx, 0.5);
+      this.sfx.output.connect(ctx.destination);
+      if (this.streamDest) this.sfx.output.connect(this.streamDest);
+    }
+  }
+
+  private ensureAudio(): MediaStream | null {
+    if (!this.media?.video) return null;
+    const ctx = this.ensureCtx();
+    if (!this.streamDest) {
+      this.srcNode = ctx.createMediaElementSource(this.media.video);
+      this.streamDest = ctx.createMediaStreamDestination();
+      // Audible during preview AND a continuous timeline for the recorder,
+      // so the paused-video gap stays A/V-synced.
+      this.srcNode.connect(ctx.destination);
+      this.srcNode.connect(this.streamDest);
+      this.sfx?.output.connect(this.streamDest);
+    }
+    return this.streamDest.stream ?? null;
   }
 
   // ---- preview ----
@@ -117,6 +139,7 @@ export class BannerPlayer {
     if (!this.media) return;
     this.stopLoop();
     this.recording = false;
+    this.ensureSfx();
     this.startSequence();
     this.loop();
   }
@@ -124,6 +147,7 @@ export class BannerPlayer {
   private startSequence(): void {
     if (!this.media) return;
     this.phase = 'pre';
+    this.slashFired = false;
     if (this.media.kind === 'video' && this.media.video) {
       // Note: the audio graph is built lazily only for export (record()), not
       // preview — a MediaElementAudioSourceNode ties the element's clock to the
@@ -164,6 +188,13 @@ export class BannerPlayer {
 
   // ---- frame computation ----
 
+  /** Fire the entrance slash once per sequence, when the slide-in begins. */
+  private maybeSlash(cfg: EditorConfig): void {
+    if (this.slashFired) return;
+    this.slashFired = true;
+    if (cfg.sfxEnabled && this.sfx) this.sfx.trigger('slash', this.audioCtx?.currentTime);
+  }
+
   private frameForVideo(): BannerFrame {
     const cfg = this.getConfig();
     const v = this.media!.video!;
@@ -190,6 +221,7 @@ export class BannerPlayer {
         return { slide: 1, alpha: 1, flash: 1, anchor };
       }
       if (ct < slideStart) return { slide: 0, alpha: 0, flash: 0, anchor };
+      this.maybeSlash(cfg); // slide-in has begun
       const p = (ct - slideStart) / effDur;
       return { slide: easeOutBack(Math.min(1, p)), alpha: 1, flash: 0, anchor };
     }
@@ -230,6 +262,7 @@ export class BannerPlayer {
     }
     if (t < freeze) return { slide: 0, alpha: 0, flash: 0, anchor };
     if (t < lock) {
+      this.maybeSlash(cfg); // slide-in has begun
       return { slide: easeOutBack((t - freeze) / Math.max(1, slideIn)), alpha: 1, flash: 0, anchor };
     }
     const flash = Math.max(0, 1 - (t - lock) / FLASH_MS);
@@ -245,6 +278,7 @@ export class BannerPlayer {
     const cfg = this.getConfig();
     const src = this.media.video ?? this.media.image!;
     drawSource(this.ctx, src, this.out, cfg.fillMode);
+    if (this.sfx) this.sfx.setVolume(cfg.sfxEnabled ? cfg.sfxVolume : 0);
 
     const frame = this.media.kind === 'video' ? this.frameForVideo() : this.frameForImage();
     drawBanner(this.ctx, this.out, cfg.style, frame);
@@ -281,11 +315,17 @@ export class BannerPlayer {
     if (!this.media) throw new Error('No media loaded');
     this.stopLoop();
     this.recording = true;
+    this.ensureSfx();
 
     const stream = this.canvas.captureStream(FPS);
     if (this.media.kind === 'video') {
       const audio = this.ensureAudio();
       audio?.getAudioTracks().forEach((t) => stream.addTrack(t));
+    } else if (this.sfx) {
+      // Image mode has no video audio; capture the SFX bus alone.
+      const dest = this.ensureCtx().createMediaStreamDestination();
+      this.sfx.output.connect(dest);
+      dest.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
     }
 
     let mimeType = 'video/webm;codecs=vp9,opus';

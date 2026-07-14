@@ -53,6 +53,9 @@ export interface EditorConfig {
   fillMode: FillMode;
   ratio: RatioKey;
   position: BannerPosition;
+  sfxEnabled: boolean;
+  /** SFX bus gain (0..1), balancing the slash against the clip's own audio. */
+  sfxVolume: number;
 }
 
 export const RATIOS: Record<Exclude<RatioKey, 'original'>, OutputSize> = {

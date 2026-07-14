@@ -6,6 +6,7 @@ import type { CaptionEl } from './types';
 import { boilFontIndex, elementEnd, typewriterProgress } from './types';
 import type { BoilPoolId, BoilFont } from './fonts';
 import { poolById, fontByKey } from './fonts';
+import { SfxEngine } from '../sfx';
 
 const FPS = 30;
 
@@ -24,6 +25,9 @@ export interface CaptionsState {
   ratio: RatioKey;
   boilPool: BoilPoolId;
   normalize: boolean;
+  sfxEnabled: boolean;
+  /** SFX bus gain (0..1), balancing effects against the clip's own audio. */
+  sfxVolume: number;
 }
 
 export interface CaptionBounds {
@@ -45,6 +49,10 @@ export class CaptionsPlayer {
   private audioCtx: AudioContext | null = null;
   private srcNode: MediaElementAudioSourceNode | null = null;
   private streamDest: MediaStreamAudioDestinationNode | null = null;
+  private sfx: SfxEngine | null = null;
+  // Per-element trigger tracking (reset each playback).
+  private lastFontIdx = new Map<string, number>();
+  private lastReveal = new Map<string, number>();
 
   private canvas: HTMLCanvasElement;
   private getState: () => CaptionsState;
@@ -111,54 +119,105 @@ export class CaptionsPlayer {
     return this.nowSec();
   }
 
-  private drawFrameAt(sec: number): void {
+  private drawFrameAt(sec: number, fireSfx = false): void {
     if (!this.media) return;
     this.syncOutputSize();
     const state = this.getState();
     const src = this.media.video ?? this.media.image!;
     drawSource(this.ctx, src, this.out, state.fillMode);
+
+    if (this.sfx) this.sfx.setVolume(state.sfxEnabled ? state.sfxVolume : 0);
+    const sfxOn = fireSfx && state.sfxEnabled && !!this.sfx;
+    const when = this.audioCtx ? this.audioCtx.currentTime : 0;
+    const pool = poolById(state.boilPool);
+
     for (const el of state.captions) {
       if (sec < el.start || sec >= elementEnd(el)) continue;
-      const font = this.fontFor(el, sec, state);
       if (el.kind === 'boil') {
-        drawCaption(this.ctx, this.out, el, font, state.normalize, 1);
+        const fi = boilFontIndex(el, (sec - el.start) * 1000, pool.fonts.length);
+        drawCaption(this.ctx, this.out, el, pool.fonts[fi] ?? pool.fonts[0], state.normalize, 1);
+        // Riffle once per font change.
+        if (sfxOn && el.boil !== 'off') {
+          const prev = this.lastFontIdx.get(el.id);
+          if (prev === undefined) this.lastFontIdx.set(el.id, fi);
+          else if (fi !== prev) {
+            this.sfx!.trigger('riffle', when);
+            this.lastFontIdx.set(el.id, fi);
+          }
+        }
       } else {
-        drawTypewriter(this.ctx, this.out, el, font, typewriterProgress(el, sec));
+        const prog = typewriterProgress(el, sec);
+        drawTypewriter(this.ctx, this.out, el, fontByKey(el.fontKey), prog);
+        // Key click per character revealed/deleted (not during a select-all flash).
+        if (sfxOn && !prog.selectAll) {
+          const raw = el.text.replace(/\n/g, '').length;
+          const count = Math.round(Math.max(0, Math.min(1, prog.revealFrac)) * raw);
+          const prev = this.lastReveal.get(el.id);
+          if (prev === undefined) this.lastReveal.set(el.id, count);
+          else if (count !== prev) {
+            const n = Math.min(3, Math.abs(count - prev));
+            for (let k = 0; k < n; k++) this.sfx!.trigger('key', when + k * 0.012);
+            this.lastReveal.set(el.id, count);
+          }
+        }
       }
     }
   }
 
-  /** Draw the current frame without advancing (paused / after a seek). */
+  /** Draw the current frame without advancing (paused / after a seek). No SFX. */
   renderStatic(): void {
-    this.drawFrameAt(this.nowSec());
+    this.drawFrameAt(this.nowSec(), false);
   }
 
-  private ensureAudio(): MediaStream | null {
-    if (!this.media?.video) return null;
+  private ensureCtx(): AudioContext {
     if (!this.audioCtx) {
       const AC =
         window.AudioContext ??
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.audioCtx = new AC();
-      this.srcNode = this.audioCtx.createMediaElementSource(this.media.video);
-      this.streamDest = this.audioCtx.createMediaStreamDestination();
-      this.srcNode.connect(this.audioCtx.destination);
-      this.srcNode.connect(this.streamDest);
     }
     if (this.audioCtx.state === 'suspended') void this.audioCtx.resume();
-    return this.streamDest?.stream ?? null;
+    return this.audioCtx;
+  }
+
+  /** Lazily build the SFX engine (shared context). Call on a user gesture. */
+  private ensureSfx(): void {
+    const ctx = this.ensureCtx();
+    if (!this.sfx) {
+      this.sfx = new SfxEngine(ctx, 0.5);
+      this.sfx.output.connect(ctx.destination);
+      if (this.streamDest) this.sfx.output.connect(this.streamDest);
+    }
+  }
+
+  /** Build the export audio graph (video audio + SFX -> recording stream). */
+  private ensureAudio(): MediaStream | null {
+    if (!this.media?.video) return null;
+    const ctx = this.ensureCtx();
+    if (!this.streamDest) {
+      this.srcNode = ctx.createMediaElementSource(this.media.video);
+      this.streamDest = ctx.createMediaStreamDestination();
+      this.srcNode.connect(ctx.destination);
+      this.srcNode.connect(this.streamDest);
+      this.sfx?.output.connect(this.streamDest);
+    }
+    return this.streamDest.stream ?? null;
   }
 
   playPreview(): void {
     if (!this.media) return;
     this.stopLoop();
     this.recording = false;
+    this.ensureSfx();
     this.startPlayback();
     this.loop();
   }
 
   private startPlayback(): void {
     if (!this.media) return;
+    // Fresh SFX trigger tracking for this pass.
+    this.lastFontIdx.clear();
+    this.lastReveal.clear();
     if (this.media.kind === 'video' && this.media.video) {
       this.media.video.currentTime = 0;
       void this.media.video.play().catch(() => undefined);
@@ -210,7 +269,7 @@ export class CaptionsPlayer {
       }
     }
 
-    this.drawFrameAt(sec);
+    this.drawFrameAt(sec, true);
     this.onTime?.(sec);
     this.raf = requestAnimationFrame(this.loop);
   };
@@ -269,11 +328,17 @@ export class CaptionsPlayer {
     if (!this.media) throw new Error('No media loaded');
     this.stopLoop();
     this.recording = true;
+    this.ensureSfx();
 
     const stream = this.canvas.captureStream(FPS);
     if (this.media.kind === 'video') {
       const audio = this.ensureAudio();
       audio?.getAudioTracks().forEach((t) => stream.addTrack(t));
+    } else if (this.sfx) {
+      // Image mode has no video audio; capture SFX alone.
+      const dest = this.audioCtx!.createMediaStreamDestination();
+      this.sfx.output.connect(dest);
+      dest.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
     }
 
     let mimeType = 'video/webm;codecs=vp9,opus';

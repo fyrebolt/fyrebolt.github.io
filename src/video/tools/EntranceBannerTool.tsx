@@ -49,6 +49,8 @@ export default function EntranceBannerTool() {
   const [fillMode, setFillMode] = useState<FillMode>('crop');
   const [position, setPosition] = useState<BannerPosition>('lower');
   const [showSafeZones, setShowSafeZones] = useState(true);
+  const [sfxEnabled, setSfxEnabled] = useState(false);
+  const [sfxVolume, setSfxVolume] = useState(0.5);
 
   // ---- timing (ms) ----
   const [freeze, setFreeze] = useState(1500);
@@ -77,8 +79,10 @@ export default function EntranceBannerTool() {
       fillMode,
       ratio,
       position,
+      sfxEnabled,
+      sfxVolume,
     }),
-    [name, tagline, primary, accent, textColor, freeze, slideIn, hold, fadeOut, total, fillMode, ratio, position],
+    [name, tagline, primary, accent, textColor, freeze, slideIn, hold, fadeOut, total, fillMode, ratio, position, sfxEnabled, sfxVolume],
   );
   // Keep the latest config available to the player's render loop (read via getConfig).
   useEffect(() => {
@@ -427,6 +431,26 @@ export default function EntranceBannerTool() {
           <RangePair label="Fade-out speed" value={fadeOut} min={100} max={1200} step={20} onChange={setFadeOut} />
           {mediaKind === 'image' && (
             <RangePair label="Total clip length" value={total} min={2000} max={12000} step={100} onChange={setTotal} />
+          )}
+        </Panel>
+
+        <Panel title="Sound effects">
+          <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+            <input type="checkbox" checked={sfxEnabled} onChange={(e) => setSfxEnabled(e.target.checked)} />
+            Enable entrance slash
+          </label>
+          {sfxEnabled && (
+            <Field label={`SFX volume — ${Math.round(sfxVolume * 100)}%`}>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={sfxVolume}
+                onChange={(e) => setSfxVolume(Number(e.target.value))}
+                className="w-full accent-[var(--color-primary-green)]"
+              />
+            </Field>
           )}
         </Panel>
       </aside>
