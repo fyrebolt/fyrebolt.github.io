@@ -46,7 +46,7 @@ export class BannerPlayer {
   private srcNode: MediaElementAudioSourceNode | null = null;
   private streamDest: MediaStreamAudioDestinationNode | null = null;
   private sfx: SfxEngine | null = null;
-  private slashFired = false;
+  private entranceFired = false;
 
   private canvas: HTMLCanvasElement;
   private getConfig: () => EditorConfig;
@@ -147,7 +147,7 @@ export class BannerPlayer {
   private startSequence(): void {
     if (!this.media) return;
     this.phase = 'pre';
-    this.slashFired = false;
+    this.entranceFired = false;
     if (this.media.kind === 'video' && this.media.video) {
       // Note: the audio graph is built lazily only for export (record()), not
       // preview — a MediaElementAudioSourceNode ties the element's clock to the
@@ -188,11 +188,11 @@ export class BannerPlayer {
 
   // ---- frame computation ----
 
-  /** Fire the entrance slash once per sequence, when the slide-in begins. */
-  private maybeSlash(cfg: EditorConfig): void {
-    if (this.slashFired) return;
-    this.slashFired = true;
-    if (cfg.sfxEnabled && this.sfx) this.sfx.trigger('slash', this.audioCtx?.currentTime);
+  /** Fire the musical entrance once per sequence, when the banner locks (freeze). */
+  private maybeEntrance(cfg: EditorConfig): void {
+    if (this.entranceFired) return;
+    this.entranceFired = true;
+    if (cfg.sfxEnabled && this.sfx) this.sfx.trigger('entrance', this.audioCtx?.currentTime);
   }
 
   private frameForVideo(): BannerFrame {
@@ -218,10 +218,10 @@ export class BannerPlayer {
         this.phase = 'hold';
         this.holdStart = now;
         this.flashStart = now;
+        this.maybeEntrance(cfg); // musical entrance on the freeze/lock
         return { slide: 1, alpha: 1, flash: 1, anchor };
       }
       if (ct < slideStart) return { slide: 0, alpha: 0, flash: 0, anchor };
-      this.maybeSlash(cfg); // slide-in has begun
       const p = (ct - slideStart) / effDur;
       return { slide: easeOutBack(Math.min(1, p)), alpha: 1, flash: 0, anchor };
     }
@@ -262,11 +262,13 @@ export class BannerPlayer {
     }
     if (t < freeze) return { slide: 0, alpha: 0, flash: 0, anchor };
     if (t < lock) {
-      this.maybeSlash(cfg); // slide-in has begun
       return { slide: easeOutBack((t - freeze) / Math.max(1, slideIn)), alpha: 1, flash: 0, anchor };
     }
     const flash = Math.max(0, 1 - (t - lock) / FLASH_MS);
-    if (t < lock + hold) return { slide: 1, alpha: 1, flash, anchor };
+    if (t < lock + hold) {
+      this.maybeEntrance(cfg); // musical entrance on the lock
+      return { slide: 1, alpha: 1, flash, anchor };
+    }
     const fadeElapsed = t - (lock + hold);
     const alpha = Math.max(0, 1 - fadeElapsed / Math.max(1, fadeOut));
     return { slide: 1, alpha, flash: 0, anchor };
