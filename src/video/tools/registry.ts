@@ -7,6 +7,7 @@
 import type { ComponentType } from 'react';
 import EntranceBannerTool from './EntranceBannerTool';
 import CaptionsTool from './CaptionsTool';
+import ZoomTool from './ZoomTool';
 
 export interface VideoTool {
   /** Stable id; also the URL hash (/video/#<id>). Keep it kebab-case. */
@@ -36,6 +37,14 @@ export const TOOLS: VideoTool[] = [
     blurb:
       'Add any number of animated text captions with a "font boil" reveal. Drag each on the canvas, time it on the multi-track timeline, and export an MP4.',
     component: CaptionsTool,
+  },
+  {
+    id: 'zoom',
+    label: 'Zoom',
+    icon: '🔍',
+    blurb:
+      'Add sequential zoom keyframes: drag a crop rectangle on the full frame, set each transition, and the video animates between them. Non-destructive — reframe from the original anytime.',
+    component: ZoomTool,
   },
 ];
 

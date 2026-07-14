@@ -3,6 +3,7 @@
 import type { BannerFrame, BannerStyle, FillMode, OutputSize, RatioKey } from './types';
 import { RATIOS } from './types';
 import type { CaptionTextStyle, TypewriterProgress } from './captions/types';
+import type { ZoomRect } from './zoom/types';
 import type { BoilFont } from './captions/fonts';
 import { fontCss } from './captions/fonts';
 
@@ -541,4 +542,68 @@ export function drawTypewriter(
   }
 
   ctx.restore();
+}
+
+// ---- zoom (source-normalised crop -> contain-fit onto output) ----
+
+export interface FitRect {
+  dx: number;
+  dy: number;
+  dw: number;
+  dh: number;
+}
+
+/** Where a source of the given pixel size lands when contain-fit into `out` (centred). */
+export function containRect(srcW: number, srcH: number, out: OutputSize): FitRect {
+  if (srcW <= 0 || srcH <= 0) return { dx: 0, dy: 0, dw: out.w, dh: out.h };
+  const scale = Math.min(out.w / srcW, out.h / srcH);
+  const dw = srcW * scale;
+  const dh = srcH * scale;
+  return { dx: (out.w - dw) / 2, dy: (out.h - dh) / 2, dw, dh };
+}
+
+/**
+ * Draw a zoomed frame: take the crop `rect` (normalised to the source) and
+ * contain-fit it onto the output canvas, centred, with black letterboxing for
+ * any off-ratio / out-of-bounds space. Never crops or stretches.
+ */
+export function drawZoomed(
+  ctx: CanvasRenderingContext2D,
+  src: Source,
+  out: OutputSize,
+  rect: ZoomRect,
+): void {
+  const { w: srcW, h: srcH } = sourceDims(src);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, out.w, out.h);
+  if (srcW <= 0 || srcH <= 0) return;
+
+  // crop rect in source pixels (may extend beyond the source bounds)
+  const sx = rect.x * srcW;
+  const sy = rect.y * srcH;
+  const sw = rect.w * srcW;
+  const sh = rect.h * srcH;
+  if (sw <= 0 || sh <= 0) return;
+
+  // contain-fit destination for the full crop rect
+  const scale = Math.min(out.w / sw, out.h / sh);
+  const dw = sw * scale;
+  const dh = sh * scale;
+  const dx = (out.w - dw) / 2;
+  const dy = (out.h - dh) / 2;
+
+  // clip the crop to the valid source region, mapping proportionally into dest
+  const vx = Math.max(sx, 0);
+  const vy = Math.max(sy, 0);
+  const vx2 = Math.min(sx + sw, srcW);
+  const vy2 = Math.min(sy + sh, srcH);
+  if (vx2 <= vx || vy2 <= vy) return;
+  const vw = vx2 - vx;
+  const vh = vy2 - vy;
+
+  const ddx = dx + ((vx - sx) / sw) * dw;
+  const ddy = dy + ((vy - sy) / sh) * dh;
+  const ddw = (vw / sw) * dw;
+  const ddh = (vh / sh) * dh;
+  ctx.drawImage(src, vx, vy, vw, vh, ddx, ddy, ddw, ddh);
 }
