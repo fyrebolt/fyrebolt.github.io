@@ -5,7 +5,7 @@
 // and/or the export recording stream. Works on a normal AudioContext (live) or
 // an OfflineAudioContext (tests).
 
-export type SfxKind = 'entrance' | 'riffle' | 'key';
+export type SfxKind = 'entrance' | 'riffle' | 'key' | 'whoosh';
 
 export class SfxEngine {
   /** Route this to ctx.destination (monitoring) and/or a MediaStreamDestination (export). */
@@ -29,7 +29,29 @@ export class SfxEngine {
   trigger(kind: SfxKind, when = this.ctx.currentTime, gain = 1): void {
     if (kind === 'entrance') this.entrance(when);
     else if (kind === 'riffle') this.riffle(when);
+    else if (kind === 'whoosh') this.whoosh(when, gain);
     else this.key(when, gain);
+  }
+
+  /** Zoom transition: a pitch-swept filtered-noise whoosh with a volume swell. */
+  private whoosh(t: number, gain = 1): void {
+    const ctx = this.ctx;
+    const src = this.noiseSource();
+    src.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 1.1;
+    // sweep up then settle — reads as a fast "vwoom"
+    bp.frequency.setValueAtTime(320, t);
+    bp.frequency.exponentialRampToValueAtTime(2600, t + 0.18);
+    bp.frequency.exponentialRampToValueAtTime(900, t + 0.36);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.55 * gain, t + 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+    src.connect(bp).connect(g).connect(this.output);
+    src.start(t);
+    src.stop(t + 0.42);
   }
 
   private noiseSource(): AudioBufferSourceNode {
