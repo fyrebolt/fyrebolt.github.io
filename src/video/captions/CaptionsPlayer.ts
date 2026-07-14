@@ -161,11 +161,11 @@ export class CaptionsPlayer {
         drawTypewriter(this.ctx, this.out, el, fontByKey(el.fontKey), prog);
         if (sfxOn) {
           if (prog.selectAll) {
-            // Select-all deletion: Cmd+A (two rapid clicks) then a louder backspace.
+            // Select-all deletion: two enhanced clicks — one for the highlight,
+            // one for the backspace.
             if (el.deleteEnabled && el.deleteStyle === 'selectAll' && !this.deleteCueFired.has(el.id)) {
               this.deleteCueFired.add(el.id);
-              this.sfx!.trigger('key', when);
-              this.sfx!.trigger('key', when + 0.09);
+              this.sfx!.trigger('key', when, 1.45);
               this.sfx!.trigger('key', when + 0.22, 1.45);
             }
           } else {
