@@ -5,7 +5,7 @@
 // and/or the export recording stream. Works on a normal AudioContext (live) or
 // an OfflineAudioContext (tests).
 
-export type SfxKind = 'slash' | 'riffle' | 'key';
+export type SfxKind = 'entrance' | 'riffle' | 'key';
 
 export class SfxEngine {
   /** Route this to ctx.destination (monitoring) and/or a MediaStreamDestination (export). */
@@ -25,10 +25,11 @@ export class SfxEngine {
     this.output.gain.value = Math.max(0, v);
   }
 
-  trigger(kind: SfxKind, when = this.ctx.currentTime): void {
-    if (kind === 'slash') this.slash(when);
+  /** `gain` scales an individual hit (used to make the backspace key louder). */
+  trigger(kind: SfxKind, when = this.ctx.currentTime, gain = 1): void {
+    if (kind === 'entrance') this.entrance(when);
     else if (kind === 'riffle') this.riffle(when);
-    else this.key(when);
+    else this.key(when, gain);
   }
 
   private noiseSource(): AudioBufferSourceNode {
@@ -37,37 +38,42 @@ export class SfxEngine {
     return src;
   }
 
-  /** Banner entrance: a fast noise whoosh sweeping up, with a short metallic ring. */
-  private slash(t: number): void {
+  /** A short plucked note (triangle fundamental + a little square body). */
+  private pluck(freq: number, t: number, dur: number, amp: number): void {
     const ctx = this.ctx;
-    const src = this.noiseSource();
-    src.loop = true;
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.Q.value = 0.9;
-    bp.frequency.setValueAtTime(500, t);
-    bp.frequency.exponentialRampToValueAtTime(4200, t + 0.16);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.9, t + 0.03);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
-    src.connect(bp).connect(g).connect(this.output);
-    src.start(t);
-    src.stop(t + 0.3);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(amp, t + 0.008);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    env.connect(this.output);
 
-    // metallic ring / impact tail at the lock
-    [1250, 2500, 3750].forEach((f, i) => {
-      const o = ctx.createOscillator();
-      o.type = 'triangle';
-      o.frequency.value = f;
-      const og = ctx.createGain();
-      og.gain.setValueAtTime(0.0001, t + 0.04);
-      og.gain.exponentialRampToValueAtTime(0.22 / (i + 1), t + 0.07);
-      og.gain.exponentialRampToValueAtTime(0.0001, t + 0.36);
-      o.connect(og).connect(this.output);
-      o.start(t + 0.04);
-      o.stop(t + 0.4);
-    });
+    const o = ctx.createOscillator();
+    o.type = 'triangle';
+    o.frequency.value = freq;
+    o.connect(env);
+    o.start(t);
+    o.stop(t + dur + 0.02);
+
+    const o2 = ctx.createOscillator();
+    o2.type = 'square';
+    o2.frequency.value = freq;
+    const g2 = ctx.createGain();
+    g2.gain.value = 0.3;
+    o2.connect(g2).connect(env);
+    o2.start(t);
+    o2.stop(t + dur + 0.02);
+  }
+
+  /** Banner lock: a short musical entrance — rising arpeggio into a bright chord. */
+  private entrance(t: number): void {
+    // C5 E5 G5 C6 arpeggio
+    const arp = [523.25, 659.25, 783.99, 1046.5];
+    const step = 0.085;
+    arp.forEach((f, i) => this.pluck(f, t + i * step, 0.22, 0.42));
+    // bright resolving chord (C6 E6 G6) + a sparkle
+    const chordT = t + arp.length * step;
+    [1046.5, 1318.5, 1568.0].forEach((f) => this.pluck(f, chordT, 0.5, 0.26));
+    this.pluck(2093.0, chordT + 0.02, 0.42, 0.18);
   }
 
   /** Font boil: a short filtered noise flick — one per font change reads as riffling. */
@@ -83,41 +89,55 @@ export class SfxEngine {
     bp.Q.value = 1.3;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.32, t + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.3, t + 0.004);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.045);
     src.connect(hp).connect(bp).connect(g).connect(this.output);
     src.start(t);
     src.stop(t + 0.06);
   }
 
-  /** Typewriter: a mechanical key-click — a noise transient plus a low "thock". */
-  private key(t: number): void {
+  /** Mechanical keyboard click: a sharp high transient + a short "clack", minimal body. */
+  private key(t: number, gain = 1): void {
     const ctx = this.ctx;
-    const src = this.noiseSource();
+
+    // bright click transient
+    const n1 = this.noiseSource();
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 3500 + Math.random() * 900;
+    const g1 = ctx.createGain();
+    g1.gain.setValueAtTime(0.0001, t);
+    g1.gain.exponentialRampToValueAtTime(0.6 * gain, t + 0.001);
+    g1.gain.exponentialRampToValueAtTime(0.0001, t + 0.011);
+    n1.connect(hp).connect(g1).connect(this.output);
+    n1.start(t);
+    n1.stop(t + 0.02);
+
+    // short clack body
+    const n2 = this.noiseSource();
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.value = 2000 + Math.random() * 700;
-    bp.Q.value = 0.9;
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.5, t + 0.002);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
-    src.connect(bp).connect(g).connect(this.output);
-    src.start(t);
-    src.stop(t + 0.04);
+    bp.frequency.value = 1700 + Math.random() * 500;
+    bp.Q.value = 1.4;
+    const g2 = ctx.createGain();
+    g2.gain.setValueAtTime(0.0001, t + 0.002);
+    g2.gain.exponentialRampToValueAtTime(0.4 * gain, t + 0.005);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+    n2.connect(bp).connect(g2).connect(this.output);
+    n2.start(t);
+    n2.stop(t + 0.04);
 
+    // crisp high 'snap'
     const o = ctx.createOscillator();
-    o.type = 'sine';
-    const base = 170 + Math.random() * 40;
-    o.frequency.setValueAtTime(base, t);
-    o.frequency.exponentialRampToValueAtTime(base * 0.5, t + 0.03);
+    o.type = 'square';
+    o.frequency.value = 2600 + Math.random() * 300;
     const og = ctx.createGain();
     og.gain.setValueAtTime(0.0001, t);
-    og.gain.exponentialRampToValueAtTime(0.28, t + 0.004);
-    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+    og.gain.exponentialRampToValueAtTime(0.16 * gain, t + 0.001);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.018);
     o.connect(og).connect(this.output);
     o.start(t);
-    o.stop(t + 0.06);
+    o.stop(t + 0.025);
   }
 }
 

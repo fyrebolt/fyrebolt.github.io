@@ -53,6 +53,7 @@ export class CaptionsPlayer {
   // Per-element trigger tracking (reset each playback).
   private lastFontIdx = new Map<string, number>();
   private lastReveal = new Map<string, number>();
+  private deleteCueFired = new Set<string>();
 
   private canvas: HTMLCanvasElement;
   private getState: () => CaptionsState;
@@ -131,33 +132,53 @@ export class CaptionsPlayer {
     const when = this.audioCtx ? this.audioCtx.currentTime : 0;
     const pool = poolById(state.boilPool);
 
+    // When multiple font-boils overlap, only one owns the riffle audio.
+    const riffleOwner = sfxOn
+      ? state.captions.find(
+          (e) => e.kind === 'boil' && e.boil !== 'off' && sec >= e.start && sec < elementEnd(e),
+        )?.id ?? null
+      : null;
+
     for (const el of state.captions) {
       if (sec < el.start || sec >= elementEnd(el)) continue;
       if (el.kind === 'boil') {
         const fi = boilFontIndex(el, (sec - el.start) * 1000, pool.fonts.length);
         drawCaption(this.ctx, this.out, el, pool.fonts[fi] ?? pool.fonts[0], state.normalize, 1);
-        // Riffle once per font change.
         if (sfxOn && el.boil !== 'off') {
           const prev = this.lastFontIdx.get(el.id);
           if (prev === undefined) this.lastFontIdx.set(el.id, fi);
           else if (fi !== prev) {
-            this.sfx!.trigger('riffle', when);
             this.lastFontIdx.set(el.id, fi);
+            // Only the owner is audible; two evenly-spaced ticks per change = 2× click rate.
+            if (el.id === riffleOwner) {
+              this.sfx!.trigger('riffle', when);
+              this.sfx!.trigger('riffle', when + 0.045);
+            }
           }
         }
       } else {
         const prog = typewriterProgress(el, sec);
         drawTypewriter(this.ctx, this.out, el, fontByKey(el.fontKey), prog);
-        // Key click per character revealed/deleted (not during a select-all flash).
-        if (sfxOn && !prog.selectAll) {
-          const raw = el.text.replace(/\n/g, '').length;
-          const count = Math.round(Math.max(0, Math.min(1, prog.revealFrac)) * raw);
-          const prev = this.lastReveal.get(el.id);
-          if (prev === undefined) this.lastReveal.set(el.id, count);
-          else if (count !== prev) {
-            const n = Math.min(3, Math.abs(count - prev));
-            for (let k = 0; k < n; k++) this.sfx!.trigger('key', when + k * 0.012);
-            this.lastReveal.set(el.id, count);
+        if (sfxOn) {
+          if (prog.selectAll) {
+            // Select-all deletion: Cmd+A (two rapid clicks) then a louder backspace.
+            if (el.deleteEnabled && el.deleteStyle === 'selectAll' && !this.deleteCueFired.has(el.id)) {
+              this.deleteCueFired.add(el.id);
+              this.sfx!.trigger('key', when);
+              this.sfx!.trigger('key', when + 0.09);
+              this.sfx!.trigger('key', when + 0.22, 1.45);
+            }
+          } else {
+            // Key click per character typed / backspaced.
+            const raw = el.text.replace(/\n/g, '').length;
+            const count = Math.round(Math.max(0, Math.min(1, prog.revealFrac)) * raw);
+            const prev = this.lastReveal.get(el.id);
+            if (prev === undefined) this.lastReveal.set(el.id, count);
+            else if (count !== prev) {
+              const n = Math.min(3, Math.abs(count - prev));
+              for (let k = 0; k < n; k++) this.sfx!.trigger('key', when + k * 0.012);
+              this.lastReveal.set(el.id, count);
+            }
           }
         }
       }
@@ -218,6 +239,7 @@ export class CaptionsPlayer {
     // Fresh SFX trigger tracking for this pass.
     this.lastFontIdx.clear();
     this.lastReveal.clear();
+    this.deleteCueFired.clear();
     if (this.media.kind === 'video' && this.media.video) {
       this.media.video.currentTime = 0;
       void this.media.video.play().catch(() => undefined);
