@@ -1,45 +1,42 @@
-.home-root {
-  min-height: 100vh;
-  min-height: 100dvh;
+/* ===== Home screen (rendered inside the portrait iPad frame) ===== */
+.home-content {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding: clamp(32px, 7vh, 88px) 24px 24px;
+  height: 100%;
+  overflow: hidden;
+  padding: 0 clamp(20px, 3.5vw, 48px) clamp(16px, 2.4vh, 30px);
 }
 
+/* ===== Header ===== */
 .home-header {
   text-align: center;
-  margin-bottom: clamp(28px, 6vh, 64px);
+  margin: clamp(16px, 3.5vh, 40px) 0 0;
   animation: home-fade-down 0.7s var(--ease-out-ios) both;
+  animation-delay: 0.15s;
 }
 .home-title {
-  font-size: clamp(28px, 4vw, 40px);
+  font-size: clamp(24px, 3.6vh, 38px);
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--color-text-primary);
 }
 .home-subtitle {
   margin-top: 6px;
-  font-size: 15px;
+  font-size: clamp(12px, 1.7vh, 15px);
   color: var(--color-text-secondary);
 }
 
+/* ===== App grid ===== */
 .home-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: clamp(24px, 4vw, 52px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(22px, 4.5vh, 56px) clamp(28px, 6vw, 72px);
   width: 100%;
-  max-width: 640px;
-  margin: 0 auto auto;
-  place-items: start center;
-}
-
-@media (max-width: 560px) {
-  .home-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    max-width: 320px;
-    gap: 34px;
-  }
+  max-width: 420px;
+  margin: 0 auto;
+  flex: 1 1 auto;
+  align-content: center;
+  place-items: center;
 }
 
 /* App icon */
@@ -58,13 +55,14 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: var(--shadow-icon);
+  box-shadow: var(--shadow-icon), inset 0 1px 1px rgba(255, 255, 255, 0.35),
+    inset 0 -6px 14px rgba(0, 0, 0, 0.14);
   transition: transform 0.34s var(--ease-spring), opacity 0.24s ease,
     box-shadow 0.3s var(--ease-out-ios);
 }
 .app-icon-btn:hover .app-icon-tile {
-  transform: translateY(-4px) scale(1.04);
-  box-shadow: 0 16px 34px rgba(17, 24, 39, 0.26);
+  transform: translateY(-5px) scale(1.05);
+  box-shadow: 0 18px 38px rgba(17, 24, 39, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.4);
 }
 .app-icon-btn:active .app-icon-tile {
   transform: scale(0.9);
@@ -75,19 +73,23 @@
   user-select: none;
 }
 .app-icon-label {
-  font-size: 13px;
+  font-size: clamp(11px, 1.5vh, 13px);
   font-weight: 500;
   color: var(--color-text-primary);
   text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
 }
 
-/* Dock */
+/* ===== Dock ===== */
 .home-dock {
   display: flex;
-  gap: clamp(18px, 3vw, 34px);
-  padding: 14px clamp(18px, 3vw, 30px);
-  margin-top: clamp(28px, 5vh, 56px);
-  border-radius: 34px;
+  gap: clamp(20px, 4vw, 40px);
+  padding: 12px clamp(18px, 3vw, 28px);
+  margin-top: clamp(18px, 3vh, 34px);
+  border-radius: 30px;
+  flex: none;
+  align-self: center;
+  animation: home-fade-down 0.7s var(--ease-out-ios) both;
+  animation-delay: 0.3s;
 }
 .ios-glass-dock {
   background: var(--color-glass-bg);
@@ -97,6 +99,12 @@
 }
 .home-dock .app-icon-btn {
   animation-duration: 0.55s;
+}
+
+@media (max-width: 560px) {
+  .home-grid {
+    max-width: 340px;
+  }
 }
 
 @keyframes icon-pop {

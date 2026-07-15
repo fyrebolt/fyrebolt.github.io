@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import IpadFrame from '../ios/IpadFrame';
 import { TOOLS, toolById } from './tools/registry';
 
 /** Read the active tool id from the URL hash (/video/#<id>), falling back to the first tool. */
@@ -29,9 +30,10 @@ export default function VideoEditor() {
   const ActiveTool = active.component;
 
   return (
-    <div className="ios-editor ios-wallpaper min-h-screen text-[var(--color-text-primary)]">
+    <IpadFrame orientation="landscape" ariaLabel="Camera">
+    <div className="ios-editor text-[var(--color-text-primary)]">
       {/* ---- Frosted top bar ---- */}
-      <header className="sticky top-0 z-40 px-5 pt-3.5">
+      <header className="sticky top-0 z-40 px-5 pt-3">
         <div className="ios-glass max-w-7xl mx-auto grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-2.5 rounded-[20px]">
           <a href="/" className="justify-self-start inline-flex items-center gap-1 text-[15px] font-medium text-[var(--color-accent)] px-2.5 py-1.5 rounded-xl hover:bg-[rgba(0,122,255,0.08)] transition-colors">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -92,5 +94,6 @@ export default function VideoEditor() {
         </main>
       </div>
     </div>
+    </IpadFrame>
   );
 }
