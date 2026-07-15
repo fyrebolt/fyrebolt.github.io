@@ -29,24 +29,33 @@ export default function VideoEditor() {
   const ActiveTool = active.component;
 
   return (
-    <div className="min-h-screen bg-[var(--color-bg-primary)] text-[var(--color-text-primary)]">
-      <header className="max-w-7xl mx-auto px-6 pt-8 pb-4 flex items-center justify-between">
-        <a
-          href="/"
-          className="text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
-        >
-          ← Back to site
-        </a>
-        <span className="text-xs text-[var(--color-text-muted)] font-mono">runs entirely in your browser</span>
+    <div className="ios-editor ios-wallpaper min-h-screen text-[var(--color-text-primary)]">
+      {/* ---- Frosted top bar ---- */}
+      <header className="sticky top-0 z-40 px-5 pt-3.5">
+        <div className="ios-glass max-w-7xl mx-auto grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-2.5 rounded-[20px]">
+          <a href="/" className="justify-self-start inline-flex items-center gap-1 text-[15px] font-medium text-[var(--color-accent)] px-2.5 py-1.5 rounded-xl hover:bg-[rgba(0,122,255,0.08)] transition-colors">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <path d="M15 5l-7 7 7 7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span>Home</span>
+          </a>
+          <div className="inline-flex items-center gap-2 text-[17px] font-semibold">
+            <span aria-hidden>🎥</span>
+            <span>Camera</span>
+          </div>
+          <span className="justify-self-end text-xs text-[var(--color-text-muted)] font-mono hidden sm:block">
+            runs entirely in your browser
+          </span>
+        </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-6 pb-24 flex flex-col md:flex-row gap-8">
-        {/* ---- Vertical tool menu ---- */}
+      <div className="max-w-7xl mx-auto px-5 pt-6 pb-28 flex flex-col md:flex-row gap-7">
+        {/* ---- Tool menu ---- */}
         <nav
           aria-label="Editing tools"
-          className="md:w-56 md:flex-none flex md:flex-col gap-2 overflow-x-auto md:overflow-visible pb-2 md:pb-0"
+          className="md:w-60 md:flex-none flex md:flex-col gap-2 overflow-x-auto md:overflow-visible pb-1 md:pb-0"
         >
-          <div className="hidden md:block text-xs font-bold uppercase tracking-wider text-[var(--color-text-muted)] px-2 mb-1">
+          <div className="hidden md:block text-xs font-bold uppercase tracking-wider text-[var(--color-text-muted)] px-3 mb-1">
             Tools
           </div>
           {TOOLS.map((tool) => {
@@ -56,13 +65,11 @@ export default function VideoEditor() {
                 key={tool.id}
                 onClick={() => select(tool.id)}
                 aria-current={isActive ? 'page' : undefined}
-                className={`flex items-center gap-3 shrink-0 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
-                  isActive
-                    ? 'bg-[var(--color-glass-hover)] text-[var(--color-text-primary)] border border-[var(--color-primary-green)]'
-                    : 'text-[var(--color-text-secondary)] border border-transparent hover:bg-[var(--color-glass-bg)] hover:text-[var(--color-text-primary)]'
+                className={`tool-nav-btn flex items-center gap-3 shrink-0 rounded-2xl px-3.5 py-3 text-left text-[15px] font-medium ${
+                  isActive ? 'is-active' : ''
                 }`}
               >
-                <span aria-hidden="true" className="text-base leading-none">
+                <span aria-hidden="true" className="text-xl leading-none">
                   {tool.icon}
                 </span>
                 <span className="whitespace-nowrap">{tool.label}</span>
@@ -77,7 +84,9 @@ export default function VideoEditor() {
             <span aria-hidden="true">{active.icon}</span>
             <span className="gradient-text">{active.label}</span>
           </h1>
-          <p className="text-[var(--color-text-secondary)] mt-2 mb-8 max-w-2xl">{active.blurb}</p>
+          <p className="text-[var(--color-text-secondary)] mt-2 mb-8 max-w-2xl text-[15px] leading-relaxed">
+            {active.blurb}
+          </p>
 
           <ActiveTool />
         </main>

@@ -1,0 +1,121 @@
+.home-root {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: clamp(32px, 7vh, 88px) 24px 24px;
+}
+
+.home-header {
+  text-align: center;
+  margin-bottom: clamp(28px, 6vh, 64px);
+  animation: home-fade-down 0.7s var(--ease-out-ios) both;
+}
+.home-title {
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-text-primary);
+}
+.home-subtitle {
+  margin-top: 6px;
+  font-size: 15px;
+  color: var(--color-text-secondary);
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(24px, 4vw, 52px);
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto auto;
+  place-items: start center;
+}
+
+@media (max-width: 560px) {
+  .home-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: 320px;
+    gap: 34px;
+  }
+}
+
+/* App icon */
+.app-icon-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  animation: icon-pop 0.62s var(--ease-spring) both;
+}
+.app-icon-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-icon);
+  transition: transform 0.34s var(--ease-spring), opacity 0.24s ease,
+    box-shadow 0.3s var(--ease-out-ios);
+}
+.app-icon-btn:hover .app-icon-tile {
+  transform: translateY(-4px) scale(1.04);
+  box-shadow: 0 16px 34px rgba(17, 24, 39, 0.26);
+}
+.app-icon-btn:active .app-icon-tile {
+  transform: scale(0.9);
+}
+.app-icon-glyph {
+  line-height: 1;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
+  user-select: none;
+}
+.app-icon-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+/* Dock */
+.home-dock {
+  display: flex;
+  gap: clamp(18px, 3vw, 34px);
+  padding: 14px clamp(18px, 3vw, 30px);
+  margin-top: clamp(28px, 5vh, 56px);
+  border-radius: 34px;
+}
+.ios-glass-dock {
+  background: var(--color-glass-bg);
+  backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  box-shadow: var(--shadow-2), inset 0 0 0 0.5px var(--color-glass-border);
+}
+.home-dock .app-icon-btn {
+  animation-duration: 0.55s;
+}
+
+@keyframes icon-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.5) translateY(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes home-fade-down {
+  0% {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

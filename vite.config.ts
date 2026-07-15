@@ -15,10 +15,16 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        // Main portfolio SPA (served at /)
+        // iPad-style home screen (served at /)
         main: resolve(__dirname, 'index.html'),
-        // Video Editor tool (served at /video/)
+        // Camera → Video Editor (served at /video/)
         video: resolve(__dirname, 'video/index.html'),
+        // App Store → portfolio (served at /appstore/)
+        appstore: resolve(__dirname, 'appstore/index.html'),
+        // Printer → résumé PDF viewer (served at /printer/)
+        printer: resolve(__dirname, 'printer/index.html'),
+        // About Me (served at /about/)
+        about: resolve(__dirname, 'about/index.html'),
       },
     },
   },

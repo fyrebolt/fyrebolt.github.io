@@ -1,33 +1,154 @@
-/* The shared index.css hides the native cursor (the main site draws a custom one).
-   The Video Editor has no custom cursor, so restore the native cursor here. */
-body {
-  cursor: auto;
-}
-a,
-button,
-[role='button'],
-input,
-textarea,
-select,
-[data-cursor-hover] {
-  cursor: auto;
-}
-input[type='range'],
-button,
-[role='button'] {
-  cursor: pointer;
-}
-button:disabled {
-  cursor: default;
-}
+/* ===== Video editor — iOS reskin (scoped to .ios-editor) =====
+   Functionality is unchanged; this restyles the shared controls (inputs,
+   sliders, switches, colour pickers, buttons) into the same iOS language used
+   across the rest of the site. The editor keeps the native cursor for precise
+   canvas/timeline work (it never adds the .ios-cursor class). */
 
-/* Shared text/number input styling used across editing tools. */
+/* Shared text/number inputs used across editing tools. */
 .input {
   width: 100%;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-glass-border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-size: 14px;
+  background: var(--color-fill-secondary);
+  border: none;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 15px;
   color: var(--color-text-primary);
+  outline: none;
+  transition: box-shadow 0.2s ease, background-color 0.2s ease;
+}
+.input:focus {
+  background: #fff;
+  box-shadow: 0 0 0 3.5px rgba(0, 122, 255, 0.25);
+}
+
+/* Soften every button's corners and give a springy press. */
+.ios-editor button:not(.tool-nav-btn) {
+  border-radius: 12px;
+  transition: transform 0.28s var(--ease-spring), background-color 0.18s ease,
+    box-shadow 0.25s var(--ease-out-ios), opacity 0.18s ease;
+}
+.ios-editor button:not(.tool-nav-btn):active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+/* Native checkbox -> iOS switch */
+.ios-editor input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 46px;
+  height: 28px;
+  border-radius: 999px;
+  background: #e3e3e8;
+  flex: none;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background-color 0.28s var(--ease-in-out-ios);
+}
+.ios-editor input[type='checkbox']::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  transition: transform 0.28s var(--ease-spring);
+}
+.ios-editor input[type='checkbox']:checked {
+  background: var(--color-primary-green);
+}
+.ios-editor input[type='checkbox']:checked::after {
+  transform: translateX(18px);
+}
+
+/* Range -> iOS slider */
+.ios-editor input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-fill-secondary);
+  outline: none;
+  cursor: pointer;
+}
+.ios-editor input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+}
+.ios-editor input[type='range']::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+/* Colour picker -> rounded swatch */
+.ios-editor input[type='color'] {
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  border-radius: 10px;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--color-hairline);
+}
+.ios-editor input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 3px;
+}
+.ios-editor input[type='color']::-webkit-color-swatch {
+  border: none;
+  border-radius: 8px;
+}
+.ios-editor input[type='color']::-moz-color-swatch {
+  border: none;
+  border-radius: 8px;
+}
+
+/* Native select */
+.ios-editor select {
+  background: var(--color-fill-secondary);
+  border: none;
+  border-radius: 12px;
+  padding: 9px 12px;
+  font-size: 15px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+/* File input button chrome softening (the file: pseudo utilities set the rest). */
+.ios-editor input[type='file'] {
+  cursor: pointer;
+}
+
+/* Tool menu buttons */
+.tool-nav-btn {
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease, transform 0.28s var(--ease-spring);
+}
+.tool-nav-btn:hover {
+  background: var(--color-glass-hover);
+  color: var(--color-text-primary);
+}
+.tool-nav-btn:active {
+  transform: scale(0.97);
+}
+.tool-nav-btn.is-active {
+  background: #fff;
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-1);
 }
