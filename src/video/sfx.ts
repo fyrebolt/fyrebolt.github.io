@@ -5,7 +5,7 @@
 // and/or the export recording stream. Works on a normal AudioContext (live) or
 // an OfflineAudioContext (tests).
 
-export type SfxKind = 'entrance' | 'riffle' | 'key' | 'whoosh';
+export type SfxKind = 'entrance' | 'riffle' | 'key' | 'whoosh' | 'pencil';
 
 export class SfxEngine {
   /** Route this to ctx.destination (monitoring) and/or a MediaStreamDestination (export). */
@@ -30,7 +30,36 @@ export class SfxEngine {
     if (kind === 'entrance') this.entrance(when);
     else if (kind === 'riffle') this.riffle(when);
     else if (kind === 'whoosh') this.whoosh(when, gain);
+    else if (kind === 'pencil') this.pencil(when, gain);
     else this.key(when, gain);
+  }
+
+  /**
+   * One grain of pencil-on-paper: a short band of filtered noise with a soft
+   * attack, its centre frequency jittered so a stream of grains reads as the
+   * continuous scratch of graphite dragging across paper. Fire repeatedly (a few
+   * per second) for the length of a sketch's animation.
+   */
+  private pencil(t: number, gain = 1): void {
+    const ctx = this.ctx;
+    const src = this.noiseSource();
+    // gritty texture: high-pass to thin it, band-pass to give it a "paper tooth" colour
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 700;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 1600 + Math.random() * 2200;
+    bp.Q.value = 0.6 + Math.random() * 0.5;
+    const g = ctx.createGain();
+    const dur = 0.05 + Math.random() * 0.05;
+    const amp = (0.06 + Math.random() * 0.05) * gain;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(amp, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(hp).connect(bp).connect(g).connect(this.output);
+    src.start(t);
+    src.stop(t + dur + 0.02);
   }
 
   /** Zoom transition: a pitch-swept filtered-noise whoosh with a volume swell. */

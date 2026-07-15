@@ -6,6 +6,8 @@ import type { CaptionTextStyle, TypewriterProgress } from './captions/types';
 import type { ZoomRect } from './zoom/types';
 import type { BoilFont } from './captions/fonts';
 import { fontCss } from './captions/fonts';
+import type { SketchElement, SketchPoint, SketchStroke } from './sketch/types';
+import { geometryFor, sampleAt, sketchProgress, totalArc } from './sketch/types';
 
 // ---- easing ----
 
@@ -606,4 +608,211 @@ export function drawZoomed(
   const ddw = (vw / sw) * dw;
   const ddh = (vh / sh) * dh;
   ctx.drawImage(src, vx, vy, vw, vh, ddx, ddy, ddw, ddh);
+}
+
+// ---- sketch (freehand strokes projected onto the frame) ----
+
+/** A placement box in canvas pixels. */
+export interface SketchArea {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Contain-fit a `padAspect` (w/h) region centred inside `area`, so the sketch never distorts. */
+export function sketchFitBox(area: SketchArea, padAspect: number): { ox: number; oy: number; fw: number; fh: number } {
+  const areaAR = area.w / Math.max(1e-6, area.h);
+  let fw: number;
+  let fh: number;
+  if (areaAR > padAspect) {
+    fh = area.h;
+    fw = fh * padAspect;
+  } else {
+    fw = area.w;
+    fh = fw / padAspect;
+  }
+  return { ox: area.x + (area.w - fw) / 2, oy: area.y + (area.h - fh) / 2, fw, fh };
+}
+
+export interface SketchRenderOpts {
+  /** Arc length to reveal; omit (or ≥ total) to draw the whole sketch. */
+  drawnArc?: number;
+  /** Draw the pencil-tip tracer at the active drawing point. */
+  tracer?: boolean;
+}
+
+/**
+ * Draw a set of strokes into a placement box. Reveals up to `drawnArc` of the
+ * concatenated drawing (strokes in order, instant jumps between them) and, while
+ * animating, traces a pencil at the current tip.
+ */
+export function drawSketchStrokes(
+  ctx: CanvasRenderingContext2D,
+  area: SketchArea,
+  strokes: SketchStroke[],
+  padAspect: number,
+  opts: SketchRenderOpts = {},
+): void {
+  if (strokes.length === 0) return;
+  const { ox, oy, fw, fh } = sketchFitBox(area, padAspect);
+  const shorter = Math.min(fw, fh);
+  const map = (p: SketchPoint) => ({ x: ox + p.x * fw, y: oy + p.y * fh });
+
+  const geos = strokes.map((s) => geometryFor(s, padAspect));
+  const total = geos.reduce((n, g) => n + g.total, 0);
+  const reveal = opts.drawnArc ?? total + 1;
+
+  let consumed = 0;
+  let tip: { x: number; y: number; angle: number } | null = null;
+
+  for (let i = 0; i < strokes.length; i++) {
+    const geo = geos[i];
+    const start = consumed;
+    const end = consumed + geo.total;
+    consumed = end;
+    if (reveal <= start && geo.total > 0) continue; // not started yet
+    const localArc = Math.min(geo.total, Math.max(0, reveal - start));
+    const partial = reveal < end;
+    drawStrokePath(ctx, geo, strokes[i], localArc, map, shorter);
+    if (partial && geo.total > 0) {
+      const s = sampleAt(geo, localArc, padAspect);
+      if (s) tip = { ...map(s), angle: s.angle };
+    }
+  }
+
+  if (opts.tracer && tip) drawPencilTracer(ctx, tip.x, tip.y, tip.angle, shorter);
+}
+
+/** Stroke one processed polyline up to arc length `L` (a lone point becomes a dot). */
+function drawStrokePath(
+  ctx: CanvasRenderingContext2D,
+  geo: { pts: SketchPoint[]; cum: number[]; total: number; smooth: boolean },
+  stroke: SketchStroke,
+  L: number,
+  map: (p: SketchPoint) => { x: number; y: number },
+  shorter: number,
+): void {
+  const lw = Math.max(1, stroke.width * shorter);
+  ctx.save();
+  ctx.strokeStyle = stroke.color;
+  ctx.fillStyle = stroke.color;
+  ctx.lineWidth = lw;
+  ctx.lineJoin = geo.smooth ? 'round' : 'miter';
+  ctx.lineCap = geo.smooth ? 'round' : 'square';
+
+  if (geo.pts.length === 1) {
+    const p = map(geo.pts[0]);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, lw / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  ctx.beginPath();
+  const p0 = map(geo.pts[0]);
+  ctx.moveTo(p0.x, p0.y);
+  for (let i = 1; i < geo.pts.length; i++) {
+    if (geo.cum[i] <= L) {
+      const p = map(geo.pts[i]);
+      ctx.lineTo(p.x, p.y);
+    } else {
+      // interpolate the final partial segment to exactly L
+      const seg = Math.max(1e-6, geo.cum[i] - geo.cum[i - 1]);
+      const f = Math.max(0, Math.min(1, (L - geo.cum[i - 1]) / seg));
+      const a = geo.pts[i - 1];
+      const b = geo.pts[i];
+      const p = map({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f });
+      ctx.lineTo(p.x, p.y);
+      break;
+    }
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * An original, canvas-drawn pencil that traces the drawing point. The graphite
+ * tip sits on (x, y); the barrel trails behind along the reverse of travel so it
+ * reads as actively drawing the line.
+ */
+function drawPencilTracer(ctx: CanvasRenderingContext2D, x: number, y: number, angle: number, shorter: number): void {
+  const Lp = Math.max(14, shorter * 0.17);
+  const wp = Lp * 0.34;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle + Math.PI); // barrel trails behind the tip
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(1, Lp * 0.035);
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+
+  const tipEnd = Lp * 0.2; // graphite → wood transition
+  const woodEnd = Lp * 0.3;
+  const barrelEnd = Lp * 0.86;
+  const ferruleEnd = Lp * 0.93;
+
+  // soft drop shadow so it reads over any footage
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.35)';
+  ctx.shadowBlur = Lp * 0.12;
+  ctx.shadowOffsetY = Lp * 0.05;
+
+  // graphite point
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(tipEnd, -wp * 0.28);
+  ctx.lineTo(tipEnd, wp * 0.28);
+  ctx.closePath();
+  ctx.fillStyle = '#2b2b2b';
+  ctx.fill();
+
+  // exposed wood cone
+  ctx.beginPath();
+  ctx.moveTo(tipEnd, -wp * 0.28);
+  ctx.lineTo(woodEnd, -wp * 0.5);
+  ctx.lineTo(woodEnd, wp * 0.5);
+  ctx.lineTo(tipEnd, wp * 0.28);
+  ctx.closePath();
+  ctx.fillStyle = '#e8c58a';
+  ctx.fill();
+  ctx.stroke();
+
+  // painted barrel
+  ctx.beginPath();
+  ctx.rect(woodEnd, -wp * 0.5, barrelEnd - woodEnd, wp);
+  ctx.fillStyle = '#f4b400';
+  ctx.fill();
+  ctx.stroke();
+  // a highlight stripe down the barrel
+  ctx.fillStyle = 'rgba(255,255,255,0.32)';
+  ctx.fillRect(woodEnd, -wp * 0.32, barrelEnd - woodEnd, wp * 0.16);
+
+  // metal ferrule
+  ctx.beginPath();
+  ctx.rect(barrelEnd, -wp * 0.5, ferruleEnd - barrelEnd, wp);
+  ctx.fillStyle = '#c7ccd1';
+  ctx.fill();
+  ctx.stroke();
+
+  // eraser
+  ctx.beginPath();
+  ctx.rect(ferruleEnd, -wp * 0.42, Lp - ferruleEnd, wp * 0.84);
+  ctx.fillStyle = '#e88b8b';
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+  ctx.restore();
+}
+
+/** Draw one sketch element at time `sec` into a placement box (player entry point). */
+export function drawSketch(ctx: CanvasRenderingContext2D, area: SketchArea, el: SketchElement, sec: number): void {
+  if (el.strokes.length === 0) return;
+  const total = totalArc(el.strokes, el.padAspect);
+  const prog = sketchProgress(el, sec, total);
+  const animating = prog.phase === 'animate';
+  drawSketchStrokes(ctx, area, el.strokes, el.padAspect, {
+    drawnArc: animating ? prog.drawnArc : undefined,
+    tracer: el.tracer && el.animationDur > 0 && animating,
+  });
 }

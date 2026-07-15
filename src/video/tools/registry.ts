@@ -8,6 +8,7 @@ import type { ComponentType } from 'react';
 import EntranceBannerTool from './EntranceBannerTool';
 import CaptionsTool from './CaptionsTool';
 import ZoomTool from './ZoomTool';
+import SketchTool from './SketchTool';
 
 export interface VideoTool {
   /** Stable id; also the URL hash (/video/#<id>). Keep it kebab-case. */
@@ -45,6 +46,14 @@ export const TOOLS: VideoTool[] = [
     blurb:
       'Add sequential zoom keyframes: drag a crop rectangle on the full frame, set each transition, and the video animates between them. Non-destructive — reframe from the original anytime.',
     component: ZoomTool,
+  },
+  {
+    id: 'sketch',
+    label: 'Sketch',
+    icon: '✏️',
+    blurb:
+      'Draw freehand on a mini pad, then project it as a resizable, replayable overlay that animates on like someone drawing live on the footage. Add any number, each timed on its own track.',
+    component: SketchTool,
   },
 ];
 
