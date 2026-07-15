@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
-import SquircleCursor from './SquircleCursor';
+import IpadFrame from './IpadFrame';
 import './appshell.css';
 
 /**
- * Shared chrome for every app opened from the home screen: a frosted glass top
- * bar with a back-to-home control, the soft cursor, and the wallpaper backdrop.
+ * Shared chrome for every app opened from the home screen: it lives inside a
+ * landscape iPad frame and adds a frosted glass top bar with a back-to-home
+ * control. The soft cursor, status bar and wallpaper come from the frame.
  */
 export default function AppShell({
   title,
@@ -20,8 +21,7 @@ export default function AppShell({
   maxWidth?: number;
 }) {
   return (
-    <div className="ios-wallpaper app-shell">
-      <SquircleCursor />
+    <IpadFrame orientation="landscape" ariaLabel={title}>
       <header className="app-bar">
         <div className="app-bar-inner ios-glass" style={{ maxWidth }}>
           <a href="/" className="app-bar-back" aria-label="Back to home screen">
@@ -46,6 +46,6 @@ export default function AppShell({
       <main className="app-body" style={{ maxWidth }}>
         {children}
       </main>
-    </div>
+    </IpadFrame>
   );
 }

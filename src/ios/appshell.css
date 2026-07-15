@@ -1,14 +1,8 @@
-.app-shell {
-  min-height: 100vh;
-  min-height: 100dvh;
-  padding-bottom: 64px;
-}
-
 .app-bar {
   position: sticky;
   top: 0;
   z-index: 100;
-  padding: 14px 20px 0;
+  padding: 10px 20px 0;
   display: flex;
   justify-content: center;
 }
@@ -59,7 +53,7 @@
 .app-body {
   width: 100%;
   margin: 0 auto;
-  padding: 28px 20px 0;
+  padding: 24px 20px 48px;
   animation: app-body-in 0.5s var(--ease-out-ios) both;
 }
 
