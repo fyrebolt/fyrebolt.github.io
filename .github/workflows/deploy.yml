@@ -32,7 +32,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build (main site + /video)
+      - name: Build (main site + /video + frozen /old snapshot)
         run: npm run build
 
       - name: Configure Pages

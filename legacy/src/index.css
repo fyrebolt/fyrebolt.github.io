@@ -1,0 +1,246 @@
+@import "tailwindcss";
+
+/* ===== Design System: Green → Yellow → Blue Gradient Theme ===== */
+
+@theme {
+  /* Primary gradient palette (softened for better text contrast) */
+  --color-primary-green: #8be9c7;
+  --color-primary-yellow: #ffeaa7;
+  --color-primary-blue: #74b9ff;
+  --color-primary-cyan: #81ecec;
+  
+  /* Dark backgrounds */
+  --color-bg-primary: #0a0a0f;
+  --color-bg-secondary: #111118;
+  --color-bg-surface: #1a1a24;
+  --color-bg-elevated: #22222e;
+  
+  /* Text colors */
+  --color-text-primary: #f0f0f5;
+  --color-text-secondary: #a0a0b0;
+  --color-text-muted: #666680;
+  
+  /* Glass */
+  --color-glass-bg: rgba(255, 255, 255, 0.05);
+  --color-glass-border: rgba(255, 255, 255, 0.1);
+  --color-glass-hover: rgba(255, 255, 255, 0.08);
+  
+  /* Fonts */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+/* ===== Base Styles ===== */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  overflow-x: hidden;
+  cursor: none;
+}
+
+/* Ensure cursor: none on all interactive elements to prevent flash */
+a, button, [role="button"], input, textarea, select, [data-cursor-hover] {
+  cursor: none;
+}
+
+@media (max-width: 768px) {
+  body {
+    cursor: auto;
+  }
+  a, button, [role="button"], input, textarea, select, [data-cursor-hover] {
+    cursor: auto;
+  }
+}
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--color-primary-green), var(--color-primary-blue));
+  border-radius: 3px;
+}
+
+/* ===== Selection ===== */
+::selection {
+  background: rgba(0, 200, 83, 0.3);
+  color: var(--color-text-primary);
+}
+
+/* ===== Gradient Text Utility ===== */
+.gradient-text {
+  background: linear-gradient(135deg, var(--color-primary-green), var(--color-primary-yellow), var(--color-primary-blue));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ===== Glass Card ===== */
+.glass-card {
+  background: rgba(10, 10, 20, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--color-glass-border);
+  border-radius: 16px;
+}
+
+/* ===== Content Backdrop =====
+   Translucent dark panel behind section content to improve readability
+   over the animated ASCII background */
+.content-backdrop {
+  background: rgba(10, 10, 20, 0.65);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 20px;
+  padding: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+@media (max-width: 768px) {
+  .content-backdrop {
+    padding: 24px 16px;
+    border-radius: 12px;
+  }
+}
+
+/* ===== Gradient Border ===== */
+.gradient-border {
+  position: relative;
+}
+
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--color-primary-green), var(--color-primary-yellow), var(--color-primary-blue));
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  -webkit-mask-composite: xor;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.gradient-border:hover::before {
+  opacity: 1;
+}
+
+/* ===== Section Spacing ===== */
+.section-padding {
+  padding: 120px 24px;
+}
+
+@media (min-width: 768px) {
+  .section-padding {
+    padding: 160px 48px;
+  }
+}
+
+@media (min-width: 1280px) {
+  .section-padding {
+    padding: 200px 80px;
+  }
+}
+
+/* ===== Animated gradient line ===== */
+.gradient-line {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--color-primary-green), var(--color-primary-yellow), var(--color-primary-blue), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%, 100% { background-position: -200% 0; }
+  50% { background-position: 200% 0; }
+}
+
+/* ===== Text Readability over ASCII Background ===== */
+
+/* Headings: bold + strong dark glow */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 700;
+  text-shadow:
+    0 0 8px rgba(0, 0, 0, 0.9),
+    0 0 20px rgba(0, 0, 0, 0.7),
+    0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+h1 { font-weight: 900; }
+h2 { font-weight: 800; }
+
+/* Body text, paragraphs, labels, spans — subtle dark outline */
+p, span, label, time, a {
+  text-shadow:
+    0 0 6px rgba(0, 0, 0, 0.85),
+    0 0 14px rgba(0, 0, 0, 0.6),
+    0 1px 2px rgba(0, 0, 0, 0.7);
+}
+
+/* Make secondary/muted text slightly bolder for legibility */
+p {
+  font-weight: 500;
+}
+
+/* Gradient text can't use text-shadow (background-clip: text),
+   so we use drop-shadow on its container filter instead.
+   Must override inherited text-shadow from heading rules above. */
+.gradient-text {
+  text-shadow: none !important;
+  filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.8)) drop-shadow(0 0 20px rgba(0, 0, 0, 0.5));
+}
+
+/* Form inputs: ensure they're readable */
+input, textarea {
+  text-shadow:
+    0 0 4px rgba(0, 0, 0, 0.8),
+    0 1px 2px rgba(0, 0, 0, 0.6);
+  font-weight: 500;
+}
+
+/* Nav links: bolder */
+nav a {
+  font-weight: 600;
+  text-shadow:
+    0 0 6px rgba(0, 0, 0, 0.85),
+    0 1px 2px rgba(0, 0, 0, 0.7);
+}
+
+/* Skill tags, card metadata */
+.glass-card {
+  text-shadow:
+    0 0 4px rgba(0, 0, 0, 0.6),
+    0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+/* Mobile snap scrolling */
+@media (max-width: 768px) {
+  .mobile-snap-container {
+    scroll-snap-type: y proximity;
+  }
+  
+  .mobile-snap-section {
+    scroll-snap-align: start;
+  }
+}
