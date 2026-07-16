@@ -16,7 +16,7 @@ export interface BoilFont {
   label: string;
 }
 
-export type BoilPoolId = 'default' | 'scripting' | 'sketch';
+export type BoilPoolId = 'default' | 'scripting' | 'sketch' | 'marker' | 'claude';
 
 export interface FontPool {
   id: BoilPoolId;
@@ -62,6 +62,25 @@ const SKETCH_FONTS: BoilFont[] = [
   { family: 'Neucha', weight: 400, label: 'Neucha' },
 ];
 
+// Local "boil" pools: 4 near-identical variants each, so cycling reads as a
+// clean hand-drawn boil (marker = derived from Caveat Brush OFL; claude = an
+// original monoline marker alphabet). Bundled woff2 in public/fonts/.
+const MARKER_FONTS: BoilFont[] = [
+  { family: 'MarkerBoil1', weight: 400, label: 'Marker 1' },
+  { family: 'MarkerBoil2', weight: 400, label: 'Marker 2' },
+  { family: 'MarkerBoil3', weight: 400, label: 'Marker 3' },
+  { family: 'MarkerBoil4', weight: 400, label: 'Marker 4' },
+];
+
+const CLAUDE_FONTS: BoilFont[] = [
+  { family: 'ClaudeHand1', weight: 400, label: 'Claude 1' },
+  { family: 'ClaudeHand2', weight: 400, label: 'Claude 2' },
+  { family: 'ClaudeHand3', weight: 400, label: 'Claude 3' },
+  { family: 'ClaudeHand4', weight: 400, label: 'Claude 4' },
+];
+
+const LOCAL_BOIL_CSS = '/fonts/boil-fonts.css';
+
 export const FONT_POOLS: FontPool[] = [
   {
     id: 'default',
@@ -96,6 +115,18 @@ export const FONT_POOLS: FontPool[] = [
     stylesheet:
       'https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Coming+Soon&family=Gaegu&family=Schoolbell&family=Reenie+Beanie&family=Just+Another+Hand&family=Nanum+Pen+Script&family=Neucha&display=swap',
     fonts: SKETCH_FONTS,
+  },
+  {
+    id: 'marker',
+    label: 'Marker',
+    stylesheet: LOCAL_BOIL_CSS,
+    fonts: MARKER_FONTS,
+  },
+  {
+    id: 'claude',
+    label: 'Claude Hand',
+    stylesheet: LOCAL_BOIL_CSS,
+    fonts: CLAUDE_FONTS,
   },
 ];
 
