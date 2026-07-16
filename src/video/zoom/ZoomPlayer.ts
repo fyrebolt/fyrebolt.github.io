@@ -21,6 +21,13 @@ export interface ZoomState {
   keyframes: ZoomKeyframe[];
   ratio: RatioKey;
   sfxVolume: number;
+  /**
+   * For image sources, a fixed total output length (seconds). When set, this is
+   * the timeline/export length — so holds before and after the zooms are kept.
+   * Omitted for video (which uses the clip's own duration) and for the original
+   * Zoom tool (which derives the length from the last keyframe).
+   */
+  imageDuration?: number;
 }
 
 /**
@@ -87,7 +94,9 @@ export class ZoomPlayer {
   totalSec(): number {
     if (!this.media) return 0;
     if (this.media.kind === 'video') return this.media.duration;
-    const ends = this.getState().keyframes.map((k) => k.start + k.duration);
+    const state = this.getState();
+    if (state.imageDuration && state.imageDuration > 0) return state.imageDuration;
+    const ends = state.keyframes.map((k) => k.start + k.duration);
     return Math.max(3, ...ends);
   }
 

@@ -10,6 +10,7 @@ import CaptionsTool from './CaptionsTool';
 import ZoomTool from './ZoomTool';
 import SketchTool from './SketchTool';
 import HighlighterTool from './HighlighterTool';
+import StaticZoomTool from './StaticZoomTool';
 
 export interface VideoTool {
   /** Stable id; also the URL hash (/video/#<id>). Keep it kebab-case. */
@@ -63,6 +64,14 @@ export const TOOLS: VideoTool[] = [
     blurb:
       'Sweep a resizable highlight box over any part of the footage. Place and size it freely, then tune its color, transparency, duration and sweep-in / sweep-out. Add any number, each timed on its own track.',
     component: HighlighterTool,
+  },
+  {
+    id: 'static-zoom',
+    label: 'Static Zoom',
+    icon: '🖼️',
+    blurb:
+      'Turn a photo into a moving clip: set a total length, then zoom into a part of the image (or pull back out). Drag the crop rectangle to frame it and the timeline to set when it happens — holds before and after fill the rest.',
+    component: StaticZoomTool,
   },
 ];
 
