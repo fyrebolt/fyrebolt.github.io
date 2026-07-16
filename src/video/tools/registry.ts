@@ -9,6 +9,7 @@ import EntranceBannerTool from './EntranceBannerTool';
 import CaptionsTool from './CaptionsTool';
 import ZoomTool from './ZoomTool';
 import SketchTool from './SketchTool';
+import HighlighterTool from './HighlighterTool';
 
 export interface VideoTool {
   /** Stable id; also the URL hash (/video/#<id>). Keep it kebab-case. */
@@ -54,6 +55,14 @@ export const TOOLS: VideoTool[] = [
     blurb:
       'Draw freehand on a mini pad, then project it as a resizable, replayable overlay that animates on like someone drawing live on the footage. Add any number, each timed on its own track.',
     component: SketchTool,
+  },
+  {
+    id: 'highlighter',
+    label: 'Highlighter',
+    icon: '🖍️',
+    blurb:
+      'Sweep a resizable highlight box over any part of the footage. Place and size it freely, then tune its color, transparency, duration and sweep-in / sweep-out. Add any number, each timed on its own track.',
+    component: HighlighterTool,
   },
 ];
 

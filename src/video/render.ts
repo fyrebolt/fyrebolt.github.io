@@ -678,6 +678,52 @@ export function drawAttachmentsLayer(
   ctx.restore();
 }
 
+// ---- standalone highlighter box ----
+
+/**
+ * Draw a free highlighter box at time `sec`: a translucent rectangle that
+ * sweeps in from the left, holds, then slips off to the right (same easing as
+ * the caption highlight). `sweepIn`/`sweepOut` are absolute seconds.
+ */
+export function drawHighlightBox(
+  ctx: CanvasRenderingContext2D,
+  out: OutputSize,
+  hl: {
+    start: number;
+    duration: number;
+    sweepIn: number;
+    sweepOut: number;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    color: string;
+    opacity: number;
+  },
+  sec: number,
+): void {
+  const dur = Math.max(0.001, hl.duration);
+  const t = sec - hl.start;
+  if (t < 0 || t > dur) return;
+  const inFrac = Math.max(0, Math.min(1, hl.sweepIn / dur));
+  const outFrac = Math.max(0, Math.min(1 - inFrac, hl.sweepOut / dur));
+  const reveal = attachmentReveal({ inFrac, outFrac }, t / dur);
+  if (!reveal) return;
+
+  const bx = hl.x * out.w;
+  const by = hl.y * out.h;
+  const bw = hl.w * out.w;
+  const bh = hl.h * out.h;
+  const vx = bx + bw * reveal.a;
+  const vw = bw * (reveal.b - reveal.a);
+  if (vw <= 0.5) return;
+
+  ctx.save();
+  ctx.fillStyle = hexToRgba(hl.color, hl.opacity);
+  ctx.fillRect(vx, by, vw, bh);
+  ctx.restore();
+}
+
 // ---- zoom (source-normalised crop -> contain-fit onto output) ----
 
 export interface FitRect {
