@@ -4,8 +4,17 @@ import { CaptionsPlayer } from '../captions/CaptionsPlayer';
 import type { CaptionsState, LoadedMedia } from '../captions/CaptionsPlayer';
 import { FONT_POOLS, poolById, preloadAllFontPools, ALL_FONTS } from '../captions/fonts';
 import type { BoilPoolId } from '../captions/fonts';
-import { createCaption, createTypewriter, elementEnd } from '../captions/types';
+import {
+  createCaption,
+  createTypewriter,
+  createAttachment,
+  captionWords,
+  staticWindowOf,
+  elementEnd,
+} from '../captions/types';
 import type {
+  Attachment,
+  AttachmentType,
   BoilMode,
   Caption,
   CaptionEl,
@@ -51,6 +60,7 @@ export default function CaptionsTool() {
 
   const [captions, setCaptions] = useState<CaptionEl[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null);
 
   const [ratio, setRatio] = useState<RatioKey>('9:16');
   const [fillMode, setFillMode] = useState<FillMode>('crop');
@@ -85,6 +95,8 @@ export default function CaptionsTool() {
   const canvasDrag = useRef<{ id: string; grabDX: number; grabDY: number } | null>(null);
 
   const selected = captions.find((c) => c.id === selectedId) ?? null;
+  const selectedStatic = selected ? staticWindowOf(selected) : null;
+  const selectedAttachment = selected?.attachments.find((a) => a.id === selectedAttachmentId) ?? null;
 
   // Preload every font pool up front (so switching pools is instant).
   useEffect(() => {
@@ -169,6 +181,7 @@ export default function CaptionsTool() {
   const selectCaption = useCallback(
     (id: string) => {
       setSelectedId(id);
+      setSelectedAttachmentId(null);
       const c = captions.find((x) => x.id === id);
       if (c) seekTo(midOf(c));
     },
@@ -207,6 +220,65 @@ export default function CaptionsTool() {
       setSelectedId((sel) => (sel === id ? null : sel));
     },
     [],
+  );
+
+  // ---- attachments (highlight / underline over static words) ----
+
+  /** Seek to a moment when an attachment is on screen (mid of its lifetime). */
+  const attachMid = useCallback((cap: CaptionEl, att: Attachment): number => {
+    const sw = staticWindowOf(cap);
+    if (!sw) return midOf(cap);
+    const t = sw.start + att.startInStatic + att.duration / 2;
+    return Math.max(sw.start, Math.min(sw.end - 0.01, t));
+  }, [midOf]);
+
+  const addAttachment = useCallback(
+    (capId: string, type: AttachmentType) => {
+      const cap = captions.find((c) => c.id === capId);
+      if (!cap) return;
+      const sw = staticWindowOf(cap);
+      if (!sw) return;
+      const swLen = sw.end - sw.start;
+      const duration = Math.max(0.2, Math.min(1.2, swLen));
+      const att = createAttachment({ type, duration, startInStatic: 0, wordStart: 0, wordEnd: 0 });
+      setCaptions((cs) =>
+        cs.map((c) => (c.id === capId ? ({ ...c, attachments: [...c.attachments, att] } as CaptionEl) : c)),
+      );
+      setSelectedId(capId);
+      setSelectedAttachmentId(att.id);
+      seekTo(attachMid(cap, att));
+    },
+    [captions, seekTo, attachMid],
+  );
+
+  const updateAttachment = useCallback((capId: string, attId: string, patch: Partial<Attachment>) => {
+    setCaptions((cs) =>
+      cs.map((c) =>
+        c.id === capId
+          ? ({ ...c, attachments: c.attachments.map((a) => (a.id === attId ? { ...a, ...patch } : a)) } as CaptionEl)
+          : c,
+      ),
+    );
+  }, []);
+
+  const removeAttachment = useCallback((capId: string, attId: string) => {
+    setCaptions((cs) =>
+      cs.map((c) =>
+        c.id === capId ? ({ ...c, attachments: c.attachments.filter((a) => a.id !== attId) } as CaptionEl) : c,
+      ),
+    );
+    setSelectedAttachmentId((sel) => (sel === attId ? null : sel));
+  }, []);
+
+  const selectAttachment = useCallback(
+    (capId: string, attId: string) => {
+      setSelectedId(capId);
+      setSelectedAttachmentId(attId);
+      const cap = captions.find((c) => c.id === capId);
+      const att = cap?.attachments.find((a) => a.id === attId);
+      if (cap && att) seekTo(attachMid(cap, att));
+    },
+    [captions, seekTo, attachMid],
   );
 
   // Switching pool globally: clamp each caption's settle-font index into the new pool.
@@ -397,9 +469,12 @@ export default function CaptionsTool() {
               captions={captions}
               currentSec={currentSec}
               selectedId={selectedId}
+              selectedAttachmentId={selectedAttachmentId}
               rowColor={rowColor}
               onSelect={selectCaption}
               onEdit={updateCaption}
+              onSelectAttachment={selectAttachment}
+              onEditAttachment={updateAttachment}
               onScrub={seekTo}
             />
           )}
@@ -757,6 +832,16 @@ export default function CaptionsTool() {
               </div>
             </Field>
 
+            <AttachmentsSection
+              cap={selected}
+              staticWin={selectedStatic}
+              selected={selectedAttachment}
+              onAdd={addAttachment}
+              onSelect={selectAttachment}
+              onUpdate={updateAttachment}
+              onRemove={removeAttachment}
+            />
+
             <button
               onClick={() => removeCaption(selected.id)}
               className="w-full mt-1 px-3 py-2 rounded-md border border-[rgba(255,80,80,0.4)] text-[rgba(255,120,120,0.9)] text-xs font-medium hover:bg-[rgba(255,80,80,0.08)]"
@@ -812,6 +897,259 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
     <div>
       <div className="text-xs text-[var(--color-text-secondary)] mb-1.5">{label}</div>
       {children}
+    </div>
+  );
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const ATTACH_MIN = 0.2;
+
+// ---- word attachments (highlight / underline) ----
+
+function AttachmentsSection({
+  cap,
+  staticWin,
+  selected,
+  onAdd,
+  onSelect,
+  onUpdate,
+  onRemove,
+}: {
+  cap: CaptionEl;
+  staticWin: { start: number; end: number } | null;
+  selected: Attachment | null;
+  onAdd: (capId: string, type: AttachmentType) => void;
+  onSelect: (capId: string, attId: string) => void;
+  onUpdate: (capId: string, attId: string, patch: Partial<Attachment>) => void;
+  onRemove: (capId: string, attId: string) => void;
+}) {
+  const words = captionWords(cap.text);
+  const swLen = staticWin ? staticWin.end - staticWin.start : 0;
+
+  return (
+    <div className="pt-3 mt-1 border-t border-[var(--color-glass-border)]">
+      <div className="text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-2">
+        Word attachments
+      </div>
+
+      {!staticWin ? (
+        <p className="text-[11px] text-[var(--color-text-muted)]">
+          {cap.kind === 'boil'
+            ? 'Set boil to “off” or “intro” (with some duration) to underline/highlight static words.'
+            : 'Give this typewriter a hold to underline/highlight static words.'}
+        </p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <button
+              onClick={() => onAdd(cap.id, 'underline')}
+              className="px-2 py-2 rounded-md text-[11px] border border-[var(--color-glass-border)] hover:bg-[var(--color-glass-hover)]"
+            >
+              + Underline
+            </button>
+            <button
+              onClick={() => onAdd(cap.id, 'highlight')}
+              className="px-2 py-2 rounded-md text-[11px] border border-[var(--color-glass-border)] hover:bg-[var(--color-glass-hover)]"
+            >
+              + Highlight
+            </button>
+          </div>
+
+          {cap.attachments.length === 0 ? (
+            <p className="text-[11px] text-[var(--color-text-muted)]">
+              None yet — add one, then pick the words it covers.
+            </p>
+          ) : (
+            <div className="space-y-1 mb-1">
+              {cap.attachments.map((a) => {
+                const lo = Math.min(a.wordStart, a.wordEnd);
+                const hi = Math.max(a.wordStart, a.wordEnd);
+                const summary = words.slice(lo, hi + 1).join(' ') || '(no words)';
+                const isSel = selected?.id === a.id;
+                return (
+                  <button
+                    key={a.id}
+                    onClick={() => onSelect(cap.id, a.id)}
+                    className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-[11px] border ${
+                      isSel
+                        ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]'
+                        : 'border-[var(--color-glass-border)]'
+                    }`}
+                  >
+                    <span className="w-3 h-3 rounded-sm shrink-0 border border-black/20" style={{ background: a.color }} />
+                    <span className="capitalize font-medium">{a.type}</span>
+                    <span className="text-[var(--color-text-muted)] truncate">{summary}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {selected && (
+            <AttachmentEditor
+              key={selected.id}
+              capId={cap.id}
+              att={selected}
+              words={words}
+              swLen={swLen}
+              onUpdate={onUpdate}
+              onRemove={onRemove}
+            />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function AttachmentEditor({
+  capId,
+  att,
+  words,
+  swLen,
+  onUpdate,
+  onRemove,
+}: {
+  capId: string;
+  att: Attachment;
+  words: string[];
+  swLen: number;
+  onUpdate: (capId: string, attId: string, patch: Partial<Attachment>) => void;
+  onRemove: (capId: string, attId: string) => void;
+}) {
+  const lo = Math.min(att.wordStart, att.wordEnd);
+  const hi = Math.max(att.wordStart, att.wordEnd);
+  const patch = (p: Partial<Attachment>) => onUpdate(capId, att.id, p);
+  const holdPct = Math.max(0, Math.round((1 - att.inFrac - att.outFrac) * 100));
+
+  // Plain click selects one word; shift-click extends from it to a range.
+  const [anchor, setAnchor] = useState(lo);
+  const clickWord = (i: number, shift: boolean) => {
+    if (shift) {
+      patch({ wordStart: Math.min(anchor, i), wordEnd: Math.max(anchor, i) });
+    } else {
+      setAnchor(i);
+      patch({ wordStart: i, wordEnd: i });
+    }
+  };
+
+  const maxStart = Math.max(0, swLen - ATTACH_MIN);
+  const maxDur = Math.max(ATTACH_MIN, swLen - att.startInStatic);
+
+  return (
+    <div className="mt-2 p-2.5 rounded-md bg-[var(--color-bg-elevated)] space-y-3">
+      <Field label="Words (click one; shift-click another for a range)">
+        {words.length === 0 ? (
+          <span className="text-[11px] text-[var(--color-text-muted)]">Add text to the caption first.</span>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {words.map((w, i) => {
+              const on = i >= lo && i <= hi;
+              return (
+                <button
+                  key={i}
+                  onClick={(e) => clickWord(i, e.shiftKey)}
+                  className={`px-1.5 py-0.5 rounded text-[11px] ${
+                    on
+                      ? 'bg-[var(--color-primary-green)] text-black'
+                      : 'bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)]'
+                  }`}
+                >
+                  {w}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </Field>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Color">
+          <input
+            type="color"
+            value={att.color}
+            onChange={(e) => patch({ color: e.target.value })}
+            className="w-full h-9 rounded-md bg-transparent border border-[var(--color-glass-border)] p-0.5"
+          />
+        </Field>
+        {att.type === 'highlight' && (
+          <Field label={`Opacity — ${Math.round(att.opacity * 100)}%`}>
+            <input
+              type="range"
+              min={0.05}
+              max={1}
+              step={0.05}
+              value={att.opacity}
+              onChange={(e) => patch({ opacity: Number(e.target.value) })}
+              className="w-full accent-[var(--color-primary-green)]"
+            />
+          </Field>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label={`Start — ${att.startInStatic.toFixed(2)}s`}>
+          <input
+            type="number"
+            min={0}
+            max={round2(maxStart)}
+            step={0.05}
+            value={round2(att.startInStatic)}
+            onChange={(e) => {
+              const v = Math.max(0, Math.min(maxStart, Number(e.target.value) || 0));
+              patch({ startInStatic: v, duration: Math.min(att.duration, Math.max(ATTACH_MIN, swLen - v)) });
+            }}
+            className="input"
+          />
+        </Field>
+        <Field label={`Time — ${att.duration.toFixed(2)}s`}>
+          <input
+            type="number"
+            min={ATTACH_MIN}
+            max={round2(maxDur)}
+            step={0.05}
+            value={round2(att.duration)}
+            onChange={(e) => patch({ duration: Math.max(ATTACH_MIN, Math.min(maxDur, Number(e.target.value) || ATTACH_MIN)) })}
+            className="input"
+          />
+        </Field>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label={`Sweep in — ${Math.round(att.inFrac * 100)}%`}>
+          <input
+            type="range"
+            min={0}
+            max={0.9}
+            step={0.05}
+            value={att.inFrac}
+            onChange={(e) => patch({ inFrac: Math.min(Number(e.target.value), 1 - att.outFrac) })}
+            className="w-full accent-[var(--color-primary-green)]"
+          />
+        </Field>
+        <Field label={`Sweep out — ${Math.round(att.outFrac * 100)}%`}>
+          <input
+            type="range"
+            min={0}
+            max={0.9}
+            step={0.05}
+            value={att.outFrac}
+            onChange={(e) => patch({ outFrac: Math.min(Number(e.target.value), 1 - att.inFrac) })}
+            className="w-full accent-[var(--color-primary-green)]"
+          />
+        </Field>
+      </div>
+
+      <div className="text-[10px] text-[var(--color-text-muted)]">
+        Hold {holdPct}%. Drag the marker on the timeline to move it; scrub to preview the sweep.
+      </div>
+
+      <button
+        onClick={() => onRemove(capId, att.id)}
+        className="w-full px-3 py-2 rounded-md border border-[rgba(255,80,80,0.4)] text-[rgba(255,120,120,0.9)] text-[11px] font-medium hover:bg-[rgba(255,80,80,0.08)]"
+      >
+        Remove attachment
+      </button>
     </div>
   );
 }

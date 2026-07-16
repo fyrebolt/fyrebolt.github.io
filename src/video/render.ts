@@ -2,7 +2,8 @@
 
 import type { BannerFrame, BannerStyle, FillMode, OutputSize, RatioKey } from './types';
 import { RATIOS } from './types';
-import type { CaptionTextStyle, TypewriterProgress } from './captions/types';
+import type { CaptionEl, CaptionTextStyle, TypewriterProgress } from './captions/types';
+import { attachmentReveal, staticWindowOf } from './captions/types';
 import type { ZoomRect } from './zoom/types';
 import type { BoilFont } from './captions/fonts';
 import { fontCss } from './captions/fonts';
@@ -543,6 +544,137 @@ export function drawTypewriter(
     ctx.fillRect(cursorX + sizePx * 0.04, cursorY - sizePx * 0.42, Math.max(2, sizePx * 0.08), sizePx * 0.84);
   }
 
+  ctx.restore();
+}
+
+// ---- word attachments: highlight / underline over static words ----
+
+interface WordBox {
+  index: number;
+  left: number;
+  right: number;
+}
+interface WordLine {
+  yMid: number;
+  words: WordBox[];
+}
+interface WordBoxes {
+  sizePx: number;
+  totalWords: number;
+  lines: WordLine[];
+}
+
+/**
+ * Per-word x boxes for a caption's wrapped layout, matching exactly how the
+ * text is drawn (same wrap, alignment and font). Word indices run in reading
+ * order across lines — the space attachments select over.
+ */
+export function captionWordBoxes(
+  ctx: CanvasRenderingContext2D,
+  out: OutputSize,
+  cap: CaptionTextStyle,
+  font: BoilFont,
+  normalize: boolean,
+): WordBoxes {
+  const L = measureCaption(ctx, out, cap, font, normalize);
+  ctx.font = fontCss(font, L.sizePx);
+  const firstLineY = L.cy - L.blockH / 2 + L.lineHeight / 2;
+
+  const lineLeftFor = (fullW: number): number => {
+    if (cap.align === 'center') return L.cx - fullW / 2;
+    if (cap.align === 'right') return L.cx + L.blockW / 2 - fullW;
+    return L.cx - L.blockW / 2;
+  };
+
+  const lines: WordLine[] = [];
+  let gIndex = 0;
+  for (let i = 0; i < L.lines.length; i++) {
+    const lineStr = L.lines[i];
+    const yMid = firstLineY + i * L.lineHeight;
+    const tokens = lineStr.length ? lineStr.split(' ') : [];
+    const lineLeft = lineLeftFor(ctx.measureText(lineStr).width);
+    const words: WordBox[] = [];
+    for (let k = 0; k < tokens.length; k++) {
+      // Measure real prefixes so boxes line up with the rendered glyphs.
+      const before = k === 0 ? '' : tokens.slice(0, k).join(' ') + ' ';
+      const through = tokens.slice(0, k + 1).join(' ');
+      const left = lineLeft + ctx.measureText(before).width;
+      const right = lineLeft + ctx.measureText(through).width;
+      words.push({ index: gIndex++, left, right });
+    }
+    lines.push({ yMid, words });
+  }
+  return { sizePx: L.sizePx, totalWords: gIndex, lines };
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  const a = Math.max(0, Math.min(1, alpha));
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 0xff}, ${(n >> 8) & 0xff}, ${n & 0xff}, ${a})`;
+}
+
+/**
+ * Draw an element's attachments for one compositing layer at time `sec`.
+ * Highlights render on the `below` layer (behind the text); underlines on the
+ * `above` layer. No-op unless the element is inside its static window.
+ */
+export function drawAttachmentsLayer(
+  ctx: CanvasRenderingContext2D,
+  out: OutputSize,
+  el: CaptionEl,
+  font: BoilFont,
+  sec: number,
+  normalize: boolean,
+  layer: 'below' | 'above',
+): void {
+  if (el.attachments.length === 0) return;
+  const sw = staticWindowOf(el);
+  if (!sw || sec < sw.start || sec >= sw.end) return;
+
+  const wantType = layer === 'below' ? 'highlight' : 'underline';
+  const relevant = el.attachments.filter((a) => a.type === wantType);
+  if (relevant.length === 0) return;
+
+  const boxes = captionWordBoxes(ctx, out, el, font, normalize);
+  if (boxes.totalWords === 0) return;
+  const sizePx = boxes.sizePx;
+  const maxIdx = boxes.totalWords - 1;
+
+  ctx.save();
+  for (const att of relevant) {
+    const absStart = sw.start + att.startInStatic;
+    const p = (sec - absStart) / Math.max(0.001, att.duration);
+    const reveal = attachmentReveal(att, p);
+    if (!reveal) continue;
+
+    const lo = Math.max(0, Math.min(maxIdx, Math.min(att.wordStart, att.wordEnd)));
+    const hi = Math.max(0, Math.min(maxIdx, Math.max(att.wordStart, att.wordEnd)));
+
+    for (const line of boxes.lines) {
+      const inSpan = line.words.filter((w) => w.index >= lo && w.index <= hi);
+      if (inSpan.length === 0) continue;
+      const padX = sizePx * (att.type === 'highlight' ? 0.12 : 0.04);
+      const segLeft = Math.min(...inSpan.map((w) => w.left)) - padX;
+      const segRight = Math.max(...inSpan.map((w) => w.right)) + padX;
+      const segW = segRight - segLeft;
+      const visLeft = segLeft + segW * reveal.a;
+      const visRight = segLeft + segW * reveal.b;
+      const visW = visRight - visLeft;
+      if (visW <= 0.5) continue;
+
+      if (att.type === 'highlight') {
+        ctx.fillStyle = hexToRgba(att.color, att.opacity);
+        ctx.fillRect(visLeft, line.yMid - sizePx * 0.62, visW, sizePx * 1.24);
+      } else {
+        const thickness = Math.max(2, sizePx * 0.09);
+        const y = line.yMid + sizePx * 0.5;
+        ctx.fillStyle = att.color;
+        ctx.fillRect(visLeft, y, visW, thickness);
+      }
+    }
+  }
   ctx.restore();
 }
 

@@ -1,9 +1,10 @@
 import { useCallback, useRef } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import type { Caption, CaptionEl, TypewriterCaption } from './types';
-import { elementEnd } from './types';
+import type { Attachment, Caption, CaptionEl, TypewriterCaption } from './types';
+import { elementEnd, staticWindowOf } from './types';
 
 const MIN_DURATION = 0.2; // seconds
+const MIN_ATTACH_DURATION = 0.2; // seconds
 
 const PHASE_COLORS = { typing: '#6ee7b7', hold: '#93c5fd', del: '#fca5a5' };
 
@@ -28,14 +29,27 @@ interface DragState {
 
 type EditPatch = Partial<Caption> | Partial<TypewriterCaption>;
 
+interface AttachDragState {
+  capId: string;
+  attId: string;
+  mode: 'move' | 'resize';
+  startX: number;
+  origStart: number;
+  origDuration: number;
+  swLen: number;
+}
+
 interface Props {
   duration: number;
   captions: CaptionEl[];
   currentSec: number;
   selectedId: string | null;
+  selectedAttachmentId: string | null;
   rowColor: (index: number) => string;
   onSelect: (id: string) => void;
   onEdit: (id: string, patch: EditPatch) => void;
+  onSelectAttachment: (capId: string, attId: string) => void;
+  onEditAttachment: (capId: string, attId: string, patch: Partial<Attachment>) => void;
   onScrub: (sec: number) => void;
 }
 
@@ -49,13 +63,17 @@ export default function MultiTrackTimeline({
   captions,
   currentSec,
   selectedId,
+  selectedAttachmentId,
   rowColor,
   onSelect,
   onEdit,
+  onSelectAttachment,
+  onEditAttachment,
   onScrub,
 }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
   const drag = useRef<DragState | null>(null);
+  const attachDrag = useRef<AttachDragState | null>(null);
 
   const dur = Math.max(0.001, duration);
 
@@ -142,6 +160,66 @@ export default function MultiTrackTimeline({
     drag.current = null;
   }, []);
 
+  // ---- attachment markers (draggable to stagger / resize, click to select) ----
+  const onAttachDown = useCallback(
+    (
+      e: ReactPointerEvent,
+      cap: CaptionEl,
+      att: Attachment,
+      mode: 'move' | 'resize',
+    ) => {
+      e.stopPropagation();
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      onSelectAttachment(cap.id, att.id);
+      const sw = staticWindowOf(cap);
+      attachDrag.current = {
+        capId: cap.id,
+        attId: att.id,
+        mode,
+        startX: e.clientX,
+        origStart: att.startInStatic,
+        origDuration: att.duration,
+        swLen: sw ? sw.end - sw.start : att.duration,
+      };
+    },
+    [onSelectAttachment],
+  );
+
+  const onAttachMove = useCallback(
+    (e: ReactPointerEvent) => {
+      const d = attachDrag.current;
+      if (!d || e.buttons === 0) return;
+      e.stopPropagation();
+      const delta = (fracFromClientX(e.clientX) - fracFromClientX(d.startX)) * dur;
+      if (d.mode === 'move') {
+        const maxStart = Math.max(0, d.swLen - d.origDuration);
+        onEditAttachment(d.capId, d.attId, {
+          startInStatic: clamp(0, maxStart, d.origStart + delta),
+        });
+      } else {
+        const maxDur = Math.max(MIN_ATTACH_DURATION, d.swLen - d.origStart);
+        onEditAttachment(d.capId, d.attId, {
+          duration: clamp(MIN_ATTACH_DURATION, maxDur, d.origDuration + delta),
+        });
+      }
+    },
+    [dur, fracFromClientX, onEditAttachment],
+  );
+
+  const onAttachUp = useCallback((e: ReactPointerEvent) => {
+    e.stopPropagation();
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    attachDrag.current = null;
+  }, []);
+
   const pct = (sec: number) => `${Math.min(100, Math.max(0, (sec / dur) * 100))}%`;
   const playLeft = pct(currentSec);
 
@@ -177,6 +255,7 @@ export default function MultiTrackTimeline({
           const selected = cap.id === selectedId;
           const label = cap.text.split('\n')[0] || (cap.kind === 'typewriter' ? 'typewriter' : 'caption');
           const ringClass = selected ? 'ring-2 ring-[var(--color-primary-green)]' : '';
+          const sw = staticWindowOf(cap);
 
           // typewriter phase splits, as fractions of the element's own length
           const total = Math.max(0.001, end - start);
@@ -262,6 +341,47 @@ export default function MultiTrackTimeline({
                   </>
                 )}
               </div>
+
+              {/* Attachment markers — draggable to stagger / resize, click to select.
+                  Sit in a thin sub-track along the bottom of the row. */}
+              {sw &&
+                cap.attachments.map((att) => {
+                  const absStart = sw.start + att.startInStatic;
+                  const absEnd = Math.min(sw.end, absStart + att.duration);
+                  const aLeft = (absStart / dur) * 100;
+                  const aWidth = Math.max(0.8, ((absEnd - absStart) / dur) * 100);
+                  const attSel = att.id === selectedAttachmentId;
+                  return (
+                    <div
+                      key={att.id}
+                      onPointerDown={(e) => onAttachDown(e, cap, att, 'move')}
+                      onPointerMove={onAttachMove}
+                      onPointerUp={onAttachUp}
+                      title={`${att.type} · words ${Math.min(att.wordStart, att.wordEnd) + 1}–${
+                        Math.max(att.wordStart, att.wordEnd) + 1
+                      }`}
+                      className={`absolute bottom-[2px] h-2.5 rounded-[3px] cursor-grab active:cursor-grabbing touch-none z-30 ${
+                        attSel ? 'ring-2 ring-white' : 'ring-1 ring-black/40'
+                      }`}
+                      style={{
+                        left: `${aLeft}%`,
+                        width: `${aWidth}%`,
+                        background: att.color,
+                        opacity: att.type === 'highlight' ? 0.7 : 1,
+                      }}
+                    >
+                      {att.type === 'underline' && (
+                        <span className="absolute inset-x-0 bottom-[1px] h-[2px] bg-black/50 rounded-full pointer-events-none" />
+                      )}
+                      <div
+                        onPointerDown={(e) => onAttachDown(e, cap, att, 'resize')}
+                        onPointerMove={onAttachMove}
+                        onPointerUp={onAttachUp}
+                        className="absolute right-0 top-0 bottom-0 w-1.5 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-[3px] touch-none z-40"
+                      />
+                    </div>
+                  );
+                })}
             </div>
           );
         })}
