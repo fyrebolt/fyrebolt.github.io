@@ -664,7 +664,7 @@ export function drawSketchStrokes(
   const reveal = opts.drawnArc ?? total + 1;
 
   let consumed = 0;
-  let tip: { x: number; y: number; angle: number } | null = null;
+  let tip: { x: number; y: number } | null = null;
 
   for (let i = 0; i < strokes.length; i++) {
     const geo = geos[i];
@@ -677,11 +677,11 @@ export function drawSketchStrokes(
     drawStrokePath(ctx, geo, strokes[i], localArc, map, shorter);
     if (partial && geo.total > 0) {
       const s = sampleAt(geo, localArc, padAspect);
-      if (s) tip = { ...map(s), angle: s.angle };
+      if (s) tip = map(s);
     }
   }
 
-  if (opts.tracer && tip) drawPencilTracer(ctx, tip.x, tip.y, tip.angle, shorter);
+  if (opts.tracer && tip) drawPencilTracer(ctx, tip.x, tip.y, shorter);
 }
 
 /** Stroke one processed polyline up to arc length `L` (a lone point becomes a dot). */
@@ -734,15 +734,15 @@ function drawStrokePath(
 
 /**
  * An original, canvas-drawn pencil that traces the drawing point. The graphite
- * tip sits on (x, y); the barrel trails behind along the reverse of travel so it
- * reads as actively drawing the line.
+ * tip sits on (x, y) and the barrel is held at a fixed up-right tilt (it does
+ * not rotate with the direction of travel). Rendered in black-and-white.
  */
-function drawPencilTracer(ctx: CanvasRenderingContext2D, x: number, y: number, angle: number, shorter: number): void {
-  const Lp = Math.max(14, shorter * 0.17);
+function drawPencilTracer(ctx: CanvasRenderingContext2D, x: number, y: number, shorter: number): void {
+  const Lp = Math.max(12, shorter * 0.14);
   const wp = Lp * 0.34;
   ctx.save();
   ctx.translate(x, y);
-  ctx.rotate(angle + Math.PI); // barrel trails behind the tip
+  ctx.rotate(-0.68); // fixed pose: barrel up-right, tip on the drawing point
   ctx.lineJoin = 'round';
   ctx.lineWidth = Math.max(1, Lp * 0.035);
   ctx.strokeStyle = 'rgba(0,0,0,0.55)';
@@ -764,7 +764,7 @@ function drawPencilTracer(ctx: CanvasRenderingContext2D, x: number, y: number, a
   ctx.lineTo(tipEnd, -wp * 0.28);
   ctx.lineTo(tipEnd, wp * 0.28);
   ctx.closePath();
-  ctx.fillStyle = '#2b2b2b';
+  ctx.fillStyle = '#1c1c1c';
   ctx.fill();
 
   // exposed wood cone
@@ -774,31 +774,31 @@ function drawPencilTracer(ctx: CanvasRenderingContext2D, x: number, y: number, a
   ctx.lineTo(woodEnd, wp * 0.5);
   ctx.lineTo(tipEnd, wp * 0.28);
   ctx.closePath();
-  ctx.fillStyle = '#e8c58a';
+  ctx.fillStyle = '#d2d2d2';
   ctx.fill();
   ctx.stroke();
 
   // painted barrel
   ctx.beginPath();
   ctx.rect(woodEnd, -wp * 0.5, barrelEnd - woodEnd, wp);
-  ctx.fillStyle = '#f4b400';
+  ctx.fillStyle = '#f7f7f7';
   ctx.fill();
   ctx.stroke();
-  // a highlight stripe down the barrel
-  ctx.fillStyle = 'rgba(255,255,255,0.32)';
+  // a subtle shading stripe down the barrel
+  ctx.fillStyle = 'rgba(0,0,0,0.12)';
   ctx.fillRect(woodEnd, -wp * 0.32, barrelEnd - woodEnd, wp * 0.16);
 
   // metal ferrule
   ctx.beginPath();
   ctx.rect(barrelEnd, -wp * 0.5, ferruleEnd - barrelEnd, wp);
-  ctx.fillStyle = '#c7ccd1';
+  ctx.fillStyle = '#b4b4b4';
   ctx.fill();
   ctx.stroke();
 
   // eraser
   ctx.beginPath();
   ctx.rect(ferruleEnd, -wp * 0.42, Lp - ferruleEnd, wp * 0.84);
-  ctx.fillStyle = '#e88b8b';
+  ctx.fillStyle = '#8c8c8c';
   ctx.fill();
   ctx.stroke();
   ctx.restore();
