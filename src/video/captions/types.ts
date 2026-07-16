@@ -8,6 +8,36 @@ export type Legibility = 'outline' | 'shadow' | 'none';
 
 export type DeleteStyle = 'char' | 'selectAll';
 
+// ---- word attachments: highlight / underline over static words ----
+
+export type AttachmentType = 'underline' | 'highlight';
+
+/**
+ * A highlight or underline drawn over a contiguous run of words while they are
+ * static (a typewriter's hold, or a settled/off boil). It sweeps in from the
+ * left, holds, then slips off to the right; `duration` is the total lifetime,
+ * split into in / hold / out by `inFrac` + `outFrac` (hold = the remainder).
+ * `startInStatic` is the offset (s) from the start of the element's static
+ * window, so attachments move with the element and can be staggered.
+ */
+export interface Attachment {
+  id: string;
+  type: AttachmentType;
+  /** Inclusive word-index range into the element's words (reading order). */
+  wordStart: number;
+  wordEnd: number;
+  /** Seconds after the element's static window opens. */
+  startInStatic: number;
+  /** Total on-screen lifetime in seconds (in + hold + out). */
+  duration: number;
+  /** Sweep-in / sweep-out fractions of `duration` (hold = 1 - in - out). */
+  inFrac: number;
+  outFrac: number;
+  color: string;
+  /** Highlight fill opacity (0..1); ignored by underlines. */
+  opacity: number;
+}
+
 /** Fields shared by every overlay element (also the input to the text renderer). */
 export interface CaptionTextStyle {
   text: string;
@@ -25,6 +55,8 @@ interface BaseElement extends CaptionTextStyle {
   id: string;
   /** Start time in seconds. */
   start: number;
+  /** Word highlight/underline attachments (empty by default). */
+  attachments: Attachment[];
 }
 
 /** Font-boil caption (the original element type). */
@@ -161,6 +193,7 @@ export function createCaption(overrides: Partial<Caption> = {}): Caption {
     legibility: 'outline',
     settleFontIndex: 0,
     boil: 'intro',
+    attachments: [],
     ...overrides,
   };
 }
@@ -183,6 +216,80 @@ export function createTypewriter(overrides: Partial<TypewriterCaption> = {}): Ty
     deleteEnabled: false,
     deleteStyle: 'char',
     deleteDur: 0.8,
+    attachments: [],
+    ...overrides,
+  };
+}
+
+// ---- attachments: static window, words, timing ----
+
+/** Words in reading order — the index space attachments select over. */
+export function captionWords(text: string): string[] {
+  return text.split(/\s+/).filter(Boolean);
+}
+
+/**
+ * The interval during which an element's words are fully static (so an
+ * attachment may show): a typewriter's hold, an `off` boil's whole range, or an
+ * `intro` boil after it settles. Returns null when there is no static window
+ * (a `continuous` boil, or a window of zero length).
+ */
+export function staticWindowOf(el: CaptionEl): { start: number; end: number } | null {
+  if (el.kind === 'typewriter') {
+    const s = el.start + Math.max(0, el.typingDur);
+    const e = s + Math.max(0, el.holdDur);
+    return e > s ? { start: s, end: e } : null;
+  }
+  if (el.boil === 'continuous') return null;
+  const s = el.boil === 'intro' ? el.start + INTRO_BURST_MS / 1000 : el.start;
+  const e = el.end;
+  return e > s ? { start: s, end: e } : null;
+}
+
+/** Smooth acceleration/deceleration for the sweep ends. */
+export function easeInOutCubic(x: number): number {
+  return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+}
+
+/**
+ * Visible horizontal fraction [a, b] (0..1) of an attachment's word span at
+ * progress `p` (0..1 across its duration). Entry grows from the left edge
+ * (0→b); exit slides the left edge rightward (a→1) so it slips off the right.
+ * Returns null outside [0, 1].
+ */
+export function attachmentReveal(
+  att: Pick<Attachment, 'inFrac' | 'outFrac'>,
+  p: number,
+): { a: number; b: number } | null {
+  if (p < 0 || p > 1) return null;
+  const inEnd = Math.max(0, Math.min(1, att.inFrac));
+  const outFrac = Math.max(0, Math.min(1 - Math.min(inEnd, 1), att.outFrac));
+  const outStart = 1 - outFrac;
+  if (inEnd > 0 && p < inEnd) {
+    return { a: 0, b: easeInOutCubic(p / inEnd) };
+  }
+  if (p < outStart) return { a: 0, b: 1 };
+  if (outFrac > 0) {
+    return { a: easeInOutCubic((p - outStart) / outFrac), b: 1 };
+  }
+  return { a: 0, b: 1 };
+}
+
+let attId = 0;
+export function createAttachment(overrides: Partial<Attachment> = {}): Attachment {
+  attId += 1;
+  const type = overrides.type ?? 'underline';
+  return {
+    id: `att-${Date.now().toString(36)}-${attId}`,
+    type,
+    wordStart: 0,
+    wordEnd: 0,
+    startInStatic: 0,
+    duration: 1.2,
+    inFrac: 0.1,
+    outFrac: 0.1,
+    color: type === 'highlight' ? '#ffe14d' : '#ff2d55',
+    opacity: 0.4,
     ...overrides,
   };
 }

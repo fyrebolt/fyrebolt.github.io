@@ -1,6 +1,13 @@
 // ===== Captions engine: compositing + timed caption rendering + export =====
 
-import { drawSource, measureCaption, drawCaption, drawTypewriter, outputSizeFor } from '../render';
+import {
+  drawSource,
+  measureCaption,
+  drawCaption,
+  drawTypewriter,
+  drawAttachmentsLayer,
+  outputSizeFor,
+} from '../render';
 import type { FillMode, OutputSize, RatioKey } from '../types';
 import type { CaptionEl } from './types';
 import { boilFontIndex, elementEnd, typewriterProgress } from './types';
@@ -143,7 +150,10 @@ export class CaptionsPlayer {
       if (sec < el.start || sec >= elementEnd(el)) continue;
       if (el.kind === 'boil') {
         const fi = boilFontIndex(el, (sec - el.start) * 1000, pool.fonts.length);
-        drawCaption(this.ctx, this.out, el, pool.fonts[fi] ?? pool.fonts[0], state.normalize, 1);
+        const font = pool.fonts[fi] ?? pool.fonts[0];
+        drawAttachmentsLayer(this.ctx, this.out, el, font, sec, state.normalize, 'below');
+        drawCaption(this.ctx, this.out, el, font, state.normalize, 1);
+        drawAttachmentsLayer(this.ctx, this.out, el, font, sec, state.normalize, 'above');
         if (sfxOn && el.boil !== 'off') {
           const prev = this.lastFontIdx.get(el.id);
           if (prev === undefined) this.lastFontIdx.set(el.id, fi);
@@ -157,8 +167,11 @@ export class CaptionsPlayer {
           }
         }
       } else {
+        const font = fontByKey(el.fontKey);
         const prog = typewriterProgress(el, sec);
-        drawTypewriter(this.ctx, this.out, el, fontByKey(el.fontKey), prog);
+        drawAttachmentsLayer(this.ctx, this.out, el, font, sec, state.normalize, 'below');
+        drawTypewriter(this.ctx, this.out, el, font, prog);
+        drawAttachmentsLayer(this.ctx, this.out, el, font, sec, state.normalize, 'above');
         if (sfxOn) {
           if (prog.selectAll) {
             // Select-all deletion: two enhanced clicks — one for the highlight,
