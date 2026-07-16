@@ -1,0 +1,11 @@
+/* Local boil font pools — 4 near-identical variants each so cycling reads as a
+   clean hand-drawn "boil". Generated (marker: derived from Caveat Brush OFL;
+   claude: original monoline marker alphabet). */
+@font-face{font-family:'MarkerBoil1';src:url('/fonts/MarkerBoil1.woff2') format('woff2');font-display:swap;}
+@font-face{font-family:'MarkerBoil2';src:url('/fonts/MarkerBoil2.woff2') format('woff2');font-display:swap;}
+@font-face{font-family:'MarkerBoil3';src:url('/fonts/MarkerBoil3.woff2') format('woff2');font-display:swap;}
+@font-face{font-family:'MarkerBoil4';src:url('/fonts/MarkerBoil4.woff2') format('woff2');font-display:swap;}
+@font-face{font-family:'ClaudeHand1';src:url('/fonts/ClaudeHand1.woff2') format('woff2');font-display:swap;}
+@font-face{font-family:'ClaudeHand2';src:url('/fonts/ClaudeHand2.woff2') format('woff2');font-display:swap;}
+@font-face{font-family:'ClaudeHand3';src:url('/fonts/ClaudeHand3.woff2') format('woff2');font-display:swap;}
+@font-face{font-family:'ClaudeHand4';src:url('/fonts/ClaudeHand4.woff2') format('woff2');font-display:swap;}
