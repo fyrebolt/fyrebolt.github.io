@@ -49,12 +49,38 @@
   align-items: center;
   gap: 8px;
 }
+/* Keep action labels (e.g. "Open PDF") on a single line. */
+.app-bar-right > * {
+  white-space: nowrap;
+}
 
 .app-body {
   width: 100%;
   margin: 0 auto;
   padding: 24px 20px 48px;
   animation: app-body-in 0.5s var(--ease-out-ios) both;
+}
+
+/* ===== Narrow screens: tighten the top bar so the title + action fit ===== */
+@media (max-width: 560px) {
+  .app-bar {
+    padding: 8px 12px 0;
+  }
+  .app-bar-inner {
+    gap: 6px;
+    padding: 8px 10px;
+  }
+  .app-bar-back {
+    font-size: 14px;
+    padding: 6px 6px 6px 4px;
+  }
+  .app-bar-title {
+    font-size: 15px;
+    gap: 6px;
+  }
+  .app-body {
+    padding: 18px 16px 44px;
+  }
 }
 
 @keyframes app-body-in {

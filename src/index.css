@@ -51,10 +51,15 @@
 }
 
 /* ===== Base ===== */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+/* Keep this in the `base` layer so Tailwind's utility classes (which live in the
+   `utilities` layer, e.g. the video editor's px-5 / p-4 / mb-4) still win — an
+   unlayered `*` reset would beat every layered utility and silently zero them. */
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
 }
 
 html {

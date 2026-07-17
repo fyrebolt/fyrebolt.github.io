@@ -68,7 +68,15 @@
   transform: scale(0.9);
 }
 .app-icon-glyph {
+  /* Flex-center the glyph so it stays perfectly centred in the tile even when
+     the OS falls back to a monochrome/oddly-metricked emoji font. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
   line-height: 1;
+  text-align: center;
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
   user-select: none;
 }
