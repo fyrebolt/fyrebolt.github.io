@@ -1,6 +1,6 @@
 // ===== Video Editor types =====
 
-export type FillMode = 'crop' | 'blur';
+export type FillMode = 'crop' | 'fit' | 'blur';
 
 export type RatioKey = '9:16' | '1:1' | '4:5' | 'original';
 

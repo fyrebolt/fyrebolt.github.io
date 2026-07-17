@@ -11,6 +11,7 @@ import ZoomTool from './ZoomTool';
 import SketchTool from './SketchTool';
 import HighlighterTool from './HighlighterTool';
 import StaticZoomTool from './StaticZoomTool';
+import DramaticWordingTool from './DramaticWordingTool';
 
 export interface VideoTool {
   /** Stable id; also the URL hash (/video/#<id>). Keep it kebab-case. */
@@ -72,6 +73,14 @@ export const TOOLS: VideoTool[] = [
     blurb:
       'Turn a photo into a moving clip: set a total length, then zoom into a part of the image (or pull back out). Drag the crop rectangle to frame it and the timeline to set when it happens — holds before and after fill the rest.',
     component: StaticZoomTool,
+  },
+  {
+    id: 'dramatic-wording',
+    label: 'Dramatic Wording',
+    icon: '🔠',
+    blurb:
+      'Big plain uppercase words over your footage. Keep the word translucent, or invert it — dim everything except the word (up to a full black-out) to spotlight it. Drag to place, time each on the bar, fade in/out. Add any number; no two overlap.',
+    component: DramaticWordingTool,
   },
 ];
 
