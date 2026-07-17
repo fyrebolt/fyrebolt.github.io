@@ -555,8 +555,8 @@ export default function CaptionsTool() {
             </div>
           </Field>
           <Field label="Fill mode (when input ratio ≠ output)">
-            <div className="grid grid-cols-2 gap-2">
-              {(['crop', 'blur'] as FillMode[]).map((m) => (
+            <div className="grid grid-cols-3 gap-2">
+              {(['crop', 'fit', 'blur'] as FillMode[]).map((m) => (
                 <button
                   key={m}
                   onClick={() => setFillMode(m)}
@@ -566,7 +566,7 @@ export default function CaptionsTool() {
                       : 'border-[var(--color-glass-border)]'
                   }`}
                 >
-                  {m === 'crop' ? 'Crop to fill' : 'Blur pad'}
+                  {m === 'crop' ? 'Crop' : m === 'fit' ? 'Fit' : 'Blur'}
                 </button>
               ))}
             </div>

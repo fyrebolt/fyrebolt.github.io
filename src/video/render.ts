@@ -4,6 +4,8 @@ import type { BannerFrame, BannerStyle, FillMode, OutputSize, RatioKey } from '.
 import { RATIOS } from './types';
 import type { CaptionEl, CaptionTextStyle, TypewriterProgress } from './captions/types';
 import { attachmentReveal, staticWindowOf } from './captions/types';
+import type { DramaticWord } from './dramatic/types';
+import { wordEnvelope } from './dramatic/types';
 import type { ZoomRect } from './zoom/types';
 import type { BoilFont } from './captions/fonts';
 import { fontCss } from './captions/fonts';
@@ -94,6 +96,16 @@ export function drawSource(
 ): void {
   const { w: sw, h: sh } = sourceDims(src);
   if (sw <= 0 || sh <= 0) return;
+
+  if (mode === 'fit') {
+    // Show the WHOLE clip: contain-fit (fits width or height as appropriate),
+    // centred, with solid black bars filling the rest.
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, out.w, out.h);
+    const contain = fitRect(out.w, out.h, sw, sh, 'contain');
+    ctx.drawImage(src, contain.dx, contain.dy, contain.dw, contain.dh);
+    return;
+  }
 
   if (mode === 'blur') {
     const cover = fitRect(out.w, out.h, sw, sh, 'cover');
@@ -722,6 +734,99 @@ export function drawHighlightBox(
   ctx.fillStyle = hexToRgba(hl.color, hl.opacity);
   ctx.fillRect(vx, by, vw, bh);
   ctx.restore();
+}
+
+// ---- dramatic wording (big plain uppercase words + dim/scrim) ----
+
+const DRAMATIC_FONT = '"Archivo Black", "Arial Black", "Helvetica Neue", Arial, sans-serif';
+const DRAMATIC_BASE_FRAC = 0.11; // base size as a fraction of frame height
+
+export interface DramaticLayout {
+  lines: string[];
+  size: number;
+  lineHeight: number;
+  cx: number;
+  cy: number;
+  blockW: number;
+  blockH: number;
+  left: number;
+  top: number;
+}
+
+/** Measure a dramatic word's wrapped uppercase layout (sets ctx.font). */
+export function dramaticWordLayout(
+  ctx: CanvasRenderingContext2D,
+  out: OutputSize,
+  word: DramaticWord,
+): DramaticLayout {
+  const size = out.h * DRAMATIC_BASE_FRAC * word.sizeScale;
+  const text = (word.text || ' ').toUpperCase();
+  ctx.font = `${size}px ${DRAMATIC_FONT}`;
+  const lines = layoutCaptionLines(ctx, text, out.w * 0.9);
+  const lineHeight = size * 1.12;
+  let maxW = 0;
+  for (const ln of lines) maxW = Math.max(maxW, ctx.measureText(ln).width);
+  const blockW = maxW;
+  const blockH = lines.length * lineHeight;
+  const cx = word.x * out.w;
+  const cy = word.y * out.h;
+  return { lines, size, lineHeight, cx, cy, blockW, blockH, left: cx - blockW / 2, top: cy - blockH / 2 };
+}
+
+function drawWordText(ctx: CanvasRenderingContext2D, L: DramaticLayout): void {
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const firstY = L.cy - L.blockH / 2 + L.lineHeight / 2;
+  for (let i = 0; i < L.lines.length; i++) ctx.fillText(L.lines[i], L.cx, firstY + i * L.lineHeight);
+}
+
+let dramaticScratch: HTMLCanvasElement | null = null;
+
+/** Draw one dramatic word at time `sec` (normal translucent word, or inverse scrim cut-out). */
+export function drawDramaticWord(
+  ctx: CanvasRenderingContext2D,
+  out: OutputSize,
+  word: DramaticWord,
+  sec: number,
+): void {
+  const env = wordEnvelope(word, sec);
+  if (env <= 0) return;
+  const L = dramaticWordLayout(ctx, out, word);
+
+  if (word.mode === 'normal') {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, word.opacity)) * env;
+    ctx.fillStyle = word.color;
+    ctx.font = `${L.size}px ${DRAMATIC_FONT}`;
+    drawWordText(ctx, L);
+    ctx.restore();
+    return;
+  }
+
+  // inverse: build the scrim (with the word knocked out) on a scratch canvas so
+  // the cut-out reveals the video already on the main canvas.
+  if (typeof document === 'undefined') return;
+  if (!dramaticScratch) dramaticScratch = document.createElement('canvas');
+  const s = dramaticScratch;
+  if (s.width !== out.w || s.height !== out.h) {
+    s.width = out.w;
+    s.height = out.h;
+  }
+  const sc = s.getContext('2d');
+  if (!sc) return;
+  sc.clearRect(0, 0, out.w, out.h);
+  sc.globalCompositeOperation = 'source-over';
+  sc.globalAlpha = Math.max(0, Math.min(1, word.opacity)) * env;
+  sc.fillStyle = word.color;
+  sc.fillRect(0, 0, out.w, out.h);
+  // punch the word out of the scrim
+  sc.globalAlpha = 1;
+  sc.globalCompositeOperation = 'destination-out';
+  sc.fillStyle = '#000';
+  sc.font = `${L.size}px ${DRAMATIC_FONT}`;
+  drawWordText(sc, L);
+  sc.globalCompositeOperation = 'source-over';
+  ctx.drawImage(s, 0, 0);
 }
 
 // ---- zoom (source-normalised crop -> contain-fit onto output) ----

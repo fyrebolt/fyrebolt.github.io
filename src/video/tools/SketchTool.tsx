@@ -363,8 +363,8 @@ export default function SketchTool() {
             </div>
           </Field>
           <Field label="Fill mode (when input ratio ≠ output)">
-            <div className="grid grid-cols-2 gap-2">
-              {(['crop', 'blur'] as FillMode[]).map((m) => (
+            <div className="grid grid-cols-3 gap-2">
+              {(['crop', 'fit', 'blur'] as FillMode[]).map((m) => (
                 <button
                   key={m}
                   onClick={() => setFillMode(m)}
@@ -372,7 +372,7 @@ export default function SketchTool() {
                     fillMode === m ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]' : 'border-[var(--color-glass-border)]'
                   }`}
                 >
-                  {m === 'crop' ? 'Crop to fill' : 'Blur pad'}
+                  {m === 'crop' ? 'Crop' : m === 'fit' ? 'Fit' : 'Blur'}
                 </button>
               ))}
             </div>
