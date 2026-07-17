@@ -132,6 +132,16 @@
   cursor: pointer;
 }
 
+/* Horizontal tool strip on narrow screens: keep the swipe-scroll but hide the
+   scrollbar so it doesn't leave a stray track/corner artifact under the tabs. */
+.ios-editor nav[aria-label='Editing tools'] {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.ios-editor nav[aria-label='Editing tools']::-webkit-scrollbar {
+  display: none;
+}
+
 /* Tool menu buttons */
 .tool-nav-btn {
   background: transparent;
