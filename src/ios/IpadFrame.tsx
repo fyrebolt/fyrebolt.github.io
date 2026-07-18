@@ -25,9 +25,20 @@ function StatusBar() {
           <rect x="10" y="3" width="3" height="9" rx="1" />
           <rect x="15" y="0.5" width="3" height="11.5" rx="1" />
         </svg>
-        {/* Wi-Fi */}
-        <svg width="17" height="12" viewBox="0 0 17 12" fill="currentColor">
-          <path d="M8.5 2.2c2.7 0 5.2 1 7.1 2.8l-1.5 1.6A8 8 0 0 0 8.5 4.4 8 8 0 0 0 2.9 6.6L1.4 5A10.2 10.2 0 0 1 8.5 2.2Zm0 3.9c1.6 0 3.1.6 4.2 1.7l-1.6 1.6A3.8 3.8 0 0 0 8.5 10a3.8 3.8 0 0 0-2.6 1.4L4.3 9.8A6 6 0 0 1 8.5 6.1Z" />
+        {/* Wi-Fi: three clean concentric arcs + dot, all centred on the dot. */}
+        <svg
+          width="17"
+          height="12"
+          viewBox="0 0 17 12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+        >
+          <path d="M2.84 5.34a8 8 0 0 1 11.32 0" />
+          <path d="M4.61 7.11a5.5 5.5 0 0 1 7.78 0" />
+          <path d="M6.38 8.88a3 3 0 0 1 4.24 0" />
+          <circle cx="8.5" cy="10.8" r="0.9" fill="currentColor" stroke="none" />
         </svg>
         {/* Battery */}
         <span className="ios-battery">
