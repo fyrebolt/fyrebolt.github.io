@@ -52,6 +52,13 @@ export default function EntranceBannerTool() {
   const [sfxEnabled, setSfxEnabled] = useState(false);
   const [sfxVolume, setSfxVolume] = useState(0.5);
 
+  // ---- game FX (all toggleable; on by default so the full look is visible) ----
+  const [glow, setGlow] = useState(true);
+  const [speedLines, setSpeedLines] = useState(true);
+  const [metallic, setMetallic] = useState(true);
+  const [chevrons, setChevrons] = useState(true);
+  const [scanlines, setScanlines] = useState(true);
+
   // ---- timing (ms) ----
   const [freeze, setFreeze] = useState(1500);
   const [slideIn, setSlideIn] = useState(420);
@@ -74,7 +81,7 @@ export default function EntranceBannerTool() {
 
   const config: EditorConfig = useMemo(
     () => ({
-      style: { name, tagline, primary, accent, text: textColor },
+      style: { name, tagline, primary, accent, text: textColor, glow, speedLines, metallic, chevrons, scanlines },
       timing: { freeze, slideIn, hold, fadeOut, total },
       fillMode,
       ratio,
@@ -82,7 +89,7 @@ export default function EntranceBannerTool() {
       sfxEnabled,
       sfxVolume,
     }),
-    [name, tagline, primary, accent, textColor, freeze, slideIn, hold, fadeOut, total, fillMode, ratio, position, sfxEnabled, sfxVolume],
+    [name, tagline, primary, accent, textColor, glow, speedLines, metallic, chevrons, scanlines, freeze, slideIn, hold, fadeOut, total, fillMode, ratio, position, sfxEnabled, sfxVolume],
   );
   // Keep the latest config available to the player's render loop (read via getConfig).
   useEffect(() => {
@@ -358,6 +365,14 @@ export default function EntranceBannerTool() {
           </div>
         </Panel>
 
+        <Panel title="Game FX">
+          <Toggle label="Glowing border" hint="Pulsing accent glow around the bar" checked={glow} onChange={setGlow} />
+          <Toggle label="Metallic sheen" hint="Chrome bevel + sweeping specular" checked={metallic} onChange={setMetallic} />
+          <Toggle label="Speed lines" hint="Motion streaks trailing the bar" checked={speedLines} onChange={setSpeedLines} />
+          <Toggle label="Chevrons" hint="Marching ›› arrows on the slash" checked={chevrons} onChange={setChevrons} />
+          <Toggle label="Scanlines" hint="Retro texture over the base band" checked={scanlines} onChange={setScanlines} />
+        </Panel>
+
         <Panel title="Output">
           <Field label="Aspect ratio">
             <div className="grid grid-cols-2 gap-2">
@@ -468,6 +483,33 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
       </h2>
       <div className="space-y-4">{children}</div>
     </div>
+  );
+}
+
+function Toggle({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label className="flex items-start gap-2.5 cursor-pointer">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 accent-[var(--color-primary-green)]"
+      />
+      <span className="leading-tight">
+        <span className="block text-xs font-medium">{label}</span>
+        {hint && <span className="block text-[10px] text-[var(--color-text-muted)]">{hint}</span>}
+      </span>
+    </label>
   );
 }
 

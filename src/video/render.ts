@@ -25,6 +25,11 @@ export function easeOutBack(x: number): number {
   return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
 }
 
+/** Accelerating ease — used to fling the banner off-screen on exit. */
+export function easeInCubic(x: number): number {
+  return x * x * x;
+}
+
 // ---- colour helpers ----
 
 /** Multiply an #rrggbb colour toward white (f>1) or black (f<1). */
@@ -158,11 +163,91 @@ function drawFlash(ctx: CanvasRenderingContext2D, out: OutputSize, flash: number
   ctx.restore();
 }
 
+/** Steep, additive motion streaks that read as speed behind the plate. */
+function drawSpeedLines(
+  ctx: CanvasRenderingContext2D,
+  xL: number,
+  xR: number,
+  cy: number,
+  plateH: number,
+  accent: string,
+  t: number,
+  alpha: number,
+): void {
+  const zoneH = plateH * 2.1;
+  const yA = cy - zoneH / 2;
+  const yB = cy + zoneH / 2;
+  const streakSkew = plateH * 1.6; // steeper than the bar
+  const span = xR - xL + streakSkew;
+  const count = 22;
+  const step = span / count;
+  const drift = (t * 80) % step; // slow left→right march
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  for (let i = -1; i < count + 1; i++) {
+    const base = xL + i * step + drift;
+    // thin, fairly uniform streaks so they read as motion, not blotches
+    const w = plateH * (0.03 + 0.028 * (((i % 5) + 5) % 5) / 5);
+    const a = (0.09 + 0.11 * (((i * 3) % 4) + 4) % 4 / 4) * alpha;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = i % 4 === 0 ? shade(accent, 1.4) : '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(base + streakSkew, yA);
+    ctx.lineTo(base + streakSkew + w, yA);
+    ctx.lineTo(base + w, yB);
+    ctx.lineTo(base, yB);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/** Marching ›› chevrons along the accent slash for directional punch. */
+function drawChevrons(
+  ctx: CanvasRenderingContext2D,
+  xL: number,
+  xR: number,
+  yTop: number,
+  yBot: number,
+  skew: number,
+  t: number,
+): void {
+  ctx.save();
+  band(ctx, xL, xR, yTop, yBot, skew);
+  ctx.clip();
+  const h = yBot - yTop;
+  const midY = (yTop + yBot) / 2;
+  const cw = h * 0.42; // chevron width
+  const half = h * 0.34; // chevron half-height (tall enough to read)
+  const spacing = cw * 1.35; // dense march
+  const drift = (t * 90) % spacing; // marching →
+  ctx.lineWidth = h * 0.14;
+  ctx.lineJoin = 'miter';
+  ctx.lineCap = 'butt';
+  for (let x = xL - spacing + drift; x < xR + spacing; x += spacing) {
+    // faint dark drop for depth, then a bright chevron on top
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    ctx.moveTo(x, midY - half + h * 0.06);
+    ctx.lineTo(x + cw, midY + h * 0.06);
+    ctx.lineTo(x, midY + half + h * 0.06);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.moveTo(x, midY - half);
+    ctx.lineTo(x + cw, midY);
+    ctx.lineTo(x, midY + half);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 /**
  * Draw the layered character-intro banner.
- * Composed of a dark base band, an accent diagonal slash, a bright leading-edge
- * highlight, and the name on its own solid plate. Scales with frame height so it
- * stays proportional across 9:16 / 1:1 / 4:5 / original outputs.
+ * A single accent→base gradient body joins what used to be separate bands, with
+ * optional game-intro FX layered on: a pulsing glow rim, chrome bevel + sweeping
+ * sheen, marching chevrons, motion streaks, and scanline texture. Scales with
+ * frame height so it stays proportional across 9:16 / 1:1 / 4:5 / original.
  */
 export function drawBanner(
   ctx: CanvasRenderingContext2D,
@@ -177,6 +262,10 @@ export function drawBanner(
     return;
   }
 
+  const t = f.t ?? 0;
+  const a = f.alpha;
+  const pulse = 0.5 + 0.5 * Math.sin(t * 3.2); // glow breathing, 0..1
+
   const plateH = H * 0.115;
   const skew = plateH * 0.5;
   const over = W * 0.14 + skew;
@@ -186,16 +275,19 @@ export function drawBanner(
   const yTop = cy - plateH / 2;
   const yBot = cy + plateH / 2;
 
-  // Slide offset: fully off-screen left at slide=0, locked at slide=1, a touch
-  // past lock for the overshoot when slide>1.
+  // Slide offset: off-screen left at slide=0, locked at slide=1, off-screen
+  // right at slide=2 (the exit fling), with a touch past lock for the overshoot.
   const travel = W + over * 2 + skew;
   const xOff = travel * (f.slide - 1);
 
   ctx.save();
-  ctx.globalAlpha = f.alpha;
+  ctx.globalAlpha = a;
   ctx.translate(xOff, 0);
 
-  // 1. Drop shadow beneath the whole bar.
+  // 1. Motion streaks behind the plate (show above/below the opaque bar).
+  if (style.speedLines) drawSpeedLines(ctx, xL, xR, cy, plateH, style.accent, t, a);
+
+  // 2. Drop shadow beneath the whole bar.
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.5)';
   ctx.shadowBlur = plateH * 0.28;
@@ -205,29 +297,69 @@ export function drawBanner(
   ctx.fill();
   ctx.restore();
 
-  // 2. Dark base band with a subtle top→bottom gradient.
-  const grad = ctx.createLinearGradient(0, yTop, 0, yBot);
-  grad.addColorStop(0, shade(style.primary, 1.25));
-  grad.addColorStop(1, shade(style.primary, 0.78));
-  ctx.fillStyle = grad;
+  // 3. Unified body: one vertical gradient that flows from the bright accent
+  //    slash at the top down into the dark base — no hard seam between layers.
+  const body = ctx.createLinearGradient(0, yTop, 0, yBot);
+  body.addColorStop(0.0, shade(style.accent, 1.2)); // bright accent top edge
+  body.addColorStop(0.16, shade(style.accent, 0.95)); // accent body
+  body.addColorStop(0.34, shade(style.accent, 0.62)); // accent shading down
+  body.addColorStop(0.44, shade(style.primary, 1.28)); // luminous join (was the hard line)
+  body.addColorStop(0.62, shade(style.primary, 0.98));
+  body.addColorStop(1.0, shade(style.primary, 0.72)); // dark base bottom
+  ctx.fillStyle = body;
   band(ctx, xL, xR, yTop, yBot, skew);
   ctx.fill();
 
-  // 3. Accent diagonal slash across the upper portion.
   const slashBot = yTop + plateH * 0.4;
-  const slashGrad = ctx.createLinearGradient(0, yTop, 0, slashBot);
-  slashGrad.addColorStop(0, shade(style.accent, 1.15));
-  slashGrad.addColorStop(1, shade(style.accent, 0.85));
-  ctx.fillStyle = slashGrad;
-  band(ctx, xL, xR, yTop, slashBot, skew);
-  ctx.fill();
 
-  // 4. Thin bright separator/highlight line under the accent slash.
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  band(ctx, xL, xR, slashBot - plateH * 0.028, slashBot, skew);
-  ctx.fill();
+  // 4. Scanline texture over the base band (clipped to the bar).
+  if (style.scanlines) {
+    ctx.save();
+    band(ctx, xL, xR, yTop, yBot, skew);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(0,0,0,0.16)';
+    const gap = Math.max(3, plateH * 0.055);
+    for (let y = yTop + gap * 0.5; y < yBot; y += gap) {
+      ctx.fillRect(xL, y, xR - xL + skew, gap * 0.42);
+    }
+    ctx.restore();
+  }
 
-  // 5. Leading-edge highlight sliver (the front edge that sells the motion).
+  // 5. Chrome bevel + sweeping specular sheen (clipped to the bar).
+  if (style.metallic) {
+    ctx.save();
+    band(ctx, xL, xR, yTop, yBot, skew);
+    ctx.clip();
+    const bw = xR - xL + skew + 2;
+    // top bevel highlight
+    const topBevel = ctx.createLinearGradient(0, yTop, 0, yTop + plateH * 0.16);
+    topBevel.addColorStop(0, 'rgba(255,255,255,0.5)');
+    topBevel.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = topBevel;
+    ctx.fillRect(xL, yTop, bw, plateH * 0.16);
+    // bottom bevel shadow
+    const botBevel = ctx.createLinearGradient(0, yBot - plateH * 0.2, 0, yBot);
+    botBevel.addColorStop(0, 'rgba(0,0,0,0)');
+    botBevel.addColorStop(1, 'rgba(0,0,0,0.4)');
+    ctx.fillStyle = botBevel;
+    ctx.fillRect(xL, yBot - plateH * 0.2, bw, plateH * 0.2);
+    // moving specular glare
+    const sweepW = plateH * 1.3;
+    const sx = xL - sweepW + ((t * 0.22) % 1) * (bw + sweepW * 2);
+    const glare = ctx.createLinearGradient(sx - sweepW, 0, sx + sweepW, 0);
+    glare.addColorStop(0, 'rgba(255,255,255,0)');
+    glare.addColorStop(0.5, 'rgba(255,255,255,0.3)');
+    glare.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = glare;
+    band(ctx, sx - sweepW, sx + sweepW, yTop, yBot, skew);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 6. Marching chevrons along the accent slash.
+  if (style.chevrons) drawChevrons(ctx, xL, xR, yTop, slashBot, skew, t);
+
+  // 7. Leading-edge highlight sliver (the front edge that sells the motion).
   const edgeW = plateH * 0.16;
   const edgeGrad = ctx.createLinearGradient(xR - edgeW, 0, xR, 0);
   edgeGrad.addColorStop(0, 'rgba(255,255,255,0)');
@@ -269,7 +401,7 @@ export function drawBanner(
     }
   }
 
-  // ---- Name on its own solid plate ----
+  // ---- Name on its own plate, blended into the bar via a horizontal fade ----
   const nameSize = plateH * 0.5;
   ctx.font = `italic 900 ${nameSize}px ${CONDENSED_STACK}`;
   const nameText = (style.name || ' ').toUpperCase();
@@ -283,14 +415,29 @@ export function drawBanner(
   const pR = cx + plateW / 2;
   const pSkew = (plateBot - plateTop) * 0.42;
 
-  // Plate: solid block behind the name.
-  ctx.fillStyle = shade(style.primary, 0.55);
-  band(ctx, pL, pR, plateTop, plateBot, pSkew);
-  ctx.fill();
-  // Accent underline along the plate bottom.
+  // Plate: darker than the bar so the name reads, but its left/right ends fade
+  // out so it merges into the body instead of sitting as a separate block.
+  ctx.save();
+  band(ctx, pL - pSkew, pR + pSkew, plateTop, plateBot, pSkew);
+  ctx.clip();
+  const plateFade = ctx.createLinearGradient(pL, 0, pR, 0);
+  plateFade.addColorStop(0, 'rgba(0,0,0,0)');
+  plateFade.addColorStop(0.22, shade(style.primary, 0.5));
+  plateFade.addColorStop(0.78, shade(style.primary, 0.5));
+  plateFade.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = plateFade;
+  ctx.fillRect(pL - pSkew, plateTop, plateW + pSkew * 2, plateBot - plateTop);
+  ctx.restore();
+  // Accent underline along the plate bottom (with a soft glow when lit).
+  ctx.save();
+  if (style.glow) {
+    ctx.shadowColor = style.accent;
+    ctx.shadowBlur = plateH * 0.12 * (0.6 + pulse);
+  }
   ctx.fillStyle = style.accent;
   band(ctx, pL, pR, plateBot - (plateBot - plateTop) * 0.12, plateBot, pSkew);
   ctx.fill();
+  ctx.restore();
 
   // Name text: condensed italic, hard outline + emboss for legibility.
   ctx.save();
@@ -306,10 +453,42 @@ export function drawBanner(
   // emboss shadow
   ctx.fillStyle = 'rgba(0,0,0,0.4)';
   ctx.fillText(nameText, nameSize * 0.03, nameSize * 0.04);
-  // fill
-  ctx.fillStyle = style.text;
+  // fill — a metallic vertical gradient (embossed from the chosen text colour)
+  // when the metallic FX is on, otherwise the flat text colour.
+  if (style.metallic) {
+    const metal = ctx.createLinearGradient(0, -nameSize * 0.55, 0, nameSize * 0.55);
+    metal.addColorStop(0, '#ffffff');
+    metal.addColorStop(0.5, style.text);
+    metal.addColorStop(0.52, shade(style.text, 0.72));
+    metal.addColorStop(1, shade(style.text, 0.95));
+    ctx.fillStyle = metal;
+  } else {
+    ctx.fillStyle = style.text;
+  }
   ctx.fillText(nameText, 0, 0);
   ctx.restore();
+
+  // 8. Pulsing accent glow rim (the "glowing border") — additive so it lights
+  //    up the top & bottom edges over whatever is behind, and breathes with t.
+  if (style.glow) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = a * (0.4 + 0.45 * pulse);
+    ctx.shadowColor = style.accent;
+    ctx.shadowBlur = plateH * (0.45 + 0.6 * pulse);
+    ctx.strokeStyle = style.accent;
+    ctx.lineJoin = 'round';
+    // Bright crisp edge…
+    ctx.lineWidth = plateH * 0.05;
+    band(ctx, xL, xR, yTop, yBot, skew);
+    ctx.stroke();
+    // …and a wider, softer bloom pass.
+    ctx.globalAlpha = a * (0.25 + 0.3 * pulse);
+    ctx.lineWidth = plateH * 0.14;
+    band(ctx, xL, xR, yTop, yBot, skew);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   ctx.restore(); // slide translate + alpha
 

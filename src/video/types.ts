@@ -21,11 +21,21 @@ export interface BannerStyle {
   accent: string;
   /** Name text colour. */
   text: string;
+  /** Pulsing accent glow rimming the banner. */
+  glow?: boolean;
+  /** Angular motion streaks trailing the banner. */
+  speedLines?: boolean;
+  /** Chrome bevel + a specular sheen that sweeps the plate. */
+  metallic?: boolean;
+  /** Marching ›› chevrons along the accent slash. */
+  chevrons?: boolean;
+  /** Subtle scanline texture over the dark base band. */
+  scanlines?: boolean;
 }
 
 /** Per-frame animation state handed to the banner renderer. */
 export interface BannerFrame {
-  /** Slide progress; 0 = fully off-screen, 1 = locked. May exceed 1 for overshoot. */
+  /** Slide progress; 0 = fully off-screen left, 1 = locked, 2 = fully off-screen right. */
   slide: number;
   /** Opacity, 0..1 (drives the fade-out). */
   alpha: number;
@@ -33,6 +43,8 @@ export interface BannerFrame {
   flash: number;
   /** Vertical anchor of the name plate as a fraction of frame height, 0..1. */
   anchor: number;
+  /** Monotonic time in seconds, for driving continuous FX (glow pulse, sheen, chevrons). */
+  t?: number;
 }
 
 /** Timing of the banner sequence, in milliseconds. */

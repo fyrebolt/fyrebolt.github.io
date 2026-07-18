@@ -1,6 +1,6 @@
 // ===== Banner player: freeze-frame sequence, preview loop, and export recording =====
 
-import { drawBanner, drawSource, easeOutBack, outputSizeFor } from './render';
+import { drawBanner, drawSource, easeInCubic, easeOutBack, outputSizeFor } from './render';
 import { POSITION_ANCHORS } from './types';
 import type { BannerFrame, EditorConfig, OutputSize } from './types';
 import { SfxEngine } from './sfx';
@@ -93,7 +93,10 @@ export class BannerPlayer {
     const cfg = this.getConfig();
     const src = this.media.video ?? this.media.image!;
     drawSource(this.ctx, src, this.out, cfg.fillMode);
-    if (frame) drawBanner(this.ctx, this.out, cfg.style, frame);
+    if (frame) {
+      frame.t = performance.now() / 1000;
+      drawBanner(this.ctx, this.out, cfg.style, frame);
+    }
   }
 
   // ---- audio graph ----
@@ -171,6 +174,7 @@ export class BannerPlayer {
       alpha: 1,
       flash: 0,
       anchor: POSITION_ANCHORS[cfg.position],
+      t: performance.now() / 1000,
     };
     if (this.media.kind === 'video' && this.media.video) {
       const v = this.media.video;
@@ -240,10 +244,11 @@ export class BannerPlayer {
     }
 
     if (this.phase === 'post') {
-      const fadeElapsed = now - this.fadeStart;
-      const alpha = Math.max(0, 1 - fadeElapsed / Math.max(1, cfg.timing.fadeOut));
+      // Fling the banner off-screen right (slide 1→2) instead of fading in place,
+      // then let the resumed video play out to its end before finishing.
+      const p = Math.min(1, (now - this.fadeStart) / Math.max(1, cfg.timing.fadeOut));
       if (v.ended) this.phase = 'done';
-      return { slide: 1, alpha, flash: 0, anchor };
+      return { slide: 1 + easeInCubic(p), alpha: 1, flash: 0, anchor };
     }
 
     return { slide: 0, alpha: 0, flash: 0, anchor };
@@ -269,9 +274,9 @@ export class BannerPlayer {
       this.maybeEntrance(cfg); // musical entrance on the lock
       return { slide: 1, alpha: 1, flash, anchor };
     }
-    const fadeElapsed = t - (lock + hold);
-    const alpha = Math.max(0, 1 - fadeElapsed / Math.max(1, fadeOut));
-    return { slide: 1, alpha, flash: 0, anchor };
+    // Fling the banner off-screen right (slide 1→2) instead of fading in place.
+    const p = Math.min(1, (t - (lock + hold)) / Math.max(1, fadeOut));
+    return { slide: 1 + easeInCubic(p), alpha: 1, flash: 0, anchor };
   }
 
   private loop = (): void => {
@@ -283,6 +288,7 @@ export class BannerPlayer {
     if (this.sfx) this.sfx.setVolume(cfg.sfxEnabled ? cfg.sfxVolume : 0);
 
     const frame = this.media.kind === 'video' ? this.frameForVideo() : this.frameForImage();
+    frame.t = performance.now() / 1000;
     drawBanner(this.ctx, this.out, cfg.style, frame);
 
     const curSec = this.media.video ? this.media.video.currentTime : (performance.now() - this.imgStart) / 1000;
