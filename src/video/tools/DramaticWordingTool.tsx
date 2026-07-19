@@ -356,6 +356,9 @@ export default function DramaticWordingTool() {
             <button onClick={() => addWord('inverse')} disabled={!mediaKind || busy} className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
               + Inverse
             </button>
+            <button onClick={() => addWord('reflection')} disabled={!mediaKind || busy} className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
+              + Reflection
+            </button>
             <button onClick={doExport} disabled={!mediaKind || busy || words.length === 0} className="px-4 py-2 rounded-md bg-gradient-to-r from-[var(--color-primary-green)] to-[var(--color-primary-blue)] text-black font-semibold disabled:opacity-40 text-sm">
               {busy ? 'Working…' : 'Export MP4'}
             </button>
@@ -414,15 +417,15 @@ export default function DramaticWordingTool() {
         </Panel>
 
         {selected ? (
-          <Panel title={`${selected.mode === 'inverse' ? 'Inverse' : 'Word'} ${words.indexOf(selected) + 1}`}>
+          <Panel title={`${selected.mode === 'inverse' ? 'Inverse' : selected.mode === 'reflection' ? 'Reflection' : 'Word'} ${words.indexOf(selected) + 1}`}>
             <Field label="Text">
               <input value={selected.text} onChange={(e) => updateWord(selected.id, { text: e.target.value })} className="input" placeholder="WORD" />
               <p className="text-[10px] text-[var(--color-text-muted)] mt-1">Shown in ALL CAPS.</p>
             </Field>
 
             <Field label="Effect">
-              <div className="grid grid-cols-2 gap-1.5">
-                {([['normal', 'Word'], ['inverse', 'Inverse']] as [WordMode, string][]).map(([v, lbl]) => (
+              <div className="grid grid-cols-3 gap-1.5">
+                {([['normal', 'Word'], ['inverse', 'Inverse'], ['reflection', 'Reflection']] as [WordMode, string][]).map(([v, lbl]) => (
                   <button
                     key={v}
                     onClick={() => updateWord(selected.id, { mode: v, color: v === 'inverse' ? '#000000' : '#dcdcdc' })}
@@ -435,15 +438,21 @@ export default function DramaticWordingTool() {
                 ))}
               </div>
               <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
-                {selected.mode === 'inverse' ? 'Dims everything except the word (a clear window).' : 'Translucent word over the video.'}
+                {selected.mode === 'inverse'
+                  ? 'Dims everything except the word (a clear window).'
+                  : selected.mode === 'reflection'
+                    ? 'Colour-inverts the footage under the word (a negative/electronic look).'
+                    : 'Translucent word over the video.'}
               </p>
             </Field>
 
-            <div className="grid grid-cols-2 gap-3">
-              <Field label={selected.mode === 'inverse' ? 'Dim color' : 'Word color'}>
-                <input type="color" value={selected.color} onChange={(e) => updateWord(selected.id, { color: e.target.value })} className="w-full h-9 rounded-md bg-transparent border border-[var(--color-glass-border)] p-0.5" />
-              </Field>
-              <Field label={`${selected.mode === 'inverse' ? 'Dim' : 'Word'} opacity — ${Math.round(selected.opacity * 100)}%`}>
+            <div className={selected.mode === 'reflection' ? '' : 'grid grid-cols-2 gap-3'}>
+              {selected.mode !== 'reflection' && (
+                <Field label={selected.mode === 'inverse' ? 'Dim color' : 'Word color'}>
+                  <input type="color" value={selected.color} onChange={(e) => updateWord(selected.id, { color: e.target.value })} className="w-full h-9 rounded-md bg-transparent border border-[var(--color-glass-border)] p-0.5" />
+                </Field>
+              )}
+              <Field label={`${selected.mode === 'inverse' ? 'Dim' : selected.mode === 'reflection' ? 'Inversion strength' : 'Word'} ${selected.mode === 'reflection' ? '' : 'opacity '}— ${Math.round(selected.opacity * 100)}%`}>
                 <input type="range" min={0} max={1} step={0.05} value={selected.opacity} onChange={(e) => updateWord(selected.id, { opacity: Number(e.target.value) })} className="w-full accent-[var(--color-primary-green)]" />
               </Field>
             </div>
@@ -511,15 +520,18 @@ export default function DramaticWordingTool() {
           <Panel title="Words">
             <p className="text-xs text-[var(--color-text-secondary)]">
               {mediaKind
-                ? 'Add a word (translucent over the video) or an inverse word (dims everything except the word). Drag to place, drag the timeline to time it — no two overlap.'
+                ? 'Add a word (translucent over the video), an inverse word (dims everything except the word), or a reflection (colour-inverts the footage under the word). Drag to place, drag the timeline to time it — no two overlap.'
                 : 'Upload a photo or video to begin.'}
             </p>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button onClick={() => addWord('normal')} disabled={!mediaKind} className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
                 + Word
               </button>
               <button onClick={() => addWord('inverse')} disabled={!mediaKind} className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
                 + Inverse
+              </button>
+              <button onClick={() => addWord('reflection')} disabled={!mediaKind} className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
+                + Reflection
               </button>
             </div>
           </Panel>
