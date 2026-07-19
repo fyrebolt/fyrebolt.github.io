@@ -1,99 +1,888 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import IpadFrame from '../ios/IpadFrame';
-import { TOOLS, toolById } from './tools/registry';
+import { Compositor } from './project/Compositor';
+import type { LoadedMedia } from './project/Compositor';
+import ProjectTimeline from './project/ProjectTimeline';
+import ZoomRectEditor from './zoom/ZoomRectEditor';
+import { outputSizeFor } from './render';
+import { transcodeToMp4, ensureFFmpeg } from './ffmpeg';
+import { preloadAllFontPools, FONT_POOLS } from './captions/fonts';
+import type { BoilPoolId } from './captions/fonts';
+import { createAttachment, staticWindowOf } from './captions/types';
+import type { Attachment, AttachmentType, Caption, CaptionEl, TypewriterCaption } from './captions/types';
+import { createZoom } from './zoom/types';
+import type { ZoomKeyframe, ZoomRect } from './zoom/types';
+import type { FillMode, RatioKey, BannerStyle } from './types';
+import type { BannerLayer, CaptionLayer, Layer, Project, ZoomLayer } from './project/types';
+import {
+  bannerLayer,
+  zoomLayer,
+  overlayLayers,
+  layerSpan,
+  nextZ,
+  createBannerLayer,
+  createCaptionLayer,
+  createZoomLayer,
+} from './project/types';
+import { Panel, Field, ChoiceGrid } from './project/ui';
+import { RATIO_LABELS, FILL_MODES } from './project/constants';
+import CaptionPanel from './project/panels/CaptionPanel';
+import BannerPanel from './project/panels/BannerPanel';
+import ZoomPanel from './project/panels/ZoomPanel';
 
-/** Read the active tool id from the URL hash (/video/#<id>), falling back to the first tool. */
-function readHashId(): string {
-  const raw = window.location.hash.replace(/^#/, '');
-  return toolById(raw).id;
+type MediaKind = 'video' | 'image' | null;
+type ExportStage = 'idle' | 'recording' | 'preparing' | 'encoding' | 'done' | 'error';
+
+// canvas placement snapping (centre + safe-zone edges)
+const SNAP_THRESHOLD = 0.018;
+const SNAP_X = [0.5, 0.07, 0.93];
+const SNAP_Y = [0.5, 0.13, 0.8];
+function snap(v: number, targets: number[], enabled: boolean): { v: number; guide: number | null } {
+  if (!enabled) return { v, guide: null };
+  for (const t of targets) if (Math.abs(v - t) < SNAP_THRESHOLD) return { v: t, guide: t };
+  return { v, guide: null };
 }
 
-export default function VideoEditor() {
-  const [activeId, setActiveId] = useState<string>(readHashId);
+const ADD_ITEMS: { kind: 'banner' | 'boil' | 'typewriter' | 'zoom'; label: string; icon: string }[] = [
+  { kind: 'banner', label: 'Entrance Banner', icon: '⚔️' },
+  { kind: 'boil', label: 'Caption', icon: '💬' },
+  { kind: 'typewriter', label: 'Typewriter', icon: '⌨️' },
+  { kind: 'zoom', label: 'Zoom', icon: '🔍' },
+];
 
-  // Keep in sync with back/forward and manual hash edits.
+export default function VideoEditor() {
+  // ---- media ----
+  const [mediaKind, setMediaKind] = useState<MediaKind>(null);
+  const [duration, setDuration] = useState(0); // clip seconds (0 for image)
+  const [currentSec, setCurrentSec] = useState(0); // OUTPUT seconds
+  const [srcDims, setSrcDims] = useState({ w: 0, h: 0 });
+
+  // ---- project ----
+  const [layers, setLayers] = useState<Layer[]>([]);
+  const [ratio, setRatio] = useState<RatioKey>('9:16');
+  const [fillMode, setFillMode] = useState<FillMode>('crop');
+  const [boilPool, setBoilPool] = useState<BoilPoolId>('default');
+  const [normalize, setNormalize] = useState(true);
+  const [sfxEnabled, setSfxEnabled] = useState(false);
+  const [sfxVolume, setSfxVolume] = useState(0.5);
+  const [imageDuration, setImageDuration] = useState(6);
+
+  // ---- selection / editing ----
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null);
+  const [selectedZoomKfId, setSelectedZoomKfId] = useState<string | null>(null);
+  const [editingZoom, setEditingZoom] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+
+  // ---- ui ----
+  const [showSafeZones, setShowSafeZones] = useState(true);
+  const [guidesOn, setGuidesOn] = useState(true);
+  const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
+
+  // ---- export ----
+  const [stage, setStage] = useState<ExportStage>('idle');
+  const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState('Upload a photo or video, then add layers with “+”.');
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [downloadName, setDownloadName] = useState('camera.mp4');
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const compRef = useRef<Compositor | null>(null);
+  const projectRef = useRef<Project>({ layers: [], ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration });
+  const objectUrls = useRef<string[]>([]);
+  const capDrag = useRef<{ id: string; grabDX: number; grabDY: number } | null>(null);
+  const editingRef = useRef(false);
+
+  const project: Project = useMemo(
+    () => ({ layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration }),
+    [layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration],
+  );
+
+  const banner = bannerLayer(project);
+  const zoom = zoomLayer(project);
+  const selectedLayer = layers.find((l) => l.id === selectedLayerId) ?? null;
+
+  // Output (paint bottom→top) + a display order for the list/timeline (front first).
+  const displayLayers = useMemo(() => {
+    const overlays = overlayLayers(project).slice().reverse(); // front first
+    const z = zoomLayer(project);
+    return z ? [...overlays, z] : overlays;
+  }, [project]);
+
+  // Timeline / output duration (seconds).
+  const timelineDuration = useMemo(() => {
+    const hold = banner ? banner.hold : 0;
+    if (mediaKind === 'video') return Math.max(0.1, duration + hold);
+    const ends = layers.map((l) => layerSpan(l).end);
+    return Math.max(3, imageDuration, ...ends);
+  }, [banner, mediaKind, duration, layers, imageDuration]);
+
+  // Preload fonts up front so switching pools / drawing never falls back.
   useEffect(() => {
-    const onHash = () => setActiveId(readHashId());
-    window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
+    preloadAllFontPools().then(() => compRef.current?.renderStatic());
   }, []);
 
-  const select = useCallback((id: string) => {
-    if (window.location.hash.replace(/^#/, '') !== id) {
-      window.location.hash = id; // fires hashchange -> updates state, keeps it bookmarkable
-    } else {
-      setActiveId(id);
+  // Keep the compositor's project source current + redraw on edits.
+  useEffect(() => {
+    projectRef.current = project;
+    const c = compRef.current;
+    if (!c) return;
+    if (editingRef.current) c.redrawEditZoom();
+    else c.renderStatic();
+  }, [project]);
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    const c = new Compositor(canvasRef.current, () => projectRef.current, (sec) => setCurrentSec(sec));
+    compRef.current = c;
+    return () => {
+      c.destroy();
+      compRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const urls = objectUrls.current;
+    return () => urls.forEach((u) => URL.revokeObjectURL(u));
+  }, []);
+
+  const setEditingZoomBoth = (v: boolean) => {
+    editingRef.current = v;
+    setEditingZoom(v);
+  };
+
+  // ---- media load ----
+  const onFile = useCallback((file: File) => {
+    const c = compRef.current;
+    if (!c) return;
+    const url = URL.createObjectURL(file);
+    objectUrls.current.push(url);
+    setDownloadUrl(null);
+    setStage('idle');
+    setProgress(0);
+
+    if (file.type.startsWith('video')) {
+      const video = document.createElement('video');
+      video.src = url;
+      video.playsInline = true;
+      video.crossOrigin = 'anonymous';
+      video.addEventListener('loadedmetadata', () => {
+        setMediaKind('video');
+        setDuration(video.duration);
+        setSrcDims({ w: video.videoWidth, h: video.videoHeight });
+        const media: LoadedMedia = { kind: 'video', video, duration: video.duration };
+        c.attach(media);
+        setStatus('Loaded. Add layers with “+”, then Export when ready.');
+      });
+    } else if (file.type.startsWith('image')) {
+      const image = new Image();
+      image.onload = () => {
+        setMediaKind('image');
+        setDuration(0);
+        setSrcDims({ w: image.naturalWidth, h: image.naturalHeight });
+        const media: LoadedMedia = { kind: 'image', image, duration: 0 };
+        c.attach(media);
+        setStatus('Photo loaded. Add layers with “+”.');
+      };
+      image.src = url;
     }
   }, []);
 
-  const active = toolById(activeId);
-  const ActiveTool = active.component;
+  // ---- seeking ----
+  const seekTo = useCallback((sec: number) => {
+    compRef.current?.scrubTo(sec);
+    setCurrentSec(sec);
+  }, []);
+
+  const midOfCaption = useCallback((el: CaptionEl): number => {
+    if (el.kind === 'boil') return (el.start + el.end) / 2;
+    return el.start + el.typingDur + Math.min(0.3, el.holdDur / 2);
+  }, []);
+
+  // A moment mid-hold so the preview shows the banner locked without the flash.
+  const bannerPreviewTime = useCallback((b: BannerLayer): number => b.freeze + Math.min(0.5, b.hold * 0.5), []);
+
+  // ---- add layers ----
+  const staggerStart = useCallback(() => {
+    const total = mediaKind === 'video' ? timelineDuration : Math.max(timelineDuration, 4);
+    const prevEnd = layers.reduce((m, l) => Math.max(m, layerSpan(l).end), 0);
+    return Math.min(prevEnd, Math.max(0, total - 0.5));
+  }, [layers, mediaKind, timelineDuration]);
+
+  const clearZoomEdit = useCallback(() => {
+    setEditingZoomBoth(false);
+    setSelectedZoomKfId(null);
+    compRef.current?.exitEdit();
+  }, []);
+
+  const addLayer = useCallback(
+    (kind: 'banner' | 'boil' | 'typewriter' | 'zoom') => {
+      setAddOpen(false);
+      if (!mediaKind) return;
+      const z = nextZ(projectRef.current);
+
+      if (kind === 'banner') {
+        if (bannerLayer(projectRef.current)) return;
+        const freeze = mediaKind === 'video' ? Math.min(duration * 0.33, Math.max(0, duration - 0.2)) : 1.5;
+        const layer = createBannerLayer(z, { freeze });
+        setLayers((ls) => [...ls, layer]);
+        clearZoomEdit();
+        setSelectedLayerId(layer.id);
+        setSelectedAttachmentId(null);
+        seekTo(bannerPreviewTime(layer));
+        return;
+      }
+      if (kind === 'zoom') {
+        if (zoomLayer(projectRef.current)) return;
+        const layer = createZoomLayer(z);
+        setLayers((ls) => [...ls, layer]);
+        setSelectedLayerId(layer.id);
+        setSelectedAttachmentId(null);
+        setSelectedZoomKfId(null);
+        return;
+      }
+      // caption / typewriter
+      const start = staggerStart();
+      const layer = createCaptionLayer(kind === 'boil' ? 'boil' : 'typewriter', z);
+      layer.el.start = start;
+      layer.el.x = 0.5;
+      layer.el.y = 0.72;
+      if (layer.el.kind === 'boil') layer.el.end = start + 2;
+      setLayers((ls) => [...ls, layer]);
+      clearZoomEdit();
+      setSelectedLayerId(layer.id);
+      setSelectedAttachmentId(null);
+      seekTo(midOfCaption(layer.el));
+    },
+    [mediaKind, duration, staggerStart, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime],
+  );
+
+  const updateCaptionEl = useCallback((layerId: string, patch: Partial<Caption> | Partial<TypewriterCaption>) => {
+    setLayers((ls) =>
+      ls.map((l) => (l.id === layerId && l.kind === 'caption' ? { ...l, el: { ...l.el, ...patch } as CaptionEl } : l)),
+    );
+  }, []);
+
+  const updateBanner = useCallback((id: string, patch: Partial<BannerLayer>) => {
+    setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'banner' ? { ...l, ...patch } : l)));
+  }, []);
+
+  const updateBannerStyle = useCallback((id: string, patch: Partial<BannerStyle>) => {
+    setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'banner' ? { ...l, style: { ...l.style, ...patch } } : l)));
+  }, []);
+
+  const removeLayer = useCallback(
+    (id: string) => {
+      setLayers((ls) => ls.filter((l) => l.id !== id));
+      setSelectedLayerId((s) => (s === id ? null : s));
+      setSelectedAttachmentId(null);
+      clearZoomEdit();
+    },
+    [clearZoomEdit],
+  );
+
+  const moveLayer = useCallback((id: string, dir: -1 | 1) => {
+    setLayers((ls) => {
+      const overlays = ls.filter((l) => l.kind !== 'zoom').sort((a, b) => a.z - b.z);
+      const idx = overlays.findIndex((l) => l.id === id);
+      const j = idx + dir;
+      if (idx < 0 || j < 0 || j >= overlays.length) return ls;
+      const a = overlays[idx];
+      const b = overlays[j];
+      return ls.map((l) => (l.id === a.id ? { ...l, z: b.z } : l.id === b.id ? { ...l, z: a.z } : l));
+    });
+  }, []);
+
+  // ---- attachments ----
+  const attachMid = useCallback((el: CaptionEl, att: Attachment): number => {
+    const sw = staticWindowOf(el);
+    if (!sw) return midOfCaption(el);
+    return Math.max(sw.start, Math.min(sw.end - 0.01, sw.start + att.startInStatic + att.duration / 2));
+  }, [midOfCaption]);
+
+  const addAttachment = useCallback(
+    (layerId: string, type: AttachmentType) => {
+      const layer = layers.find((l) => l.id === layerId);
+      if (!layer || layer.kind !== 'caption') return;
+      const sw = staticWindowOf(layer.el);
+      if (!sw) return;
+      const dur = Math.max(0.2, Math.min(1.2, sw.end - sw.start));
+      const att = createAttachment({ type, duration: dur, startInStatic: 0, wordStart: 0, wordEnd: 0 });
+      updateCaptionEl(layerId, { attachments: [...layer.el.attachments, att] } as Partial<CaptionEl>);
+      setSelectedLayerId(layerId);
+      setSelectedAttachmentId(att.id);
+      seekTo(attachMid(layer.el, att));
+    },
+    [layers, updateCaptionEl, seekTo, attachMid],
+  );
+
+  const updateAttachment = useCallback(
+    (layerId: string, attId: string, patch: Partial<Attachment>) => {
+      setLayers((ls) =>
+        ls.map((l) =>
+          l.id === layerId && l.kind === 'caption'
+            ? { ...l, el: { ...l.el, attachments: l.el.attachments.map((a) => (a.id === attId ? { ...a, ...patch } : a)) } as CaptionEl }
+            : l,
+        ),
+      );
+    },
+    [],
+  );
+
+  const removeAttachment = useCallback((layerId: string, attId: string) => {
+    setLayers((ls) =>
+      ls.map((l) =>
+        l.id === layerId && l.kind === 'caption'
+          ? { ...l, el: { ...l.el, attachments: l.el.attachments.filter((a) => a.id !== attId) } as CaptionEl }
+          : l,
+      ),
+    );
+    setSelectedAttachmentId((s) => (s === attId ? null : s));
+  }, []);
+
+  const selectAttachment = useCallback(
+    (layerId: string, attId: string) => {
+      const layer = layers.find((l) => l.id === layerId);
+      if (!layer || layer.kind !== 'caption') return;
+      clearZoomEdit();
+      setSelectedLayerId(layerId);
+      setSelectedAttachmentId(attId);
+      const att = layer.el.attachments.find((a) => a.id === attId);
+      if (att) seekTo(attachMid(layer.el, att));
+    },
+    [layers, clearZoomEdit, seekTo, attachMid],
+  );
+
+  // ---- zoom keyframes ----
+  const landingOf = useCallback(
+    (kf: ZoomKeyframe) => Math.min(kf.start + kf.duration, timelineDuration),
+    [timelineDuration],
+  );
+
+  const selectZoomKf = useCallback(
+    (layerId: string, kfId: string) => {
+      const layer = layers.find((l) => l.id === layerId);
+      if (!layer || layer.kind !== 'zoom') return;
+      const kf = layer.keyframes.find((k) => k.id === kfId);
+      setSelectedLayerId(layerId);
+      setSelectedAttachmentId(null);
+      setSelectedZoomKfId(kfId);
+      if (kf) {
+        setEditingZoomBoth(true);
+        compRef.current?.editZoomAt(landingOf(kf));
+        setCurrentSec(landingOf(kf));
+      }
+    },
+    [layers, landingOf],
+  );
+
+  const addZoomKeyframe = useCallback(
+    (rect: ZoomRect) => {
+      if (!zoom) return;
+      const total = mediaKind === 'video' ? timelineDuration : Math.max(timelineDuration, 6);
+      const prevEnd = zoom.keyframes.reduce((m, k) => Math.max(m, k.start + k.duration), 0);
+      const start = Math.min(prevEnd + 0.3, Math.max(0, total - 0.5));
+      const kf = createZoom({ start, duration: 1, rect });
+      setLayers((ls) => ls.map((l) => (l.id === zoom.id && l.kind === 'zoom' ? { ...l, keyframes: [...l.keyframes, kf] } : l)));
+      setSelectedLayerId(zoom.id);
+      setSelectedZoomKfId(kf.id);
+      setEditingZoomBoth(true);
+      const landing = Math.min(start + 1, total);
+      compRef.current?.editZoomAt(landing);
+      setCurrentSec(landing);
+    },
+    [zoom, mediaKind, timelineDuration],
+  );
+
+  const updateZoomKf = useCallback((layerId: string, kfId: string, patch: Partial<ZoomKeyframe>) => {
+    setLayers((ls) =>
+      ls.map((l) => (l.id === layerId && l.kind === 'zoom' ? { ...l, keyframes: l.keyframes.map((k) => (k.id === kfId ? { ...k, ...patch } : k)) } : l)),
+    );
+  }, []);
+
+  const removeZoomKf = useCallback(
+    (layerId: string, kfId: string) => {
+      setLayers((ls) => ls.map((l) => (l.id === layerId && l.kind === 'zoom' ? { ...l, keyframes: l.keyframes.filter((k) => k.id !== kfId) } : l)));
+      setSelectedZoomKfId((s) => (s === kfId ? null : s));
+      setEditingZoomBoth(false);
+      compRef.current?.exitEdit();
+    },
+    [],
+  );
+
+  const onZoomRectChange = useCallback(
+    (rect: ZoomRect) => {
+      if (selectedLayerId && selectedZoomKfId) updateZoomKf(selectedLayerId, selectedZoomKfId, { rect });
+    },
+    [selectedLayerId, selectedZoomKfId, updateZoomKf],
+  );
+
+  // ---- selecting a layer (list / timeline) ----
+  const selectLayer = useCallback(
+    (id: string) => {
+      const layer = layers.find((l) => l.id === id);
+      if (!layer) return;
+      setSelectedLayerId(id);
+      setSelectedAttachmentId(null);
+      if (layer.kind === 'zoom') {
+        const first = layer.keyframes[0];
+        if (first) selectZoomKf(id, first.id);
+        else {
+          clearZoomEdit();
+        }
+        return;
+      }
+      clearZoomEdit();
+      if (layer.kind === 'banner') seekTo(bannerPreviewTime(layer));
+      else seekTo(midOfCaption(layer.el));
+    },
+    [layers, selectZoomKf, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime],
+  );
+
+  // ---- playback ----
+  const play = useCallback(() => {
+    setSelectedLayerId(null);
+    setSelectedAttachmentId(null);
+    setSelectedZoomKfId(null);
+    setEditingZoomBoth(false);
+    compRef.current?.playPreview();
+  }, []);
+
+  const onScrub = useCallback(
+    (sec: number) => {
+      setCurrentSec(sec);
+      if (editingRef.current) compRef.current?.editZoomAt(sec);
+      else compRef.current?.scrubTo(sec);
+    },
+    [],
+  );
+
+  // ---- canvas caption drag ----
+  const normFromPointer = useCallback((clientX: number, clientY: number) => {
+    const el = canvasRef.current;
+    if (!el) return { nx: 0.5, ny: 0.5 };
+    const rect = el.getBoundingClientRect();
+    return { nx: (clientX - rect.left) / rect.width, ny: (clientY - rect.top) / rect.height };
+  }, []);
+
+  const onCanvasPointerDown = useCallback(
+    (e: ReactPointerEvent) => {
+      if (editingRef.current) return; // zoom-rect editor owns the canvas
+      const c = compRef.current;
+      if (!c) return;
+      const { nx, ny } = normFromPointer(e.clientX, e.clientY);
+      const hit = c.hitTestCaption(nx, ny);
+      if (!hit) {
+        setSelectedLayerId(null);
+        setSelectedAttachmentId(null);
+        return;
+      }
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      const layer = layers.find((l) => l.id === hit);
+      if (!layer || layer.kind !== 'caption') return;
+      setSelectedLayerId(hit);
+      setSelectedAttachmentId(null);
+      capDrag.current = { id: hit, grabDX: layer.el.x - nx, grabDY: layer.el.y - ny };
+    },
+    [layers, normFromPointer],
+  );
+
+  const onCanvasPointerMove = useCallback(
+    (e: ReactPointerEvent) => {
+      const d = capDrag.current;
+      if (!d || e.buttons === 0) return;
+      const { nx, ny } = normFromPointer(e.clientX, e.clientY);
+      const sx = snap(nx + d.grabDX, SNAP_X, guidesOn);
+      const sy = snap(ny + d.grabDY, SNAP_Y, guidesOn);
+      setGuides({ x: sx.guide, y: sy.guide });
+      updateCaptionEl(d.id, { x: Math.max(0, Math.min(1, sx.v)), y: Math.max(0, Math.min(1, sy.v)) });
+    },
+    [guidesOn, normFromPointer, updateCaptionEl],
+  );
+
+  const onCanvasPointerUp = useCallback((e: ReactPointerEvent) => {
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    capDrag.current = null;
+    setGuides({ x: null, y: null });
+  }, []);
+
+  // ---- export ----
+  const busy = stage === 'recording' || stage === 'preparing' || stage === 'encoding';
+
+  const doExport = useCallback(async () => {
+    const c = compRef.current;
+    if (!c || !mediaKind) return;
+    if (typeof MediaRecorder === 'undefined') {
+      setStatus('Recording is not supported in this browser.');
+      return;
+    }
+    setSelectedLayerId(null);
+    setSelectedZoomKfId(null);
+    setEditingZoomBoth(false);
+    setDownloadUrl(null);
+    setStage('recording');
+    setProgress(0);
+    setStatus('Recording the composite in real time…');
+    try {
+      const total = c.totalSec();
+      const webm = await c.record((sec) => setProgress(Math.min(0.99, sec / Math.max(0.1, total))));
+      let outBlob: Blob = webm;
+      let ext = 'webm';
+      let type = 'video/webm';
+      try {
+        setStage('preparing');
+        setStatus('Preparing the MP4 encoder (one-time download)…');
+        await ensureFFmpeg();
+        setStage('encoding');
+        setStatus('Encoding MP4 (H.264)…');
+        setProgress(0);
+        outBlob = await transcodeToMp4(webm, (p) => setProgress(p));
+        ext = 'mp4';
+        type = 'video/mp4';
+      } catch (err) {
+        console.error('MP4 transcode failed, falling back to WebM', err);
+        setStatus('MP4 encoding failed — providing the WebM instead.');
+      }
+      const blob = new Blob([outBlob], { type });
+      const url = URL.createObjectURL(blob);
+      objectUrls.current.push(url);
+      setDownloadUrl(url);
+      setDownloadName(`camera.${ext}`);
+      setStage('done');
+      setProgress(1);
+      if (ext === 'mp4') setStatus('Done — MP4 ready to download.');
+    } catch (err) {
+      console.error(err);
+      setStage('error');
+      setStatus('Export failed. See the console for details.');
+    }
+  }, [mediaKind]);
+
+  const out = srcDims.w > 0 ? outputSizeFor(ratio, srcDims.w, srcDims.h) : { w: 1080, h: 1920 };
+  const selectedZoomRect =
+    editingZoom && selectedLayer?.kind === 'zoom' ? selectedLayer.keyframes.find((k) => k.id === selectedZoomKfId)?.rect ?? null : null;
 
   return (
     <IpadFrame orientation="landscape" ariaLabel="Camera">
-    <div className="ios-editor text-[var(--color-text-primary)]">
-      {/* ---- Frosted top bar ---- */}
-      <header className="sticky top-0 z-40 px-5 pt-3">
-        <div className="ios-glass max-w-7xl mx-auto grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-2.5 rounded-[20px]">
-          <a href="/" className="justify-self-start inline-flex items-center gap-1 text-[15px] font-medium text-[var(--color-accent)] px-2.5 py-1.5 rounded-xl hover:bg-[rgba(0,122,255,0.08)] transition-colors">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-              <path d="M15 5l-7 7 7 7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            <span>Home</span>
-          </a>
-          <div className="inline-flex items-center gap-2 text-[17px] font-semibold">
-            <span aria-hidden>🎥</span>
-            <span>Camera</span>
+      <div className="ios-editor text-[var(--color-text-primary)]">
+        {/* Top bar */}
+        <header className="sticky top-0 z-40 px-5 pt-3">
+          <div className="ios-glass max-w-7xl mx-auto grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-2.5 rounded-[20px]">
+            <a href="/" className="justify-self-start inline-flex items-center gap-1 text-[15px] font-medium text-[var(--color-accent)] px-2.5 py-1.5 rounded-xl hover:bg-[rgba(0,122,255,0.08)] transition-colors">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path d="M15 5l-7 7 7 7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>Home</span>
+            </a>
+            <div className="inline-flex items-center gap-2 text-[17px] font-semibold">
+              <span aria-hidden>🎥</span>
+              <span>Camera</span>
+            </div>
+            <a href="/video-classic/" className="justify-self-end text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)] font-mono hidden sm:block">
+              classic ↗
+            </a>
           </div>
-          <span className="justify-self-end text-xs text-[var(--color-text-muted)] font-mono hidden sm:block">
-            runs entirely in your browser
-          </span>
-        </div>
-      </header>
+        </header>
 
-      <div className="max-w-7xl mx-auto px-5 pt-6 pb-28 flex flex-col md:flex-row gap-7">
-        {/* ---- Tool menu ---- */}
-        <nav
-          aria-label="Editing tools"
-          className="md:w-60 md:flex-none flex md:flex-col gap-2 overflow-x-auto md:overflow-visible pb-1 md:pb-0"
-        >
-          <div className="hidden md:block text-xs font-bold uppercase tracking-wider text-[var(--color-text-muted)] px-3 mb-1">
-            Tools
-          </div>
-          {TOOLS.map((tool) => {
-            const isActive = tool.id === active.id;
-            return (
-              <button
-                key={tool.id}
-                onClick={() => select(tool.id)}
-                aria-current={isActive ? 'page' : undefined}
-                className={`tool-nav-btn flex items-center gap-3 shrink-0 rounded-2xl px-3.5 py-3 text-left text-[15px] font-medium ${
-                  isActive ? 'is-active' : ''
-                }`}
-              >
-                <span aria-hidden="true" className="text-xl leading-none">
-                  {tool.icon}
-                </span>
-                <span className="whitespace-nowrap">{tool.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* ---- Active tool ---- */}
-        <main className="flex-1 min-w-0">
-          <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight flex items-center gap-3">
-            <span aria-hidden="true">{active.icon}</span>
-            <span className="gradient-text">{active.label}</span>
+        <div className="max-w-7xl mx-auto px-5 pt-6 pb-28">
+          <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight flex items-center gap-3 mb-1">
+            <span aria-hidden>🎬</span>
+            <span className="gradient-text">Layer editor</span>
           </h1>
-          <p className="text-[var(--color-text-secondary)] mt-2 mb-8 max-w-2xl text-[15px] leading-relaxed">
-            {active.blurb}
+          <p className="text-[var(--color-text-secondary)] mt-1 mb-6 max-w-2xl text-[15px] leading-relaxed">
+            One clip, one timeline. Add a banner, captions, and a zoom as layers, arrange them, and export a single MP4 — all in your browser.
           </p>
 
-          <ActiveTool />
-        </main>
+          <div className="grid lg:grid-cols-[minmax(0,1fr)_360px] gap-8 items-start">
+            {/* ---- Preview + timeline ---- */}
+            <section>
+              <label className="block glass-card p-4 mb-4 cursor-pointer hover:bg-[var(--color-glass-hover)] transition-colors">
+                <span className="text-sm font-medium">Photo or video</span>
+                <input
+                  type="file"
+                  accept="image/*,video/*"
+                  className="block mt-2 text-sm text-[var(--color-text-secondary)] file:mr-3 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-[var(--color-bg-elevated)] file:text-[var(--color-text-primary)]"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) onFile(f);
+                  }}
+                />
+              </label>
+
+              <div className="glass-card p-3">
+                <div ref={wrapRef} className="relative mx-auto max-w-[420px]">
+                  <canvas
+                    ref={canvasRef}
+                    onPointerDown={onCanvasPointerDown}
+                    onPointerMove={onCanvasPointerMove}
+                    onPointerUp={onCanvasPointerUp}
+                    className="w-full h-auto rounded-lg bg-black block touch-none"
+                    width={1080}
+                    height={1920}
+                  />
+
+                  {/* zoom-rect editor overlay */}
+                  {selectedZoomRect && mediaKind && srcDims.w > 0 && (
+                    <ZoomRectEditor rect={selectedZoomRect} srcW={srcDims.w} srcH={srcDims.h} out={out} onChange={onZoomRectChange} />
+                  )}
+
+                  {/* safe zones */}
+                  {showSafeZones && ratio === '9:16' && !editingZoom && (
+                    <div className="pointer-events-none absolute inset-0 rounded-lg overflow-hidden">
+                      <div className="absolute inset-x-0 top-0 h-[12%] bg-[rgba(255,0,80,0.1)] border-b border-[rgba(255,0,80,0.3)]" />
+                      <div className="absolute inset-x-0 bottom-0 h-[20%] bg-[rgba(255,0,80,0.1)] border-t border-[rgba(255,0,80,0.3)]" />
+                      <div className="absolute top-[12%] bottom-[20%] right-0 w-[7%] bg-[rgba(255,0,80,0.08)] border-l border-[rgba(255,0,80,0.25)]" />
+                    </div>
+                  )}
+                  {/* alignment guides */}
+                  {guides.x !== null && <div className="pointer-events-none absolute top-0 bottom-0 w-px bg-[#b57cff] shadow-[0_0_6px_#b57cff]" style={{ left: `${guides.x * 100}%` }} />}
+                  {guides.y !== null && <div className="pointer-events-none absolute left-0 right-0 h-px bg-[#b57cff] shadow-[0_0_6px_#b57cff]" style={{ top: `${guides.y * 100}%` }} />}
+
+                  {/* corner "+" add-layer button */}
+                  {mediaKind && (
+                    <div className="absolute top-2 right-2">
+                      <button
+                        onClick={() => setAddOpen((v) => !v)}
+                        disabled={busy}
+                        className="w-9 h-9 rounded-full bg-[var(--color-primary-green)] text-black text-xl font-bold shadow-md flex items-center justify-center disabled:opacity-40"
+                        title="Add a layer"
+                        aria-label="Add a layer"
+                      >
+                        +
+                      </button>
+                      {addOpen && (
+                        <div className="absolute right-0 mt-1.5 w-44 rounded-xl bg-[var(--color-bg-surface)] shadow-lg border border-[var(--color-glass-border)] overflow-hidden z-20">
+                          {ADD_ITEMS.map((it) => {
+                            const disabled = (it.kind === 'banner' && !!banner) || (it.kind === 'zoom' && !!zoom);
+                            return (
+                              <button
+                                key={it.kind}
+                                onClick={() => addLayer(it.kind)}
+                                disabled={disabled}
+                                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left text-sm hover:bg-[var(--color-glass-hover)] disabled:opacity-35 disabled:cursor-not-allowed"
+                              >
+                                <span aria-hidden>{it.icon}</span>
+                                <span>{it.label}</span>
+                                {disabled && <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">added</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {!mediaKind && <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[var(--color-text-muted)] text-sm">Upload to preview</div>}
+                </div>
+
+                {editingZoom && (
+                  <p className="text-[11px] text-[var(--color-primary-green)] mt-2 text-center">
+                    Editing zoom rectangle — showing the full original frame. Drag the box; it snaps to centre / output ratio.
+                  </p>
+                )}
+
+                {mediaKind && (
+                  <ProjectTimeline
+                    duration={timelineDuration}
+                    layers={displayLayers}
+                    currentSec={currentSec}
+                    selectedLayerId={selectedLayerId}
+                    selectedAttachmentId={selectedAttachmentId}
+                    selectedZoomKfId={selectedZoomKfId}
+                    onScrub={onScrub}
+                    onSelectLayer={selectLayer}
+                    onEditCaption={updateCaptionEl}
+                    onSelectAttachment={selectAttachment}
+                    onEditAttachment={updateAttachment}
+                    onEditBanner={updateBanner}
+                    onSelectZoomKf={selectZoomKf}
+                    onEditZoomKf={updateZoomKf}
+                  />
+                )}
+
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <button onClick={play} disabled={!mediaKind || busy} className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
+                    ▶ Play preview
+                  </button>
+                  <button onClick={() => setAddOpen((v) => !v)} disabled={!mediaKind || busy} className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
+                    + Add layer
+                  </button>
+                  <button onClick={doExport} disabled={!mediaKind || busy} className="px-4 py-2 rounded-md bg-gradient-to-r from-[var(--color-primary-green)] to-[var(--color-primary-blue)] text-black font-semibold disabled:opacity-40 text-sm">
+                    {busy ? 'Working…' : 'Export MP4'}
+                  </button>
+                  {downloadUrl && (
+                    <a href={downloadUrl} download={downloadName} className="px-4 py-2 rounded-md border border-[var(--color-primary-green)] text-[var(--color-primary-green)] text-sm font-medium">
+                      ↓ Save {downloadName.endsWith('.mp4') ? 'MP4' : 'WebM'}
+                    </a>
+                  )}
+                </div>
+
+                {busy && (
+                  <div className="mt-3">
+                    <div className="h-1.5 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">
+                      <div className="h-full bg-gradient-to-r from-[var(--color-primary-green)] to-[var(--color-primary-blue)] transition-[width] duration-150" style={{ width: `${Math.round(progress * 100)}%` }} />
+                    </div>
+                  </div>
+                )}
+                <p className="text-xs text-[var(--color-text-secondary)] mt-2 font-mono">{status}</p>
+              </div>
+            </section>
+
+            {/* ---- Controls ---- */}
+            <aside className="space-y-6">
+              {/* Layers list */}
+              <Panel title="Layers">
+                {layers.length === 0 ? (
+                  <p className="text-xs text-[var(--color-text-secondary)]">{mediaKind ? 'Add a banner, caption, or zoom with the “+” button.' : 'Upload a photo or video to begin.'}</p>
+                ) : (
+                  <div className="space-y-1">
+                    {displayLayers.map((l) => {
+                      const isSel = l.id === selectedLayerId;
+                      const icon = l.kind === 'banner' ? '⚔️' : l.kind === 'zoom' ? '🔍' : l.el.kind === 'typewriter' ? '⌨️' : '💬';
+                      const label = l.kind === 'caption' ? l.el.text.split('\n')[0] || l.name : l.name;
+                      const canMove = l.kind !== 'zoom';
+                      return (
+                        <div key={l.id} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md border ${isSel ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]' : 'border-[var(--color-glass-border)]'}`}>
+                          <button onClick={() => selectLayer(l.id)} className="flex items-center gap-2 text-left text-[13px] min-w-0 flex-1">
+                            <span aria-hidden>{icon}</span>
+                            <span className="truncate">{label}</span>
+                            {l.kind === 'zoom' && <span className="text-[10px] text-[var(--color-text-muted)]">base</span>}
+                          </button>
+                          {canMove && (
+                            <>
+                              <button onClick={() => moveLayer(l.id, 1)} title="Bring forward" className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-1">↑</button>
+                              <button onClick={() => moveLayer(l.id, -1)} title="Send backward" className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-1">↓</button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Panel>
+
+              {/* Selected-layer property panel */}
+              {selectedLayer && (
+                <Panel title={selectedLayer.kind === 'banner' ? 'Entrance Banner' : selectedLayer.kind === 'zoom' ? 'Zoom' : selectedLayer.el.kind === 'typewriter' ? 'Typewriter' : 'Caption'}>
+                  {selectedLayer.kind === 'caption' && (
+                    <CaptionPanel
+                      layer={selectedLayer as CaptionLayer}
+                      duration={timelineDuration}
+                      boilPool={boilPool}
+                      selectedAttachmentId={selectedAttachmentId}
+                      onEdit={(patch) => updateCaptionEl(selectedLayer.id, patch)}
+                      onAddAttachment={(type) => addAttachment(selectedLayer.id, type)}
+                      onSelectAttachment={(attId) => selectAttachment(selectedLayer.id, attId)}
+                      onEditAttachment={(attId, patch) => updateAttachment(selectedLayer.id, attId, patch)}
+                      onRemoveAttachment={(attId) => removeAttachment(selectedLayer.id, attId)}
+                      onRemove={() => removeLayer(selectedLayer.id)}
+                    />
+                  )}
+                  {selectedLayer.kind === 'banner' && (
+                    <BannerPanel
+                      layer={selectedLayer as BannerLayer}
+                      duration={timelineDuration}
+                      onEdit={(patch) => updateBanner(selectedLayer.id, patch)}
+                      onEditStyle={(patch) => updateBannerStyle(selectedLayer.id, patch)}
+                      onRemove={() => removeLayer(selectedLayer.id)}
+                    />
+                  )}
+                  {selectedLayer.kind === 'zoom' && (
+                    <ZoomPanel
+                      layer={selectedLayer as ZoomLayer}
+                      duration={timelineDuration}
+                      ratio={ratio}
+                      srcDims={srcDims}
+                      selectedKfId={selectedZoomKfId}
+                      onAddKeyframe={addZoomKeyframe}
+                      onSelectKf={(kfId) => selectZoomKf(selectedLayer.id, kfId)}
+                      onEditKf={(kfId, patch) => updateZoomKf(selectedLayer.id, kfId, patch)}
+                      onRemoveKf={(kfId) => removeZoomKf(selectedLayer.id, kfId)}
+                      onRemoveLayer={() => removeLayer(selectedLayer.id)}
+                    />
+                  )}
+                </Panel>
+              )}
+
+              {/* Project output settings */}
+              <Panel title="Output">
+                <Field label="Aspect ratio">
+                  <ChoiceGrid cols={2} value={ratio} options={RATIO_LABELS} onChange={setRatio} />
+                </Field>
+                <Field label="Fill mode (when input ratio ≠ output)">
+                  <ChoiceGrid cols={3} value={fillMode} options={FILL_MODES.map((m) => ({ key: m, label: m === 'crop' ? 'Crop' : m === 'fit' ? 'Fit' : 'Blur' }))} onChange={setFillMode} />
+                </Field>
+                {mediaKind === 'image' && (
+                  <Field label={`Clip length — ${imageDuration.toFixed(1)}s`}>
+                    <input type="range" min={2} max={20} step={0.5} value={imageDuration} onChange={(e) => setImageDuration(Number(e.target.value))} className="w-full accent-[var(--color-primary-green)]" />
+                  </Field>
+                )}
+                <div className="flex items-center gap-4 text-xs text-[var(--color-text-secondary)]">
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={guidesOn} onChange={(e) => setGuidesOn(e.target.checked)} />
+                    Guides
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={showSafeZones} onChange={(e) => setShowSafeZones(e.target.checked)} />
+                    Safe zones
+                  </label>
+                </div>
+              </Panel>
+
+              <Panel title="Font boil">
+                <Field label="Font pool (applies to all captions)">
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {FONT_POOLS.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => {
+                          setBoilPool(p.id);
+                          setLayers((ls) =>
+                            ls.map((l) =>
+                              l.kind === 'caption' && l.el.kind === 'boil' && l.el.settleFontIndex >= p.fonts.length
+                                ? { ...l, el: { ...l.el, settleFontIndex: p.fonts.length - 1 } }
+                                : l,
+                            ),
+                          );
+                        }}
+                        className={`px-1 py-2 rounded-md text-[11px] border ${boilPool === p.id ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]' : 'border-[var(--color-glass-border)]'}`}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+                <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+                  <input type="checkbox" checked={normalize} onChange={(e) => setNormalize(e.target.checked)} />
+                  Even sizing (normalize each font to a consistent height)
+                </label>
+              </Panel>
+
+              <Panel title="Sound effects">
+                <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+                  <input type="checkbox" checked={sfxEnabled} onChange={(e) => setSfxEnabled(e.target.checked)} />
+                  Enable (banner slash, caption riffle/keys, zoom whoosh)
+                </label>
+                {sfxEnabled && (
+                  <Field label={`SFX volume — ${Math.round(sfxVolume * 100)}%`}>
+                    <input type="range" min={0} max={1} step={0.05} value={sfxVolume} onChange={(e) => setSfxVolume(Number(e.target.value))} className="w-full accent-[var(--color-primary-green)]" />
+                  </Field>
+                )}
+              </Panel>
+            </aside>
+          </div>
+        </div>
       </div>
-    </div>
     </IpadFrame>
   );
 }
