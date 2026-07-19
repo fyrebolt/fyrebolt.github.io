@@ -35,7 +35,7 @@ import { createSketch, elementEnd as sketchEnd } from '../sketch/types';
 import type { Highlighter } from '../highlight/types';
 import { createHighlighter, elementEnd as highlightEnd } from '../highlight/types';
 import type { DramaticWord, WordMode } from '../dramatic/types';
-import { createDramaticWord, elementEnd as dramaticEnd } from '../dramatic/types';
+import { elementEnd as dramaticEnd } from '../dramatic/types';
 
 export interface LayerBase {
   id: string;

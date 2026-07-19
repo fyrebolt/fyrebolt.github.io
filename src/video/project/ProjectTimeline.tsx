@@ -17,9 +17,7 @@ import { elementEnd as captionEnd, staticWindowOf } from '../captions/types';
 import type { ZoomKeyframe } from '../zoom/types';
 import { sortedZooms } from '../zoom/types';
 import type { SketchElement } from '../sketch/types';
-import { elementEnd as sketchEnd } from '../sketch/types';
 import type { Highlighter } from '../highlight/types';
-import { elementEnd as highlightEnd } from '../highlight/types';
 import type { DramaticWord } from '../dramatic/types';
 import { elementEnd as dramaticEnd } from '../dramatic/types';
 import type {
@@ -321,35 +319,36 @@ export default function ProjectTimeline({
         /* ignore */
       }
       onSelectLayer(layer.id);
-      const el = layer.el;
       // Sketch resizes its trailing FREEZE; highlighter/dramatic resize DURATION.
-      const origTrail = layer.kind === 'sketch' ? el.freezeDur : el.duration;
-      const head = layer.kind === 'sketch' ? el.animationDur : 0;
+      const origStart = layer.el.start;
+      const origTrail = layer.kind === 'sketch' ? layer.el.freezeDur : layer.el.duration;
+      const head = layer.kind === 'sketch' ? layer.el.animationDur : 0;
       // Dramatic words never overlap: clamp between the nearest neighbours.
       let minStart = 0;
-      let maxStart = dur;
+      let maxStart = Math.max(0, dur - head - origTrail);
       let maxTrail = dur;
       if (layer.kind === 'dramatic') {
-        const end = dramaticEnd(el);
+        const w = layer.el;
+        const end = dramaticEnd(w);
         let prevEnd = 0;
         let nextStart = dur;
         for (const s of dramaticSpans(layers, layer.id)) {
-          if (s.start <= el.start && s.end <= end) prevEnd = Math.max(prevEnd, s.end);
-          if (s.start >= end || s.start > el.start) nextStart = Math.min(nextStart, s.start);
+          if (s.start <= w.start && s.end <= end) prevEnd = Math.max(prevEnd, s.end);
+          if (s.start >= end || s.start > w.start) nextStart = Math.min(nextStart, s.start);
         }
         minStart = prevEnd;
-        maxStart = Math.max(prevEnd, nextStart - el.duration);
-        maxTrail = Math.max(MIN_DURATION, nextStart - el.start);
+        maxStart = Math.max(prevEnd, nextStart - w.duration);
+        maxTrail = Math.max(MIN_DURATION, nextStart - w.start);
       }
       rangeDrag.current = {
         layerId: layer.id,
         kind: layer.kind,
         mode,
         startX: e.clientX,
-        origStart: el.start,
+        origStart,
         origTrail,
         minStart,
-        maxStart: layer.kind === 'dramatic' ? maxStart : Math.max(0, dur - head - origTrail),
+        maxStart,
         maxTrail,
       };
     },

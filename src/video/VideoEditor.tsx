@@ -5,6 +5,8 @@ import { Compositor } from './project/Compositor';
 import type { LoadedMedia } from './project/Compositor';
 import ProjectTimeline from './project/ProjectTimeline';
 import ZoomRectEditor from './zoom/ZoomRectEditor';
+import SketchRectEditor from './sketch/SketchRectEditor';
+import HighlightRectEditor from './highlight/HighlightRectEditor';
 import { outputSizeFor } from './render';
 import { transcodeToMp4, ensureFFmpeg } from './ffmpeg';
 import { preloadAllFontPools, FONT_POOLS } from './captions/fonts';
@@ -13,23 +15,59 @@ import { createAttachment, staticWindowOf } from './captions/types';
 import type { Attachment, AttachmentType, Caption, CaptionEl, TypewriterCaption } from './captions/types';
 import { createZoom } from './zoom/types';
 import type { ZoomKeyframe, ZoomRect } from './zoom/types';
+import type { SketchElement, SketchStroke } from './sketch/types';
+import type { Highlighter } from './highlight/types';
+import { createDramaticWord } from './dramatic/types';
+import type { DramaticWord, WordMode } from './dramatic/types';
 import type { FillMode, RatioKey, BannerStyle } from './types';
-import type { BannerLayer, CaptionLayer, Layer, Project, ZoomLayer } from './project/types';
+import type {
+  BannerLayer,
+  CaptionLayer,
+  DramaticLayer,
+  HighlighterLayer,
+  Layer,
+  Project,
+  SketchLayer,
+  Span,
+  ZoomLayer,
+} from './project/types';
 import {
   bannerLayer,
   zoomLayer,
   overlayLayers,
   layerSpan,
+  dramaticSpans,
   nextZ,
   createBannerLayer,
   createCaptionLayer,
   createZoomLayer,
+  createSketchLayer,
+  createHighlighterLayer,
+  createDramaticLayer,
 } from './project/types';
 import { Panel, Field, ChoiceGrid } from './project/ui';
 import { RATIO_LABELS, FILL_MODES } from './project/constants';
 import CaptionPanel from './project/panels/CaptionPanel';
 import BannerPanel from './project/panels/BannerPanel';
 import ZoomPanel from './project/panels/ZoomPanel';
+import SketchPanel from './project/panels/SketchPanel';
+import type { Pen } from './project/panels/SketchPanel';
+import HighlighterPanel from './project/panels/HighlighterPanel';
+import DramaticPanel from './project/panels/DramaticPanel';
+
+/** First non-overlapping gap of ≥0.6s among dramatic layers, else null. */
+function findDramaticGap(spans: Span[], total: number, want: number): { start: number; duration: number } | null {
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
+  let cursor = 0;
+  for (const s of sorted) {
+    const gap = s.start - cursor;
+    if (gap >= 0.6) return { start: cursor, duration: Math.min(want, gap) };
+    cursor = Math.max(cursor, s.end);
+  }
+  const tail = total - cursor;
+  if (tail >= 0.6) return { start: cursor, duration: Math.min(want, tail) };
+  return null;
+}
 
 type MediaKind = 'video' | 'image' | null;
 type ExportStage = 'idle' | 'recording' | 'preparing' | 'encoding' | 'done' | 'error';
@@ -44,11 +82,27 @@ function snap(v: number, targets: number[], enabled: boolean): { v: number; guid
   return { v, guide: null };
 }
 
-const ADD_ITEMS: { kind: 'banner' | 'boil' | 'typewriter' | 'zoom'; label: string; icon: string }[] = [
+type AddKind =
+  | 'banner'
+  | 'boil'
+  | 'typewriter'
+  | 'zoom'
+  | 'sketch'
+  | 'highlighter'
+  | 'dramatic-normal'
+  | 'dramatic-inverse'
+  | 'dramatic-reflection';
+
+const ADD_ITEMS: { kind: AddKind; label: string; icon: string }[] = [
   { kind: 'banner', label: 'Entrance Banner', icon: '⚔️' },
   { kind: 'boil', label: 'Caption', icon: '💬' },
   { kind: 'typewriter', label: 'Typewriter', icon: '⌨️' },
   { kind: 'zoom', label: 'Zoom', icon: '🔍' },
+  { kind: 'sketch', label: 'Sketch', icon: '✏️' },
+  { kind: 'highlighter', label: 'Highlighter', icon: '🖍️' },
+  { kind: 'dramatic-normal', label: 'Dramatic word', icon: '🔠' },
+  { kind: 'dramatic-inverse', label: 'Inverse word', icon: '◱' },
+  { kind: 'dramatic-reflection', label: 'Reflection word', icon: '🔃' },
 ];
 
 export default function VideoEditor() {
@@ -67,6 +121,9 @@ export default function VideoEditor() {
   const [sfxEnabled, setSfxEnabled] = useState(false);
   const [sfxVolume, setSfxVolume] = useState(0.5);
   const [imageDuration, setImageDuration] = useState(6);
+
+  // Drawing-pad pen (shared tool state for sketch layers).
+  const [pen, setPen] = useState<Pen>({ color: '#ff4d4d', width: 0.02, smoothness: 0.8 });
 
   // ---- selection / editing ----
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
@@ -92,7 +149,7 @@ export default function VideoEditor() {
   const compRef = useRef<Compositor | null>(null);
   const projectRef = useRef<Project>({ layers: [], ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration });
   const objectUrls = useRef<string[]>([]);
-  const capDrag = useRef<{ id: string; grabDX: number; grabDY: number } | null>(null);
+  const capDrag = useRef<{ id: string; kind: 'caption' | 'dramatic'; grabDX: number; grabDY: number } | null>(null);
   const editingRef = useRef(false);
 
   const project: Project = useMemo(
@@ -218,10 +275,12 @@ export default function VideoEditor() {
   }, []);
 
   const addLayer = useCallback(
-    (kind: 'banner' | 'boil' | 'typewriter' | 'zoom') => {
+    (kind: AddKind) => {
       setAddOpen(false);
       if (!mediaKind) return;
       const z = nextZ(projectRef.current);
+      const outSize = srcDims.w > 0 ? outputSizeFor(ratio, srcDims.w, srcDims.h) : outputSizeFor(ratio, 1080, 1920);
+      const outAR = outSize.w / outSize.h;
 
       if (kind === 'banner') {
         if (bannerLayer(projectRef.current)) return;
@@ -243,6 +302,45 @@ export default function VideoEditor() {
         setSelectedZoomKfId(null);
         return;
       }
+      if (kind === 'sketch') {
+        // Empty sketch, placed full-frame; draw strokes in the panel, then place it.
+        const layer = createSketchLayer(z, outAR, {});
+        layer.el.start = staggerStart();
+        setLayers((ls) => [...ls, layer]);
+        clearZoomEdit();
+        setSelectedLayerId(layer.id);
+        setSelectedAttachmentId(null);
+        seekTo(layer.el.start + Math.min(0.3, layer.el.freezeDur / 2));
+        return;
+      }
+      if (kind === 'highlighter') {
+        const layer = createHighlighterLayer(z);
+        layer.el.start = staggerStart();
+        setLayers((ls) => [...ls, layer]);
+        clearZoomEdit();
+        setSelectedLayerId(layer.id);
+        setSelectedAttachmentId(null);
+        seekTo(layer.el.start + Math.min(0.5, layer.el.duration / 2));
+        return;
+      }
+      if (kind === 'dramatic-normal' || kind === 'dramatic-inverse' || kind === 'dramatic-reflection') {
+        const mode: WordMode =
+          kind === 'dramatic-inverse' ? 'inverse' : kind === 'dramatic-reflection' ? 'reflection' : 'normal';
+        // Words never overlap in time — drop the new one into the first free gap.
+        const gap = findDramaticGap(dramaticSpans(projectRef.current.layers), timelineDuration, 2);
+        if (!gap) {
+          setStatus('No free space on the timeline for another word — shorten or remove one first.');
+          return;
+        }
+        const word = createDramaticWord({ mode, start: gap.start, duration: gap.duration });
+        const layer = createDramaticLayer(z, mode, word);
+        setLayers((ls) => [...ls, layer]);
+        clearZoomEdit();
+        setSelectedLayerId(layer.id);
+        setSelectedAttachmentId(null);
+        seekTo(word.start + Math.min(0.5, word.duration / 2));
+        return;
+      }
       // caption / typewriter
       const start = staggerStart();
       const layer = createCaptionLayer(kind === 'boil' ? 'boil' : 'typewriter', z);
@@ -256,7 +354,7 @@ export default function VideoEditor() {
       setSelectedAttachmentId(null);
       seekTo(midOfCaption(layer.el));
     },
-    [mediaKind, duration, staggerStart, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime],
+    [mediaKind, duration, ratio, srcDims, timelineDuration, staggerStart, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime],
   );
 
   const updateCaptionEl = useCallback((layerId: string, patch: Partial<Caption> | Partial<TypewriterCaption>) => {
@@ -271,6 +369,34 @@ export default function VideoEditor() {
 
   const updateBannerStyle = useCallback((id: string, patch: Partial<BannerStyle>) => {
     setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'banner' ? { ...l, style: { ...l.style, ...patch } } : l)));
+  }, []);
+
+  const updateSketchEl = useCallback((id: string, patch: Partial<SketchElement>) => {
+    setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'sketch' ? { ...l, el: { ...l.el, ...patch } } : l)));
+  }, []);
+
+  const commitSketchStroke = useCallback((id: string, stroke: SketchStroke) => {
+    setLayers((ls) =>
+      ls.map((l) => (l.id === id && l.kind === 'sketch' ? { ...l, el: { ...l.el, strokes: [...l.el.strokes, stroke] } } : l)),
+    );
+  }, []);
+
+  const undoSketchStroke = useCallback((id: string) => {
+    setLayers((ls) =>
+      ls.map((l) => (l.id === id && l.kind === 'sketch' ? { ...l, el: { ...l.el, strokes: l.el.strokes.slice(0, -1) } } : l)),
+    );
+  }, []);
+
+  const clearSketchStrokes = useCallback((id: string) => {
+    setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'sketch' ? { ...l, el: { ...l.el, strokes: [] } } : l)));
+  }, []);
+
+  const updateHighlighterEl = useCallback((id: string, patch: Partial<Highlighter>) => {
+    setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'highlighter' ? { ...l, el: { ...l.el, ...patch } } : l)));
+  }, []);
+
+  const updateDramaticEl = useCallback((id: string, patch: Partial<DramaticWord>) => {
+    setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'dramatic' ? { ...l, el: { ...l.el, ...patch } } : l)));
   }, []);
 
   const removeLayer = useCallback(
@@ -382,14 +508,18 @@ export default function VideoEditor() {
     (rect: ZoomRect) => {
       if (!zoom) return;
       const total = mediaKind === 'video' ? timelineDuration : Math.max(timelineDuration, 6);
+      const isFirst = zoom.keyframes.length === 0;
       const prevEnd = zoom.keyframes.reduce((m, k) => Math.max(m, k.start + k.duration), 0);
-      const start = Math.min(prevEnd + 0.3, Math.max(0, total - 0.5));
-      const kf = createZoom({ start, duration: 1, rect });
+      // First zoom (the classic "static zoom / Ken Burns" look): centre it so the
+      // clip gets an equal hold → zoom → hold. Later zooms chain off the previous.
+      const dur = isFirst ? Math.min(3, total * 0.5) : 1;
+      const start = isFirst ? Math.max(0, (total - dur) / 2) : Math.min(prevEnd + 0.3, Math.max(0, total - 0.5));
+      const kf = createZoom({ start, duration: dur, rect });
       setLayers((ls) => ls.map((l) => (l.id === zoom.id && l.kind === 'zoom' ? { ...l, keyframes: [...l.keyframes, kf] } : l)));
       setSelectedLayerId(zoom.id);
       setSelectedZoomKfId(kf.id);
       setEditingZoomBoth(true);
-      const landing = Math.min(start + 1, total);
+      const landing = Math.min(start + dur, total);
       compRef.current?.editZoomAt(landing);
       setCurrentSec(landing);
     },
@@ -436,7 +566,10 @@ export default function VideoEditor() {
       }
       clearZoomEdit();
       if (layer.kind === 'banner') seekTo(bannerPreviewTime(layer));
-      else seekTo(midOfCaption(layer.el));
+      else if (layer.kind === 'caption') seekTo(midOfCaption(layer.el));
+      else if (layer.kind === 'sketch') seekTo(layer.el.start + layer.el.animationDur + Math.min(0.3, layer.el.freezeDur / 2));
+      else if (layer.kind === 'highlighter') seekTo(layer.el.start + Math.min(0.5, layer.el.duration / 2));
+      else if (layer.kind === 'dramatic') seekTo(layer.el.start + Math.min(0.5, layer.el.duration / 2));
     },
     [layers, selectZoomKf, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime],
   );
@@ -473,7 +606,7 @@ export default function VideoEditor() {
       const c = compRef.current;
       if (!c) return;
       const { nx, ny } = normFromPointer(e.clientX, e.clientY);
-      const hit = c.hitTestCaption(nx, ny);
+      const hit = c.hitTestDraggable(nx, ny);
       if (!hit) {
         setSelectedLayerId(null);
         setSelectedAttachmentId(null);
@@ -485,10 +618,10 @@ export default function VideoEditor() {
         /* ignore */
       }
       const layer = layers.find((l) => l.id === hit);
-      if (!layer || layer.kind !== 'caption') return;
+      if (!layer || (layer.kind !== 'caption' && layer.kind !== 'dramatic')) return;
       setSelectedLayerId(hit);
       setSelectedAttachmentId(null);
-      capDrag.current = { id: hit, grabDX: layer.el.x - nx, grabDY: layer.el.y - ny };
+      capDrag.current = { id: hit, kind: layer.kind, grabDX: layer.el.x - nx, grabDY: layer.el.y - ny };
     },
     [layers, normFromPointer],
   );
@@ -501,9 +634,11 @@ export default function VideoEditor() {
       const sx = snap(nx + d.grabDX, SNAP_X, guidesOn);
       const sy = snap(ny + d.grabDY, SNAP_Y, guidesOn);
       setGuides({ x: sx.guide, y: sy.guide });
-      updateCaptionEl(d.id, { x: Math.max(0, Math.min(1, sx.v)), y: Math.max(0, Math.min(1, sy.v)) });
+      const pos = { x: Math.max(0, Math.min(1, sx.v)), y: Math.max(0, Math.min(1, sy.v)) };
+      if (d.kind === 'dramatic') updateDramaticEl(d.id, pos);
+      else updateCaptionEl(d.id, pos);
     },
-    [guidesOn, normFromPointer, updateCaptionEl],
+    [guidesOn, normFromPointer, updateCaptionEl, updateDramaticEl],
   );
 
   const onCanvasPointerUp = useCallback((e: ReactPointerEvent) => {
@@ -636,6 +771,25 @@ export default function VideoEditor() {
                     <ZoomRectEditor rect={selectedZoomRect} srcW={srcDims.w} srcH={srcDims.h} out={out} onChange={onZoomRectChange} />
                   )}
 
+                  {/* sketch placement overlay (ratio-locked to the drawing) */}
+                  {selectedLayer?.kind === 'sketch' && selectedLayer.el.strokes.length > 0 && mediaKind && srcDims.w > 0 && (
+                    <SketchRectEditor
+                      rect={{ x: selectedLayer.el.x, y: selectedLayer.el.y, w: selectedLayer.el.w, h: selectedLayer.el.h }}
+                      padAspect={selectedLayer.el.padAspect}
+                      out={out}
+                      onChange={(r) => updateSketchEl(selectedLayer.id, r)}
+                    />
+                  )}
+
+                  {/* highlighter placement overlay (free 8-handle resize) */}
+                  {selectedLayer?.kind === 'highlighter' && mediaKind && (
+                    <HighlightRectEditor
+                      rect={{ x: selectedLayer.el.x, y: selectedLayer.el.y, w: selectedLayer.el.w, h: selectedLayer.el.h }}
+                      color={selectedLayer.el.color}
+                      onChange={(r) => updateHighlighterEl(selectedLayer.id, r)}
+                    />
+                  )}
+
                   {/* safe zones */}
                   {showSafeZones && ratio === '9:16' && !editingZoom && (
                     <div className="pointer-events-none absolute inset-0 rounded-lg overflow-hidden">
@@ -707,6 +861,9 @@ export default function VideoEditor() {
                     onEditBanner={updateBanner}
                     onSelectZoomKf={selectZoomKf}
                     onEditZoomKf={updateZoomKf}
+                    onEditSketch={updateSketchEl}
+                    onEditHighlighter={updateHighlighterEl}
+                    onEditDramatic={updateDramaticEl}
                   />
                 )}
 
@@ -748,8 +905,30 @@ export default function VideoEditor() {
                   <div className="space-y-1">
                     {displayLayers.map((l) => {
                       const isSel = l.id === selectedLayerId;
-                      const icon = l.kind === 'banner' ? '⚔️' : l.kind === 'zoom' ? '🔍' : l.el.kind === 'typewriter' ? '⌨️' : '💬';
-                      const label = l.kind === 'caption' ? l.el.text.split('\n')[0] || l.name : l.name;
+                      const icon =
+                        l.kind === 'banner'
+                          ? '⚔️'
+                          : l.kind === 'zoom'
+                            ? '🔍'
+                            : l.kind === 'sketch'
+                              ? '✏️'
+                              : l.kind === 'highlighter'
+                                ? '🖍️'
+                                : l.kind === 'dramatic'
+                                  ? l.el.mode === 'inverse'
+                                    ? '◱'
+                                    : l.el.mode === 'reflection'
+                                      ? '🔃'
+                                      : '🔠'
+                                  : l.el.kind === 'typewriter'
+                                    ? '⌨️'
+                                    : '💬';
+                      const label =
+                        l.kind === 'caption'
+                          ? l.el.text.split('\n')[0] || l.name
+                          : l.kind === 'dramatic'
+                            ? (l.el.text || l.name).toUpperCase()
+                            : l.name;
                       const canMove = l.kind !== 'zoom';
                       return (
                         <div key={l.id} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md border ${isSel ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]' : 'border-[var(--color-glass-border)]'}`}>
@@ -773,7 +952,27 @@ export default function VideoEditor() {
 
               {/* Selected-layer property panel */}
               {selectedLayer && (
-                <Panel title={selectedLayer.kind === 'banner' ? 'Entrance Banner' : selectedLayer.kind === 'zoom' ? 'Zoom' : selectedLayer.el.kind === 'typewriter' ? 'Typewriter' : 'Caption'}>
+                <Panel
+                  title={
+                    selectedLayer.kind === 'banner'
+                      ? 'Entrance Banner'
+                      : selectedLayer.kind === 'zoom'
+                        ? 'Zoom'
+                        : selectedLayer.kind === 'sketch'
+                          ? 'Sketch'
+                          : selectedLayer.kind === 'highlighter'
+                            ? 'Highlighter'
+                            : selectedLayer.kind === 'dramatic'
+                              ? selectedLayer.el.mode === 'inverse'
+                                ? 'Inverse word'
+                                : selectedLayer.el.mode === 'reflection'
+                                  ? 'Reflection word'
+                                  : 'Dramatic word'
+                              : selectedLayer.el.kind === 'typewriter'
+                                ? 'Typewriter'
+                                : 'Caption'
+                  }
+                >
                   {selectedLayer.kind === 'caption' && (
                     <CaptionPanel
                       layer={selectedLayer as CaptionLayer}
@@ -809,6 +1008,34 @@ export default function VideoEditor() {
                       onEditKf={(kfId, patch) => updateZoomKf(selectedLayer.id, kfId, patch)}
                       onRemoveKf={(kfId) => removeZoomKf(selectedLayer.id, kfId)}
                       onRemoveLayer={() => removeLayer(selectedLayer.id)}
+                    />
+                  )}
+                  {selectedLayer.kind === 'sketch' && (
+                    <SketchPanel
+                      layer={selectedLayer as SketchLayer}
+                      pen={pen}
+                      onPen={(patch) => setPen((p) => ({ ...p, ...patch }))}
+                      onCommitStroke={(s) => commitSketchStroke(selectedLayer.id, s)}
+                      onUndoStroke={() => undoSketchStroke(selectedLayer.id)}
+                      onClearStrokes={() => clearSketchStrokes(selectedLayer.id)}
+                      onEdit={(patch) => updateSketchEl(selectedLayer.id, patch)}
+                      onRemove={() => removeLayer(selectedLayer.id)}
+                    />
+                  )}
+                  {selectedLayer.kind === 'highlighter' && (
+                    <HighlighterPanel
+                      layer={selectedLayer as HighlighterLayer}
+                      duration={timelineDuration}
+                      onEdit={(patch) => updateHighlighterEl(selectedLayer.id, patch)}
+                      onRemove={() => removeLayer(selectedLayer.id)}
+                    />
+                  )}
+                  {selectedLayer.kind === 'dramatic' && (
+                    <DramaticPanel
+                      layer={selectedLayer as DramaticLayer}
+                      duration={timelineDuration}
+                      onEdit={(patch) => updateDramaticEl(selectedLayer.id, patch)}
+                      onRemove={() => removeLayer(selectedLayer.id)}
                     />
                   )}
                 </Panel>
@@ -871,7 +1098,7 @@ export default function VideoEditor() {
               <Panel title="Sound effects">
                 <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
                   <input type="checkbox" checked={sfxEnabled} onChange={(e) => setSfxEnabled(e.target.checked)} />
-                  Enable (banner slash, caption riffle/keys, zoom whoosh)
+                  Enable (banner slash, caption riffle/keys, zoom whoosh, sketch pencil)
                 </label>
                 {sfxEnabled && (
                   <Field label={`SFX volume — ${Math.round(sfxVolume * 100)}%`}>
