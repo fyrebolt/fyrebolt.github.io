@@ -13,15 +13,29 @@
 //   - zoom:    NOT independent elements — one continuous keyframe track. The crop
 //              replaces the base frame, so it is a singleton base layer.
 //
-// Extensibility: dramatic / sketch / highlighter (not built this session) slot in
-// as additional overlay variants — each embeds its existing domain object the
-// same way `caption` embeds CaptionEl and reuses its render.ts draw function.
+// Session 2 adds three more overlay variants, each embedding its existing domain
+// object the same way `caption` embeds CaptionEl and reusing its render.ts draw
+// function:
+//   - sketch:      a freehand drawing (SketchElement) projected into a placement
+//                  box, replayed at constant arc-length velocity. Multi-instance.
+//   - highlighter: a free, timed highlight box (Highlighter) that sweeps in/out.
+//                  Multi-instance.
+//   - dramatic:    one big uppercase word call-out (DramaticWord) in normal /
+//                  inverse / reflection mode. Multi-instance, but words never
+//                  overlap in TIME (only one effect active at a moment) — the
+//                  timeline clamps drags to neighbours and adds fill free gaps.
 
 import type { BannerPosition, BannerStyle, FillMode, RatioKey } from '../types';
 import type { CaptionEl } from '../captions/types';
 import { createCaption, createTypewriter, elementEnd as captionEnd } from '../captions/types';
 import type { ZoomKeyframe } from '../zoom/types';
 import type { BoilPoolId } from '../captions/fonts';
+import type { SketchElement } from '../sketch/types';
+import { createSketch, elementEnd as sketchEnd } from '../sketch/types';
+import type { Highlighter } from '../highlight/types';
+import { createHighlighter, elementEnd as highlightEnd } from '../highlight/types';
+import type { DramaticWord, WordMode } from '../dramatic/types';
+import { createDramaticWord, elementEnd as dramaticEnd } from '../dramatic/types';
 
 export interface LayerBase {
   id: string;
@@ -58,7 +72,31 @@ export interface ZoomLayer extends LayerBase {
   keyframes: ZoomKeyframe[];
 }
 
-export type Layer = BannerLayer | CaptionLayer | ZoomLayer;
+/** One projected freehand sketch (drawing + placement + replay timing). */
+export interface SketchLayer extends LayerBase {
+  kind: 'sketch';
+  el: SketchElement;
+}
+
+/** One free, timed highlight box that sweeps in, holds, then sweeps out. */
+export interface HighlighterLayer extends LayerBase {
+  kind: 'highlighter';
+  el: Highlighter;
+}
+
+/** One big uppercase word call-out (normal / inverse / reflection). */
+export interface DramaticLayer extends LayerBase {
+  kind: 'dramatic';
+  el: DramaticWord;
+}
+
+export type Layer =
+  | BannerLayer
+  | CaptionLayer
+  | ZoomLayer
+  | SketchLayer
+  | HighlighterLayer
+  | DramaticLayer;
 
 export type LayerKind = Layer['kind'];
 
@@ -120,7 +158,20 @@ export function layerSpan(layer: Layer): Span {
       const end = layer.keyframes.reduce((m, k) => Math.max(m, k.start + k.duration), 0);
       return { start: 0, end };
     }
+    case 'sketch':
+      return { start: layer.el.start, end: sketchEnd(layer.el) };
+    case 'highlighter':
+      return { start: layer.el.start, end: highlightEnd(layer.el) };
+    case 'dramatic':
+      return { start: layer.el.start, end: dramaticEnd(layer.el) };
   }
+}
+
+/** Active OUTPUT-second spans of every dramatic layer except `exceptId`. */
+export function dramaticSpans(layers: Layer[], exceptId?: string): Span[] {
+  return layers
+    .filter((l): l is DramaticLayer => l.kind === 'dramatic' && l.id !== exceptId)
+    .map((l) => ({ start: l.el.start, end: dramaticEnd(l.el) }));
 }
 
 // ---- factories ----
@@ -182,6 +233,49 @@ export function createZoomLayer(z: number, overrides: Partial<ZoomLayer> = {}): 
     z,
     name: 'Zoom',
     keyframes: [],
+    ...overrides,
+  };
+}
+
+/** New sketch overlay. `padAspect` is the drawing pad's ratio (usually the output AR). */
+export function createSketchLayer(
+  z: number,
+  padAspect: number,
+  overrides: Partial<SketchLayer> = {},
+): SketchLayer {
+  return {
+    kind: 'sketch',
+    id: id('sketch'),
+    z,
+    name: 'Sketch',
+    el: createSketch({ padAspect, x: 0, y: 0, w: 1, h: 1 }),
+    ...overrides,
+  };
+}
+
+export function createHighlighterLayer(z: number, overrides: Partial<HighlighterLayer> = {}): HighlighterLayer {
+  return {
+    kind: 'highlighter',
+    id: id('hl'),
+    z,
+    name: 'Highlighter',
+    el: createHighlighter(),
+    ...overrides,
+  };
+}
+
+export function createDramaticLayer(
+  z: number,
+  mode: WordMode,
+  el: DramaticWord,
+  overrides: Partial<DramaticLayer> = {},
+): DramaticLayer {
+  return {
+    kind: 'dramatic',
+    id: id('dram'),
+    z,
+    name: mode === 'inverse' ? 'Inverse word' : mode === 'reflection' ? 'Reflection word' : 'Dramatic word',
+    el,
     ...overrides,
   };
 }
