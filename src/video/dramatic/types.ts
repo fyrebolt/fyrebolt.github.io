@@ -1,14 +1,17 @@
 // ===== Dramatic wording model =====
 //
 // Big, plain uppercase words over the footage — the "Instagram edit" look.
-// Two modes:
-//  - normal:  the word itself is translucent over the clear video.
-//  - inverse: a dim scrim covers everything EXCEPT the word, which stays a
-//             clear window onto the video (up to a full black-out).
+// Three modes:
+//  - normal:     the word itself is translucent over the clear video.
+//  - inverse:    a dim scrim covers everything EXCEPT the word, which stays a
+//                clear window onto the video (up to a full black-out).
+//  - reflection: the footage showing through the word's silhouette is
+//                colour-inverted (an "electronic/negative" look), with opacity
+//                acting as the inversion strength.
 // Words never overlap in time (only one effect is active at a moment), which
-// keeps inverse/normal from colliding.
+// keeps the modes from colliding.
 
-export type WordMode = 'normal' | 'inverse';
+export type WordMode = 'normal' | 'inverse' | 'reflection';
 
 export interface DramaticWord {
   id: string;
@@ -55,15 +58,18 @@ let wid = 0;
 export function createDramaticWord(overrides: Partial<DramaticWord> = {}): DramaticWord {
   wid += 1;
   const mode = overrides.mode ?? 'normal';
+  const text = mode === 'inverse' ? 'FOCUS' : mode === 'reflection' ? 'INVERT' : 'DRAMATIC';
   return {
     id: `dw-${Date.now().toString(36)}-${wid}`,
-    text: mode === 'inverse' ? 'FOCUS' : 'DRAMATIC',
+    text,
     x: 0.5,
     y: 0.5,
     sizeScale: 1,
-    // normal: light grey translucent word; inverse: black scrim.
+    // normal: light grey translucent word; inverse: black scrim; reflection:
+    // colour is unused (the video is inverted) — keep a sensible placeholder.
     color: mode === 'inverse' ? '#000000' : '#dcdcdc',
-    opacity: mode === 'inverse' ? 0.72 : 0.55,
+    // reflection: opacity is the inversion strength — full-strength by default.
+    opacity: mode === 'inverse' ? 0.72 : mode === 'reflection' ? 1 : 0.55,
     mode,
     start: 0,
     duration: 2,

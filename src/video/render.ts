@@ -961,7 +961,24 @@ function drawWordText(ctx: CanvasRenderingContext2D, L: DramaticLayout): void {
 
 let dramaticScratch: HTMLCanvasElement | null = null;
 
-/** Draw one dramatic word at time `sec` (normal translucent word, or inverse scrim cut-out). */
+/** Get (or lazily create) the reusable full-frame scratch canvas + context. */
+function dramaticScratchCtx(out: OutputSize): CanvasRenderingContext2D | null {
+  if (typeof document === 'undefined') return null;
+  if (!dramaticScratch) dramaticScratch = document.createElement('canvas');
+  const s = dramaticScratch;
+  if (s.width !== out.w || s.height !== out.h) {
+    s.width = out.w;
+    s.height = out.h;
+  }
+  return s.getContext('2d');
+}
+
+/**
+ * Draw one dramatic word at time `sec`:
+ *  - normal:     translucent coloured word over the clear video.
+ *  - inverse:    a scrim with the word knocked out (a clear window).
+ *  - reflection: the footage under the word's silhouette is colour-inverted.
+ */
 export function drawDramaticWord(
   ctx: CanvasRenderingContext2D,
   out: OutputSize,
@@ -982,16 +999,37 @@ export function drawDramaticWord(
     return;
   }
 
+  if (word.mode === 'reflection') {
+    // Colour-invert the video under the word: copy the frame, difference-blend
+    // white letters over it (white − colour = the negative), clip that to the
+    // letter silhouette, then composite it back with opacity as the strength
+    // (a clean lerp between the original footage and its negative).
+    const rc = dramaticScratchCtx(out);
+    if (!rc) return;
+    rc.globalAlpha = 1;
+    rc.globalCompositeOperation = 'source-over';
+    rc.clearRect(0, 0, out.w, out.h);
+    rc.drawImage(ctx.canvas, 0, 0); // copy the current video frame
+    rc.font = `${L.size}px ${DRAMATIC_FONT}`;
+    // invert the footage everywhere the letters cover
+    rc.globalCompositeOperation = 'difference';
+    rc.fillStyle = '#ffffff';
+    drawWordText(rc, L);
+    // keep only the letter silhouette (rest becomes transparent)
+    rc.globalCompositeOperation = 'destination-in';
+    rc.fillStyle = '#000000';
+    drawWordText(rc, L);
+    rc.globalCompositeOperation = 'source-over';
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, word.opacity)) * env;
+    ctx.drawImage(dramaticScratch!, 0, 0);
+    ctx.restore();
+    return;
+  }
+
   // inverse: build the scrim (with the word knocked out) on a scratch canvas so
   // the cut-out reveals the video already on the main canvas.
-  if (typeof document === 'undefined') return;
-  if (!dramaticScratch) dramaticScratch = document.createElement('canvas');
-  const s = dramaticScratch;
-  if (s.width !== out.w || s.height !== out.h) {
-    s.width = out.w;
-    s.height = out.h;
-  }
-  const sc = s.getContext('2d');
+  const sc = dramaticScratchCtx(out);
   if (!sc) return;
   sc.clearRect(0, 0, out.w, out.h);
   sc.globalCompositeOperation = 'source-over';
@@ -1005,7 +1043,7 @@ export function drawDramaticWord(
   sc.font = `${L.size}px ${DRAMATIC_FONT}`;
   drawWordText(sc, L);
   sc.globalCompositeOperation = 'source-over';
-  ctx.drawImage(s, 0, 0);
+  ctx.drawImage(dramaticScratch!, 0, 0);
 }
 
 // ---- zoom (source-normalised crop -> contain-fit onto output) ----
