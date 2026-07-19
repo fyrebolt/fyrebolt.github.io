@@ -19,6 +19,8 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html'),
         // Camera → Video Editor (served at /video/)
         video: resolve(__dirname, 'video/index.html'),
+        // Camera (classic) → frozen per-tool editor (served at /video-classic/)
+        videoClassic: resolve(__dirname, 'video-classic/index.html'),
         // App Store → portfolio (served at /appstore/)
         appstore: resolve(__dirname, 'appstore/index.html'),
         // Printer → résumé PDF viewer (served at /printer/)
