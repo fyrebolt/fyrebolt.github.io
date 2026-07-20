@@ -57,6 +57,8 @@ import SketchPanel from './project/panels/SketchPanel';
 import type { Pen } from './project/panels/SketchPanel';
 import HighlighterPanel from './project/panels/HighlighterPanel';
 import DramaticPanel from './project/panels/DramaticPanel';
+import { useHistory } from './project/useHistory';
+import type { HistoryApi } from './project/useHistory';
 
 /** First non-overlapping gap of ≥0.6s among dramatic layers, else null. */
 function findDramaticGap(spans: Span[], total: number, want: number): { start: number; duration: number } | null {
@@ -74,6 +76,19 @@ function findDramaticGap(spans: Span[], total: number, want: number): { start: n
 
 type MediaKind = 'video' | 'image' | null;
 type ExportStage = 'idle' | 'recording' | 'preparing' | 'encoding' | 'done' | 'error';
+
+/** One immutable snapshot of the whole project, for the undo/redo history. */
+interface EditorSnapshot {
+  layers: Layer[];
+  ratio: RatioKey;
+  fillMode: FillMode;
+  boilPool: BoilPoolId;
+  normalize: boolean;
+  sfxEnabled: boolean;
+  sfxVolume: number;
+  imageDuration: number;
+  pen: Pen;
+}
 
 /** Layers that carry a free on-canvas placement (box or anchored text). */
 type PlaceableLayer = SketchLayer | HighlighterLayer | CaptionLayer | DramaticLayer;
@@ -165,6 +180,14 @@ export default function VideoEditor() {
   const [gearOpen, setGearOpen] = useState(false);
   const [guideLines, setGuideLines] = useState<Guide[]>([]);
 
+  // ---- undo / redo history (stable wrappers; the engine is created below) ----
+  const historyRef = useRef<HistoryApi | null>(null);
+  const sealDiscrete = useCallback(() => historyRef.current?.sealDiscrete(), []);
+  const undo = useCallback(() => historyRef.current?.undo(), []);
+  const redo = useCallback(() => historyRef.current?.redo(), []);
+  /** Layer id pending a delete confirmation, else null. */
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
   // ---- export ----
   const [stage, setStage] = useState<ExportStage>('idle');
   const [progress, setProgress] = useState(0);
@@ -238,10 +261,81 @@ export default function VideoEditor() {
     return () => urls.forEach((u) => URL.revokeObjectURL(u));
   }, []);
 
+  // ---- keyboard: undo / redo + delete the selected layer ----
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (confirmDeleteId) return; // the delete-confirm dialog owns the keyboard
+      const t = e.target as HTMLElement | null;
+      const editable =
+        !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+      const mod = e.metaKey || e.ctrlKey;
+
+      if (mod && (e.key === 'z' || e.key === 'Z')) {
+        if (editable) return; // let native text-undo win inside form fields
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (mod && (e.key === 'y' || e.key === 'Y')) {
+        if (editable) return;
+        e.preventDefault();
+        redo();
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !editable && selectedLayerId) {
+        e.preventDefault();
+        setConfirmDeleteId(selectedLayerId);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo, selectedLayerId, confirmDeleteId]);
+
   const setEditingZoomBoth = (v: boolean) => {
     editingRef.current = v;
     setEditingZoom(v);
   };
+
+  // ---- undo / redo engine (whole-project snapshots) ----
+  const snapshot: EditorSnapshot = useMemo(
+    () => ({ layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, pen }),
+    [layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, pen],
+  );
+  const restoreSnapshot = useCallback((s: EditorSnapshot) => {
+    setLayers(s.layers);
+    setRatio(s.ratio);
+    setFillMode(s.fillMode);
+    setBoilPool(s.boilPool);
+    setNormalize(s.normalize);
+    setSfxEnabled(s.sfxEnabled);
+    setSfxVolume(s.sfxVolume);
+    setImageDuration(s.imageDuration);
+    setPen(s.pen);
+    // Reset transient editing state and clamp selection to layers that survive.
+    editingRef.current = false;
+    setEditingZoom(false);
+    setSelectedZoomKfId(null);
+    compRef.current?.exitEdit();
+    setSelectedAttachmentId(null);
+    setGroupIds((g) => g.filter((id) => s.layers.some((l) => l.id === id)));
+    setSelectedLayerId((cur) => (cur && s.layers.some((l) => l.id === cur) ? cur : null));
+  }, []);
+  const snapshotEqual = useCallback(
+    (a: EditorSnapshot, b: EditorSnapshot) =>
+      a.layers === b.layers &&
+      a.ratio === b.ratio &&
+      a.fillMode === b.fillMode &&
+      a.boilPool === b.boilPool &&
+      a.normalize === b.normalize &&
+      a.sfxEnabled === b.sfxEnabled &&
+      a.sfxVolume === b.sfxVolume &&
+      a.imageDuration === b.imageDuration &&
+      a.pen === b.pen,
+    [],
+  );
+  const history = useHistory<EditorSnapshot>({ live: snapshot, restore: restoreSnapshot, equal: snapshotEqual });
+  historyRef.current = history;
 
   // ---- media load ----
   const onFile = useCallback((file: File) => {
@@ -311,6 +405,7 @@ export default function VideoEditor() {
     (kind: AddKind) => {
       setAddOpen(false);
       if (!mediaKind) return;
+      sealDiscrete();
       const z = nextZ(projectRef.current);
       const outSize = srcDims.w > 0 ? outputSizeFor(ratio, srcDims.w, srcDims.h) : outputSizeFor(ratio, 1080, 1920);
       const outAR = outSize.w / outSize.h;
@@ -387,7 +482,7 @@ export default function VideoEditor() {
       setSelectedAttachmentId(null);
       seekTo(midOfCaption(layer.el));
     },
-    [mediaKind, duration, ratio, srcDims, timelineDuration, staggerStart, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime],
+    [mediaKind, duration, ratio, srcDims, timelineDuration, staggerStart, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime, sealDiscrete],
   );
 
   const updateCaptionEl = useCallback((layerId: string, patch: Partial<Caption> | Partial<TypewriterCaption>) => {
@@ -409,20 +504,23 @@ export default function VideoEditor() {
   }, []);
 
   const commitSketchStroke = useCallback((id: string, stroke: SketchStroke) => {
+    sealDiscrete(); // each committed stroke is its own undo step
     setLayers((ls) =>
       ls.map((l) => (l.id === id && l.kind === 'sketch' ? { ...l, el: { ...l.el, strokes: [...l.el.strokes, stroke] } } : l)),
     );
-  }, []);
+  }, [sealDiscrete]);
 
   const undoSketchStroke = useCallback((id: string) => {
+    sealDiscrete();
     setLayers((ls) =>
       ls.map((l) => (l.id === id && l.kind === 'sketch' ? { ...l, el: { ...l.el, strokes: l.el.strokes.slice(0, -1) } } : l)),
     );
-  }, []);
+  }, [sealDiscrete]);
 
   const clearSketchStrokes = useCallback((id: string) => {
+    sealDiscrete();
     setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'sketch' ? { ...l, el: { ...l.el, strokes: [] } } : l)));
-  }, []);
+  }, [sealDiscrete]);
 
   const updateHighlighterEl = useCallback((id: string, patch: Partial<Highlighter>) => {
     setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'highlighter' ? { ...l, el: { ...l.el, ...patch } } : l)));
@@ -434,15 +532,34 @@ export default function VideoEditor() {
 
   const removeLayer = useCallback(
     (id: string) => {
+      sealDiscrete();
       setLayers((ls) => ls.filter((l) => l.id !== id));
       setSelectedLayerId((s) => (s === id ? null : s));
       setSelectedAttachmentId(null);
       clearZoomEdit();
     },
-    [clearZoomEdit],
+    [clearZoomEdit, sealDiscrete],
   );
 
+  // Escape cancels / Enter confirms the delete dialog.
+  useEffect(() => {
+    if (!confirmDeleteId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setConfirmDeleteId(null);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        removeLayer(confirmDeleteId);
+        setConfirmDeleteId(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [confirmDeleteId, removeLayer]);
+
   const moveLayer = useCallback((id: string, dir: -1 | 1) => {
+    sealDiscrete();
     setLayers((ls) => {
       const overlays = ls.filter((l) => l.kind !== 'zoom').sort((a, b) => a.z - b.z);
       const idx = overlays.findIndex((l) => l.id === id);
@@ -452,7 +569,7 @@ export default function VideoEditor() {
       const b = overlays[j];
       return ls.map((l) => (l.id === a.id ? { ...l, z: b.z } : l.id === b.id ? { ...l, z: a.z } : l));
     });
-  }, []);
+  }, [sealDiscrete]);
 
   // ---- attachments ----
   const attachMid = useCallback((el: CaptionEl, att: Attachment): number => {
@@ -467,6 +584,7 @@ export default function VideoEditor() {
       if (!layer || layer.kind !== 'caption') return;
       const sw = staticWindowOf(layer.el);
       if (!sw) return;
+      sealDiscrete();
       const dur = Math.max(0.2, Math.min(1.2, sw.end - sw.start));
       const att = createAttachment({ type, duration: dur, startInStatic: 0, wordStart: 0, wordEnd: 0 });
       updateCaptionEl(layerId, { attachments: [...layer.el.attachments, att] } as Partial<CaptionEl>);
@@ -474,7 +592,7 @@ export default function VideoEditor() {
       setSelectedAttachmentId(att.id);
       seekTo(attachMid(layer.el, att));
     },
-    [layers, updateCaptionEl, seekTo, attachMid],
+    [layers, updateCaptionEl, seekTo, attachMid, sealDiscrete],
   );
 
   const updateAttachment = useCallback(
@@ -491,6 +609,7 @@ export default function VideoEditor() {
   );
 
   const removeAttachment = useCallback((layerId: string, attId: string) => {
+    sealDiscrete();
     setLayers((ls) =>
       ls.map((l) =>
         l.id === layerId && l.kind === 'caption'
@@ -499,7 +618,7 @@ export default function VideoEditor() {
       ),
     );
     setSelectedAttachmentId((s) => (s === attId ? null : s));
-  }, []);
+  }, [sealDiscrete]);
 
   const selectAttachment = useCallback(
     (layerId: string, attId: string) => {
@@ -540,6 +659,7 @@ export default function VideoEditor() {
   const addZoomKeyframe = useCallback(
     (rect: ZoomRect) => {
       if (!zoom) return;
+      sealDiscrete();
       const total = mediaKind === 'video' ? timelineDuration : Math.max(timelineDuration, 6);
       const isFirst = zoom.keyframes.length === 0;
       const prevEnd = zoom.keyframes.reduce((m, k) => Math.max(m, k.start + k.duration), 0);
@@ -556,7 +676,7 @@ export default function VideoEditor() {
       compRef.current?.editZoomAt(landing);
       setCurrentSec(landing);
     },
-    [zoom, mediaKind, timelineDuration],
+    [zoom, mediaKind, timelineDuration, sealDiscrete],
   );
 
   const updateZoomKf = useCallback((layerId: string, kfId: string, patch: Partial<ZoomKeyframe>) => {
@@ -567,12 +687,13 @@ export default function VideoEditor() {
 
   const removeZoomKf = useCallback(
     (layerId: string, kfId: string) => {
+      sealDiscrete();
       setLayers((ls) => ls.map((l) => (l.id === layerId && l.kind === 'zoom' ? { ...l, keyframes: l.keyframes.filter((k) => k.id !== kfId) } : l)));
       setSelectedZoomKfId((s) => (s === kfId ? null : s));
       setEditingZoomBoth(false);
       compRef.current?.exitEdit();
     },
-    [],
+    [sealDiscrete],
   );
 
   const onZoomRectChange = useCallback(
@@ -613,8 +734,9 @@ export default function VideoEditor() {
     setSelectedAttachmentId(null);
     setSelectedZoomKfId(null);
     setEditingZoomBoth(false);
-    compRef.current?.playPreview();
-  }, []);
+    // Resume from the current playhead rather than restarting at 0.
+    compRef.current?.playPreview(currentSec);
+  }, [currentSec]);
 
   const onScrub = useCallback(
     (sec: number) => {
@@ -1124,6 +1246,12 @@ export default function VideoEditor() {
                   <button onClick={play} disabled={!mediaKind || busy} className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
                     ▶ Play preview
                   </button>
+                  <button onClick={undo} disabled={!history.canUndo || busy} title="Undo (⌘Z / Ctrl+Z)" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
+                    ↶ Undo
+                  </button>
+                  <button onClick={redo} disabled={!history.canRedo || busy} title="Redo (⇧⌘Z / Ctrl+Y)" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
+                    ↷ Redo
+                  </button>
                   <button onClick={() => setAddOpen((v) => !v)} disabled={!mediaKind || busy} className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
                     + Add layer
                   </button>
@@ -1237,7 +1365,7 @@ export default function VideoEditor() {
                       onSelectAttachment={(attId) => selectAttachment(selectedLayer.id, attId)}
                       onEditAttachment={(attId, patch) => updateAttachment(selectedLayer.id, attId, patch)}
                       onRemoveAttachment={(attId) => removeAttachment(selectedLayer.id, attId)}
-                      onRemove={() => removeLayer(selectedLayer.id)}
+                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'banner' && (
@@ -1246,7 +1374,7 @@ export default function VideoEditor() {
                       duration={timelineDuration}
                       onEdit={(patch) => updateBanner(selectedLayer.id, patch)}
                       onEditStyle={(patch) => updateBannerStyle(selectedLayer.id, patch)}
-                      onRemove={() => removeLayer(selectedLayer.id)}
+                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'zoom' && (
@@ -1260,7 +1388,7 @@ export default function VideoEditor() {
                       onSelectKf={(kfId) => selectZoomKf(selectedLayer.id, kfId)}
                       onEditKf={(kfId, patch) => updateZoomKf(selectedLayer.id, kfId, patch)}
                       onRemoveKf={(kfId) => removeZoomKf(selectedLayer.id, kfId)}
-                      onRemoveLayer={() => removeLayer(selectedLayer.id)}
+                      onRemoveLayer={() => setConfirmDeleteId(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'sketch' && (
@@ -1272,7 +1400,7 @@ export default function VideoEditor() {
                       onUndoStroke={() => undoSketchStroke(selectedLayer.id)}
                       onClearStrokes={() => clearSketchStrokes(selectedLayer.id)}
                       onEdit={(patch) => updateSketchEl(selectedLayer.id, patch)}
-                      onRemove={() => removeLayer(selectedLayer.id)}
+                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'highlighter' && (
@@ -1280,7 +1408,7 @@ export default function VideoEditor() {
                       layer={selectedLayer as HighlighterLayer}
                       duration={timelineDuration}
                       onEdit={(patch) => updateHighlighterEl(selectedLayer.id, patch)}
-                      onRemove={() => removeLayer(selectedLayer.id)}
+                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'dramatic' && (
@@ -1288,7 +1416,7 @@ export default function VideoEditor() {
                       layer={selectedLayer as DramaticLayer}
                       duration={timelineDuration}
                       onEdit={(patch) => updateDramaticEl(selectedLayer.id, patch)}
-                      onRemove={() => removeLayer(selectedLayer.id)}
+                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
                     />
                   )}
                 </Panel>
@@ -1297,10 +1425,10 @@ export default function VideoEditor() {
               {/* Project output settings */}
               <Panel title="Output">
                 <Field label="Aspect ratio">
-                  <ChoiceGrid cols={2} value={ratio} options={RATIO_LABELS} onChange={setRatio} />
+                  <ChoiceGrid cols={2} value={ratio} options={RATIO_LABELS} onChange={(v) => { sealDiscrete(); setRatio(v); }} />
                 </Field>
                 <Field label="Fill mode (when input ratio ≠ output)">
-                  <ChoiceGrid cols={3} value={fillMode} options={FILL_MODES.map((m) => ({ key: m, label: m === 'crop' ? 'Crop' : m === 'fit' ? 'Fit' : 'Blur' }))} onChange={setFillMode} />
+                  <ChoiceGrid cols={3} value={fillMode} options={FILL_MODES.map((m) => ({ key: m, label: m === 'crop' ? 'Crop' : m === 'fit' ? 'Fit' : 'Blur' }))} onChange={(v) => { sealDiscrete(); setFillMode(v); }} />
                 </Field>
                 {mediaKind === 'image' && (
                   <Field label={`Clip length — ${imageDuration.toFixed(1)}s`}>
@@ -1326,6 +1454,7 @@ export default function VideoEditor() {
                       <button
                         key={p.id}
                         onClick={() => {
+                          sealDiscrete();
                           setBoilPool(p.id);
                           setLayers((ls) =>
                             ls.map((l) =>
@@ -1343,14 +1472,14 @@ export default function VideoEditor() {
                   </div>
                 </Field>
                 <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-                  <input type="checkbox" checked={normalize} onChange={(e) => setNormalize(e.target.checked)} />
+                  <input type="checkbox" checked={normalize} onChange={(e) => { sealDiscrete(); setNormalize(e.target.checked); }} />
                   Even sizing (normalize each font to a consistent height)
                 </label>
               </Panel>
 
               <Panel title="Sound effects">
                 <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-                  <input type="checkbox" checked={sfxEnabled} onChange={(e) => setSfxEnabled(e.target.checked)} />
+                  <input type="checkbox" checked={sfxEnabled} onChange={(e) => { sealDiscrete(); setSfxEnabled(e.target.checked); }} />
                   Enable (banner slash, caption riffle/keys, zoom whoosh, sketch pencil)
                 </label>
                 {sfxEnabled && (
@@ -1362,6 +1491,48 @@ export default function VideoEditor() {
             </aside>
           </div>
         </div>
+
+        {/* delete-layer confirmation dialog */}
+        {confirmDeleteId &&
+          (() => {
+            const target = layers.find((l) => l.id === confirmDeleteId);
+            if (!target) return null;
+            const label =
+              target.kind === 'caption'
+                ? target.el.text.split('\n')[0] || target.name
+                : target.kind === 'dramatic'
+                  ? (target.el.text || target.name).toUpperCase()
+                  : target.name;
+            return (
+              <div className="fixed inset-0 z-[60] flex items-center justify-center p-6" role="dialog" aria-modal="true">
+                <div className="absolute inset-0 bg-black/50" onClick={() => setConfirmDeleteId(null)} />
+                <div className="relative glass-card p-5 max-w-xs w-full text-center">
+                  <h2 className="text-base font-semibold mb-1">Delete layer?</h2>
+                  <p className="text-sm text-[var(--color-text-secondary)] mb-4">
+                    “{label}” will be removed. You can undo this with ⌘Z.
+                  </p>
+                  <div className="flex gap-2 justify-center">
+                    <button
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] text-sm font-medium"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      autoFocus
+                      onClick={() => {
+                        removeLayer(confirmDeleteId);
+                        setConfirmDeleteId(null);
+                      }}
+                      className="px-4 py-2 rounded-md bg-[rgba(255,80,80,0.92)] text-white text-sm font-semibold hover:bg-[rgba(255,80,80,1)]"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
       </div>
     </IpadFrame>
   );
