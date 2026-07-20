@@ -29,21 +29,17 @@ import type { BoilFont } from '../captions/fonts';
 import type { CaptionEl } from '../captions/types';
 import { boilFontIndex, elementEnd as captionEnd, typewriterProgress } from '../captions/types';
 import { FULL_RECT, rectAt, sortedZooms } from '../zoom/types';
+import { sortedSpeeds } from '../timemachine/types';
 import { elementEnd as sketchEnd } from '../sketch/types';
 import { elementEnd as highlightEnd } from '../highlight/types';
 import { elementEnd as dramaticEnd } from '../dramatic/types';
 import type { Project, CaptionLayer } from './types';
-import { bannerLayer, zoomLayer, overlayLayers, layerSpan } from './types';
+import { bannerLayer, zoomLayer, timeMachineLayer, overlayLayers, layerSpan } from './types';
 
 /** Seconds between pencil-on-paper grains while a sketch animates. */
 const PENCIL_INTERVAL = 0.06;
-import {
-  bannerFrameAt,
-  crossedLock,
-  freezeSpecOf,
-  outputDurationFor,
-  sourceTimeAt,
-} from './timeMap';
+import { bannerFrameAt, crossedLock, compileWarp } from './timeMap';
+import type { TimeWarp } from './timeMap';
 
 const FPS = 30;
 
@@ -63,8 +59,6 @@ export interface CaptionBounds {
   height: number;
 }
 
-type Phase = 'idle' | 'pre' | 'freeze' | 'post' | 'play';
-
 export class Compositor {
   private ctx: CanvasRenderingContext2D;
   private out: OutputSize = { w: 2, h: 2 };
@@ -72,18 +66,24 @@ export class Compositor {
   private raf = 0;
   private recording = false;
   private editing = false; // zoom-rect edit view (full un-zoomed frame)
+  private playing = false;
 
-  // clock
-  private phase: Phase = 'idle';
-  private imgStart = 0;
-  private freezeWallStart = 0;
+  // clock — OUTPUT time is wall-clock driven; the <video> is steered to match.
+  private playStartWall = 0;
+  private playStartOutput = 0;
   private prevT = 0;
   /** Last resolved OUTPUT time — what a static redraw / hit-test uses while paused. */
   private pausedT = 0;
 
+  // cached compiled time-warp (rebuilt when the project reference changes)
+  private warpCache: TimeWarp | null = null;
+  private warpProject: Project | null = null;
+  private warpClip = -1;
+
   // audio
   private audioCtx: AudioContext | null = null;
   private srcNode: MediaElementAudioSourceNode | null = null;
+  private srcGain: GainNode | null = null; // muted during non-1x / frozen spans
   private streamDest: MediaStreamAudioDestinationNode | null = null;
   private sfx: SfxEngine | null = null;
 
@@ -140,53 +140,68 @@ export class Compositor {
     }
   }
 
-  /** Total OUTPUT duration in seconds (clip + any banner hold, or the image length). */
+  /** The compiled output→source time-warp for the current project (cached). */
+  private warp(): TimeWarp {
+    const p = this.getProject();
+    const clip = this.media?.kind === 'video' ? this.media.duration : 0;
+    if (this.warpCache && this.warpProject === p && this.warpClip === clip) return this.warpCache;
+    this.warpCache = compileWarp(p, clip);
+    this.warpProject = p;
+    this.warpClip = clip;
+    return this.warpCache;
+  }
+
+  /** Total OUTPUT duration in seconds (clip warped by speed/freeze, or the image length). */
   totalSec(): number {
     if (!this.media) return 0;
     const p = this.getProject();
-    const spec = freezeSpecOf(bannerLayer(p));
-    if (this.media.kind === 'video') return outputDurationFor(this.media.duration, spec);
+    if (this.media.kind === 'video') return Math.max(0.1, this.warp().totalOutput);
     if (p.imageDuration && p.imageDuration > 0) return p.imageDuration;
     const ends = p.layers.map((l) => layerSpan(l).end);
-    return Math.max(3, ...ends, spec ? spec.freeze + spec.hold + 0.5 : 0);
+    return Math.max(3, ...ends);
   }
 
   // ---- clock ----
 
-  /** Wall/video-derived OUTPUT time for the current frame, advancing the freeze phase. */
+  /** Wall-clock OUTPUT time for the current frame. */
   private computeOutputT(): number {
-    if (!this.media) return 0;
-    if (this.media.kind === 'image') return (performance.now() - this.imgStart) / 1000;
-
-    const v = this.media.video!;
-    const spec = freezeSpecOf(bannerLayer(this.getProject()));
-    if (!spec) return v.currentTime;
-
-    const { freeze: f, hold: h } = spec;
-    const now = performance.now();
-    if (this.phase === 'pre') {
-      if (v.currentTime >= f || v.ended) {
-        v.pause();
-        this.phase = 'freeze';
-        this.freezeWallStart = now;
-        return f;
-      }
-      return v.currentTime;
-    }
-    if (this.phase === 'freeze') {
-      const ft = f + (now - this.freezeWallStart) / 1000;
-      if (ft >= f + h) {
-        this.phase = 'post';
-        void v.play().catch(() => undefined);
-        return f + h;
-      }
-      return ft;
-    }
-    if (this.phase === 'post') return v.currentTime + h;
-    return v.currentTime;
+    if (!this.media || !this.playing) return this.pausedT;
+    return this.playStartOutput + (performance.now() - this.playStartWall) / 1000;
   }
 
-  /** The current OUTPUT time as last resolved (never advances the phase machine). */
+  /**
+   * Steer the <video> so its frame + rate match OUTPUT time `outputT`: pause on a
+   * freeze, otherwise play at the warp's instantaneous speed, correcting drift.
+   * Original audio is muted whenever the speed is not ~1 (or frozen).
+   */
+  private driveVideo(outputT: number): void {
+    const v = this.media?.video;
+    if (!v) return;
+    const warp = this.warp();
+    const speed = warp.speedAt(outputT);
+    const frozen = warp.frozen(outputT);
+    const srcTarget = warp.sourceAt(outputT);
+
+    if (frozen) {
+      if (!v.paused) v.pause();
+    } else {
+      const rate = Math.min(4, Math.max(0.0625, speed));
+      if (v.playbackRate !== rate) v.playbackRate = rate;
+      if (v.paused) void v.play().catch(() => undefined);
+      // Correct only large drift (post-freeze resume already lands on target).
+      if (Math.abs(v.currentTime - srcTarget) > 0.3) {
+        v.currentTime = Math.max(0, Math.min(srcTarget, this.media!.duration - 0.03));
+      }
+    }
+
+    if (this.srcGain && this.audioCtx) {
+      const mute = frozen || Math.abs(speed - 1) > 0.02;
+      // Short ramp so toggling in/out of an effect doesn't click.
+      this.srcGain.gain.setTargetAtTime(mute ? 0 : 1, this.audioCtx.currentTime, 0.01);
+    }
+  }
+
+  /** The current OUTPUT time as last resolved. */
   currentTimeSec(): number {
     return this.pausedT;
   }
@@ -324,6 +339,17 @@ export class Compositor {
       }
     }
 
+    // time-machine (replay) whooshes — same edge-triggered pattern as zoom
+    const tm = timeMachineLayer(p);
+    if (sfxOn && tm) {
+      for (const kf of sortedSpeeds(tm.keyframes)) {
+        if (outputT >= kf.start && !this.firedWhoosh.has(kf.id)) {
+          this.firedWhoosh.add(kf.id);
+          if (kf.whoosh) this.sfx!.trigger('whoosh', when);
+        }
+      }
+    }
+
     for (const layer of overlayLayers(p)) {
       if (layer.kind === 'caption') {
         // Rotate the whole caption (text + attachments) about its block centre.
@@ -402,11 +428,16 @@ export class Compositor {
     const ctx = this.ensureCtx();
     if (!this.streamDest) {
       this.srcNode = ctx.createMediaElementSource(this.media.video);
+      // A gain stage the clock drops to 0 during non-1x / frozen spans, so the
+      // pitch-shifted original audio never leaks into a slow-mo or freeze.
+      this.srcGain = ctx.createGain();
+      this.srcGain.gain.value = 1;
       this.streamDest = ctx.createMediaStreamDestination();
       // Audible during preview AND a continuous timeline for the recorder, so the
       // frozen (paused-video) gap stays A/V-synced.
-      this.srcNode.connect(ctx.destination);
-      this.srcNode.connect(this.streamDest);
+      this.srcNode.connect(this.srcGain);
+      this.srcGain.connect(ctx.destination);
+      this.srcGain.connect(this.streamDest);
       this.sfx?.output.connect(this.streamDest);
     }
     return this.streamDest.stream ?? null;
@@ -435,44 +466,33 @@ export class Compositor {
     this.lastPencil.clear();
 
     const p = this.getProject();
-    const spec = freezeSpecOf(bannerLayer(p));
     // Clamp the resume point; treat "at/after the end" as a fresh restart at 0.
     const total = this.totalSec();
     const start = fromSec > 0.02 && fromSec < total - 0.05 ? fromSec : 0;
     this.prevT = start;
     this.pausedT = start;
+    this.playing = true;
+    this.playStartOutput = start;
+    this.playStartWall = performance.now();
 
     // Suppress SFX for cues whose trigger instant already elapsed before `start`.
-    if (spec && start >= spec.freeze) this.firedEntrance = true;
+    const banner = bannerLayer(p);
+    if (banner && start >= banner.freeze) this.firedEntrance = true;
     const zoom = zoomLayer(p);
     if (zoom) for (const kf of zoom.keyframes) if (start >= kf.start) this.firedWhoosh.add(kf.id);
+    const tm = timeMachineLayer(p);
+    if (tm) for (const kf of tm.keyframes) if (start >= kf.start) this.firedWhoosh.add(kf.id);
 
     if (this.media.kind === 'video' && this.media.video) {
       const v = this.media.video;
+      const warp = this.warp();
       const cap = Math.max(0, this.media.duration - 0.03);
       v.pause();
-      if (!spec) {
-        this.phase = 'play';
-        v.currentTime = Math.min(start, cap);
-        void v.play().catch(() => undefined);
-      } else if (start < spec.freeze) {
-        this.phase = 'pre';
-        v.currentTime = Math.min(start, cap);
-        void v.play().catch(() => undefined);
-      } else if (start < spec.freeze + spec.hold) {
-        // Resuming mid-freeze: hold on the freeze frame (video paused) for the
-        // remaining hold, then the freeze→post transition resumes the clip.
-        this.phase = 'freeze';
-        this.freezeWallStart = performance.now() - (start - spec.freeze) * 1000;
-        v.currentTime = Math.min(spec.freeze, cap);
-      } else {
-        this.phase = 'post';
-        v.currentTime = Math.min(start - spec.hold, cap);
+      v.currentTime = Math.min(warp.sourceAt(start), cap);
+      if (!warp.frozen(start)) {
+        v.playbackRate = Math.min(4, Math.max(0.0625, warp.speedAt(start)));
         void v.play().catch(() => undefined);
       }
-    } else {
-      this.phase = 'play';
-      this.imgStart = performance.now() - start * 1000;
     }
   }
 
@@ -481,23 +501,21 @@ export class Compositor {
     const outputT = this.computeOutputT();
     this.pausedT = outputT;
 
-    const ended =
-      this.media.kind === 'video'
-        ? this.media.video!.ended && (this.phase === 'post' || this.phase === 'play')
-        : outputT >= this.totalSec();
-
-    if (ended) {
+    if (outputT >= this.totalSec() - 1e-3) {
       if (this.recording) {
+        this.playing = false;
         this.stopLoop();
         return;
       }
       this.startPlayback();
+      if (this.media.kind === 'video') this.driveVideo(0);
       this.drawFrameAt(0, false);
       this.onTime?.(0);
       this.raf = requestAnimationFrame(this.loop);
       return;
     }
 
+    if (this.media.kind === 'video') this.driveVideo(outputT);
     this.drawFrameAt(outputT, true);
     this.onTime?.(outputT);
     this.raf = requestAnimationFrame(this.loop);
@@ -507,12 +525,11 @@ export class Compositor {
   scrubTo(sec: number): void {
     if (!this.media) return;
     this.stopLoop();
+    this.playing = false;
     this.editing = false;
-    this.phase = 'idle';
     this.prevT = sec;
     this.pausedT = sec;
-    const spec = freezeSpecOf(bannerLayer(this.getProject()));
-    const srcT = sourceTimeAt(sec, spec);
+    const srcT = this.warp().sourceAt(sec);
     if (this.media.kind === 'video' && this.media.video) {
       const v = this.media.video;
       v.pause();
@@ -523,7 +540,6 @@ export class Compositor {
       v.addEventListener('seeked', draw);
       v.currentTime = Math.max(0, Math.min(srcT, this.media.duration - 0.03));
     } else {
-      this.imgStart = performance.now() - sec * 1000;
       this.drawFrameAt(sec, false);
     }
   }
@@ -533,10 +549,10 @@ export class Compositor {
   editZoomAt(outputT: number): void {
     if (!this.media) return;
     this.stopLoop();
+    this.playing = false;
     this.editing = true;
     this.pausedT = outputT;
-    const spec = freezeSpecOf(bannerLayer(this.getProject()));
-    const srcT = sourceTimeAt(outputT, spec);
+    const srcT = this.warp().sourceAt(outputT);
     if (this.media.video) {
       const v = this.media.video;
       v.pause();
@@ -548,7 +564,6 @@ export class Compositor {
       v.addEventListener('seeked', draw);
       v.currentTime = Math.max(0, Math.min(srcT, this.media.duration - 0.03));
     } else {
-      this.imgStart = performance.now() - outputT * 1000;
       this.syncOutputSize();
       drawZoomed(this.ctx, this.media.image!, this.out, FULL_RECT);
     }
@@ -651,7 +666,7 @@ export class Compositor {
 
   stop(): void {
     this.stopLoop();
-    this.phase = 'idle';
+    this.playing = false;
     if (this.media?.video) this.media.video.pause();
   }
 
@@ -716,6 +731,7 @@ export class Compositor {
     this.stop();
     try {
       this.srcNode?.disconnect();
+      this.srcGain?.disconnect();
       this.streamDest?.disconnect();
       void this.audioCtx?.close();
     } catch {
@@ -723,6 +739,7 @@ export class Compositor {
     }
     this.audioCtx = null;
     this.srcNode = null;
+    this.srcGain = null;
     this.streamDest = null;
     this.sfx = null;
     this.media = null;

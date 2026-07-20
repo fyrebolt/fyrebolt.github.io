@@ -12,6 +12,10 @@
 //              highlight/underline attachments. Multi-instance.
 //   - zoom:    NOT independent elements — one continuous keyframe track. The crop
 //              replaces the base frame, so it is a singleton base layer.
+//   - timemachine: one continuous SPEED keyframe track (variable playback speed /
+//              slow-mo replays / freezes). It draws nothing — instead it warps the
+//              output→source clock (see project/timeMap.ts), generalising the
+//              banner freeze. Singleton, video-only.
 //
 // Session 2 adds three more overlay variants, each embedding its existing domain
 // object the same way `caption` embeds CaptionEl and reusing its render.ts draw
@@ -29,6 +33,7 @@ import type { BannerPosition, BannerStyle, FillMode, RatioKey } from '../types';
 import type { CaptionEl } from '../captions/types';
 import { createCaption, createTypewriter, elementEnd as captionEnd } from '../captions/types';
 import type { ZoomKeyframe } from '../zoom/types';
+import type { SpeedKeyframe } from '../timemachine/types';
 import type { BoilPoolId } from '../captions/fonts';
 import type { SketchElement } from '../sketch/types';
 import { createSketch, elementEnd as sketchEnd } from '../sketch/types';
@@ -72,6 +77,12 @@ export interface ZoomLayer extends LayerBase {
   keyframes: ZoomKeyframe[];
 }
 
+/** The single sequential playback-speed track. Warps the clock, draws nothing. */
+export interface TimeMachineLayer extends LayerBase {
+  kind: 'timemachine';
+  keyframes: SpeedKeyframe[];
+}
+
 /** One projected freehand sketch (drawing + placement + replay timing). */
 export interface SketchLayer extends LayerBase {
   kind: 'sketch';
@@ -94,6 +105,7 @@ export type Layer =
   | BannerLayer
   | CaptionLayer
   | ZoomLayer
+  | TimeMachineLayer
   | SketchLayer
   | HighlighterLayer
   | DramaticLayer;
@@ -126,9 +138,14 @@ export function zoomLayer(p: Project): ZoomLayer | null {
   return (p.layers.find((l) => l.kind === 'zoom') as ZoomLayer | undefined) ?? null;
 }
 
+export function timeMachineLayer(p: Project): TimeMachineLayer | null {
+  return (p.layers.find((l) => l.kind === 'timemachine') as TimeMachineLayer | undefined) ?? null;
+}
+
 /** Overlay layers (everything that draws ON TOP of the base), sorted bottom-first by z. */
 export function overlayLayers(p: Project): Layer[] {
-  return p.layers.filter((l) => l.kind !== 'zoom').sort((a, b) => a.z - b.z);
+  // zoom (base crop) and timemachine (clock warp) draw nothing on top.
+  return p.layers.filter((l) => l.kind !== 'zoom' && l.kind !== 'timemachine').sort((a, b) => a.z - b.z);
 }
 
 /** Next z for a newly-added overlay (on top of the current stack). */
@@ -155,6 +172,10 @@ export function layerSpan(layer: Layer): Span {
     case 'caption':
       return { start: layer.el.start, end: captionEnd(layer.el) };
     case 'zoom': {
+      const end = layer.keyframes.reduce((m, k) => Math.max(m, k.start + k.duration), 0);
+      return { start: 0, end };
+    }
+    case 'timemachine': {
       const end = layer.keyframes.reduce((m, k) => Math.max(m, k.start + k.duration), 0);
       return { start: 0, end };
     }
@@ -232,6 +253,17 @@ export function createZoomLayer(z: number, overrides: Partial<ZoomLayer> = {}): 
     id: id('zoom'),
     z,
     name: 'Zoom',
+    keyframes: [],
+    ...overrides,
+  };
+}
+
+export function createTimeMachineLayer(z: number, overrides: Partial<TimeMachineLayer> = {}): TimeMachineLayer {
+  return {
+    kind: 'timemachine',
+    id: id('tm'),
+    z,
+    name: 'Time Machine',
     keyframes: [],
     ...overrides,
   };

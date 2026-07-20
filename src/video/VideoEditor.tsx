@@ -18,6 +18,8 @@ import { createAttachment, staticWindowOf } from './captions/types';
 import type { Attachment, AttachmentType, Caption, CaptionEl, TypewriterCaption } from './captions/types';
 import { createZoom } from './zoom/types';
 import type { ZoomKeyframe, ZoomRect } from './zoom/types';
+import { createSpeed } from './timemachine/types';
+import type { SpeedKeyframe } from './timemachine/types';
 import type { SketchElement, SketchStroke } from './sketch/types';
 import type { Highlighter } from './highlight/types';
 import { createDramaticWord } from './dramatic/types';
@@ -32,11 +34,13 @@ import type {
   Project,
   SketchLayer,
   Span,
+  TimeMachineLayer,
   ZoomLayer,
 } from './project/types';
 import {
   bannerLayer,
   zoomLayer,
+  timeMachineLayer,
   overlayLayers,
   layerSpan,
   dramaticSpans,
@@ -44,15 +48,18 @@ import {
   createBannerLayer,
   createCaptionLayer,
   createZoomLayer,
+  createTimeMachineLayer,
   createSketchLayer,
   createHighlighterLayer,
   createDramaticLayer,
 } from './project/types';
+import { compileWarp } from './project/timeMap';
 import { Panel, Field, ChoiceGrid } from './project/ui';
 import { RATIO_LABELS, FILL_MODES } from './project/constants';
 import CaptionPanel from './project/panels/CaptionPanel';
 import BannerPanel from './project/panels/BannerPanel';
 import ZoomPanel from './project/panels/ZoomPanel';
+import TimeMachinePanel from './project/panels/TimeMachinePanel';
 import SketchPanel from './project/panels/SketchPanel';
 import type { Pen } from './project/panels/SketchPanel';
 import HighlighterPanel from './project/panels/HighlighterPanel';
@@ -124,6 +131,7 @@ type AddKind =
   | 'boil'
   | 'typewriter'
   | 'zoom'
+  | 'timemachine'
   | 'sketch'
   | 'highlighter'
   | 'dramatic-normal'
@@ -135,12 +143,18 @@ const ADD_ITEMS: { kind: AddKind; label: string; icon: string }[] = [
   { kind: 'boil', label: 'Caption', icon: '💬' },
   { kind: 'typewriter', label: 'Typewriter', icon: '⌨️' },
   { kind: 'zoom', label: 'Zoom', icon: '🔍' },
+  { kind: 'timemachine', label: 'Time Machine', icon: '⏱️' },
   { kind: 'sketch', label: 'Sketch', icon: '✏️' },
   { kind: 'highlighter', label: 'Highlighter', icon: '🖍️' },
   { kind: 'dramatic-normal', label: 'Dramatic word', icon: '🔠' },
   { kind: 'dramatic-inverse', label: 'Inverse word', icon: '◱' },
   { kind: 'dramatic-reflection', label: 'Reflection word', icon: '🔃' },
 ];
+
+/** Frozen-hold length for the "+ Freeze" preset (output seconds). */
+const FREEZE_BLOCK_HOLD = 1.2;
+/** Near-instant ramp used by the freeze block's snap-to-0 and resume keyframes. */
+const FREEZE_SNAP_RAMP = 0.12;
 
 export default function VideoEditor() {
   // ---- media ----
@@ -170,6 +184,7 @@ export default function VideoEditor() {
   /** Marquee rect (output-normalised) while drag-selecting, else null. */
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [selectedZoomKfId, setSelectedZoomKfId] = useState<string | null>(null);
+  const [selectedSpeedKfId, setSelectedSpeedKfId] = useState<string | null>(null);
   const [editingZoom, setEditingZoom] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
 
@@ -215,22 +230,24 @@ export default function VideoEditor() {
 
   const banner = bannerLayer(project);
   const zoom = zoomLayer(project);
+  const timeMachine = timeMachineLayer(project);
   const selectedLayer = layers.find((l) => l.id === selectedLayerId) ?? null;
 
   // Output (paint bottom→top) + a display order for the list/timeline (front first).
+  // Zoom + Time Machine are base tracks — they sit at the bottom of the stack.
   const displayLayers = useMemo(() => {
     const overlays = overlayLayers(project).slice().reverse(); // front first
-    const z = zoomLayer(project);
-    return z ? [...overlays, z] : overlays;
+    const bases = project.layers.filter((l) => l.kind === 'zoom' || l.kind === 'timemachine');
+    return [...overlays, ...bases];
   }, [project]);
 
-  // Timeline / output duration (seconds).
+  // Timeline / output duration (seconds). For video this is the warped output
+  // length (speed track + banner freeze can stretch or shrink it).
   const timelineDuration = useMemo(() => {
-    const hold = banner ? banner.hold : 0;
-    if (mediaKind === 'video') return Math.max(0.1, duration + hold);
+    if (mediaKind === 'video') return Math.max(0.1, compileWarp(project, duration).totalOutput);
     const ends = layers.map((l) => layerSpan(l).end);
     return Math.max(3, imageDuration, ...ends);
-  }, [banner, mediaKind, duration, layers, imageDuration]);
+  }, [project, mediaKind, duration, layers, imageDuration]);
 
   // Preload fonts up front so switching pools / drawing never falls back.
   useEffect(() => {
@@ -316,6 +333,7 @@ export default function VideoEditor() {
     editingRef.current = false;
     setEditingZoom(false);
     setSelectedZoomKfId(null);
+    setSelectedSpeedKfId(null);
     compRef.current?.exitEdit();
     setSelectedAttachmentId(null);
     setGroupIds((g) => g.filter((id) => s.layers.some((l) => l.id === id)));
@@ -428,6 +446,17 @@ export default function VideoEditor() {
         setSelectedLayerId(layer.id);
         setSelectedAttachmentId(null);
         setSelectedZoomKfId(null);
+        return;
+      }
+      if (kind === 'timemachine') {
+        // Video-only singleton (a still image has no playback speed to warp).
+        if (mediaKind !== 'video' || timeMachineLayer(projectRef.current)) return;
+        const layer = createTimeMachineLayer(z);
+        setLayers((ls) => [...ls, layer]);
+        clearZoomEdit();
+        setSelectedLayerId(layer.id);
+        setSelectedAttachmentId(null);
+        setSelectedSpeedKfId(null);
         return;
       }
       if (kind === 'sketch') {
@@ -561,7 +590,7 @@ export default function VideoEditor() {
   const moveLayer = useCallback((id: string, dir: -1 | 1) => {
     sealDiscrete();
     setLayers((ls) => {
-      const overlays = ls.filter((l) => l.kind !== 'zoom').sort((a, b) => a.z - b.z);
+      const overlays = ls.filter((l) => l.kind !== 'zoom' && l.kind !== 'timemachine').sort((a, b) => a.z - b.z);
       const idx = overlays.findIndex((l) => l.id === id);
       const j = idx + dir;
       if (idx < 0 || j < 0 || j >= overlays.length) return ls;
@@ -703,6 +732,74 @@ export default function VideoEditor() {
     [selectedLayerId, selectedZoomKfId, updateZoomKf],
   );
 
+  // ---- time-machine (speed) keyframes ----
+  const selectSpeedKf = useCallback(
+    (layerId: string, kfId: string) => {
+      const layer = layers.find((l) => l.id === layerId);
+      if (!layer || layer.kind !== 'timemachine') return;
+      const kf = layer.keyframes.find((k) => k.id === kfId);
+      clearZoomEdit();
+      setSelectedLayerId(layerId);
+      setSelectedAttachmentId(null);
+      setSelectedSpeedKfId(kfId);
+      if (kf) seekTo(Math.min(kf.start + kf.duration, timelineDuration));
+    },
+    [layers, clearZoomEdit, seekTo, timelineDuration],
+  );
+
+  /** Placement for a newly-added speed keyframe: at the playhead, after the last one. */
+  const speedKfStart = useCallback((): number => {
+    if (!timeMachine) return 0;
+    const prevEnd = timeMachine.keyframes.reduce((m, k) => Math.max(m, k.start + k.duration), 0);
+    return Math.min(Math.max(0, timelineDuration - 0.3), Math.max(currentSec, prevEnd));
+  }, [timeMachine, timelineDuration, currentSec]);
+
+  const addSpeedKeyframe = useCallback(
+    (speed: number) => {
+      if (!timeMachine) return;
+      sealDiscrete();
+      const start = speedKfStart();
+      const kf = createSpeed({ start, duration: 0.6, speed });
+      setLayers((ls) => ls.map((l) => (l.id === timeMachine.id && l.kind === 'timemachine' ? { ...l, keyframes: [...l.keyframes, kf] } : l)));
+      setSelectedLayerId(timeMachine.id);
+      setSelectedAttachmentId(null);
+      setSelectedSpeedKfId(kf.id);
+      seekTo(start + 0.6);
+    },
+    [timeMachine, speedKfStart, seekTo, sealDiscrete],
+  );
+
+  /** "+ Freeze": a snap to speed 0, then a resume to 1× a fixed hold later. */
+  const addFreezeBlock = useCallback(() => {
+    if (!timeMachine) return;
+    sealDiscrete();
+    const start = speedKfStart();
+    const freeze = createSpeed({ start, duration: FREEZE_SNAP_RAMP, speed: 0 });
+    const resume = createSpeed({ start: start + FREEZE_SNAP_RAMP + FREEZE_BLOCK_HOLD, duration: FREEZE_SNAP_RAMP, speed: 1 });
+    setLayers((ls) =>
+      ls.map((l) => (l.id === timeMachine.id && l.kind === 'timemachine' ? { ...l, keyframes: [...l.keyframes, freeze, resume] } : l)),
+    );
+    setSelectedLayerId(timeMachine.id);
+    setSelectedAttachmentId(null);
+    setSelectedSpeedKfId(freeze.id);
+    seekTo(start + FREEZE_SNAP_RAMP + FREEZE_BLOCK_HOLD / 2);
+  }, [timeMachine, speedKfStart, seekTo, sealDiscrete]);
+
+  const updateSpeedKf = useCallback((layerId: string, kfId: string, patch: Partial<SpeedKeyframe>) => {
+    setLayers((ls) =>
+      ls.map((l) => (l.id === layerId && l.kind === 'timemachine' ? { ...l, keyframes: l.keyframes.map((k) => (k.id === kfId ? { ...k, ...patch } : k)) } : l)),
+    );
+  }, []);
+
+  const removeSpeedKf = useCallback(
+    (layerId: string, kfId: string) => {
+      sealDiscrete();
+      setLayers((ls) => ls.map((l) => (l.id === layerId && l.kind === 'timemachine' ? { ...l, keyframes: l.keyframes.filter((k) => k.id !== kfId) } : l)));
+      setSelectedSpeedKfId((s) => (s === kfId ? null : s));
+    },
+    [sealDiscrete],
+  );
+
   // ---- selecting a layer (list / timeline) ----
   const selectLayer = useCallback(
     (id: string) => {
@@ -718,6 +815,14 @@ export default function VideoEditor() {
         }
         return;
       }
+      if (layer.kind === 'timemachine') {
+        clearZoomEdit();
+        const first = [...layer.keyframes].sort((a, b) => a.start - b.start)[0];
+        setSelectedSpeedKfId(first?.id ?? null);
+        if (first) seekTo(Math.min(first.start + first.duration, timelineDuration));
+        return;
+      }
+      setSelectedSpeedKfId(null);
       clearZoomEdit();
       if (layer.kind === 'banner') seekTo(bannerPreviewTime(layer));
       else if (layer.kind === 'caption') seekTo(midOfCaption(layer.el));
@@ -725,7 +830,7 @@ export default function VideoEditor() {
       else if (layer.kind === 'highlighter') seekTo(layer.el.start + Math.min(0.5, layer.el.duration / 2));
       else if (layer.kind === 'dramatic') seekTo(layer.el.start + Math.min(0.5, layer.el.duration / 2));
     },
-    [layers, selectZoomKf, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime],
+    [layers, selectZoomKf, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime, timelineDuration],
   );
 
   // ---- playback ----
@@ -733,6 +838,7 @@ export default function VideoEditor() {
     setSelectedLayerId(null);
     setSelectedAttachmentId(null);
     setSelectedZoomKfId(null);
+    setSelectedSpeedKfId(null);
     setEditingZoomBoth(false);
     // Resume from the current playhead rather than restarting at 0.
     compRef.current?.playPreview(currentSec);
@@ -788,6 +894,7 @@ export default function VideoEditor() {
     }
     setSelectedLayerId(null);
     setSelectedZoomKfId(null);
+    setSelectedSpeedKfId(null);
     setEditingZoomBoth(false);
     setDownloadUrl(null);
     setStage('recording');
@@ -1152,7 +1259,12 @@ export default function VideoEditor() {
                       {addOpen && (
                         <div className="absolute right-0 mt-1.5 w-44 rounded-xl bg-[var(--color-bg-surface)] shadow-lg border border-[var(--color-glass-border)] overflow-hidden z-20">
                           {ADD_ITEMS.map((it) => {
-                            const disabled = (it.kind === 'banner' && !!banner) || (it.kind === 'zoom' && !!zoom);
+                            const tmUnavailable = it.kind === 'timemachine' && mediaKind !== 'video';
+                            const disabled =
+                              (it.kind === 'banner' && !!banner) ||
+                              (it.kind === 'zoom' && !!zoom) ||
+                              (it.kind === 'timemachine' && !!timeMachine) ||
+                              tmUnavailable;
                             return (
                               <button
                                 key={it.kind}
@@ -1162,7 +1274,9 @@ export default function VideoEditor() {
                               >
                                 <span aria-hidden>{it.icon}</span>
                                 <span>{it.label}</span>
-                                {disabled && <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">added</span>}
+                                {disabled && (
+                                  <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">{tmUnavailable ? 'video only' : 'added'}</span>
+                                )}
                               </button>
                             );
                           })}
@@ -1228,6 +1342,7 @@ export default function VideoEditor() {
                     selectedLayerId={selectedLayerId}
                     selectedAttachmentId={selectedAttachmentId}
                     selectedZoomKfId={selectedZoomKfId}
+                    selectedSpeedKfId={selectedSpeedKfId}
                     onScrub={onScrub}
                     onSelectLayer={selectLayer}
                     onEditCaption={updateCaptionEl}
@@ -1236,6 +1351,8 @@ export default function VideoEditor() {
                     onEditBanner={updateBanner}
                     onSelectZoomKf={selectZoomKf}
                     onEditZoomKf={updateZoomKf}
+                    onSelectSpeedKf={selectSpeedKf}
+                    onEditSpeedKf={updateSpeedKf}
                     onEditSketch={updateSketchEl}
                     onEditHighlighter={updateHighlighterEl}
                     onEditDramatic={updateDramaticEl}
@@ -1291,32 +1408,34 @@ export default function VideoEditor() {
                           ? '⚔️'
                           : l.kind === 'zoom'
                             ? '🔍'
-                            : l.kind === 'sketch'
-                              ? '✏️'
-                              : l.kind === 'highlighter'
-                                ? '🖍️'
-                                : l.kind === 'dramatic'
-                                  ? l.el.mode === 'inverse'
-                                    ? '◱'
-                                    : l.el.mode === 'reflection'
-                                      ? '🔃'
-                                      : '🔠'
-                                  : l.el.kind === 'typewriter'
-                                    ? '⌨️'
-                                    : '💬';
+                            : l.kind === 'timemachine'
+                              ? '⏱️'
+                              : l.kind === 'sketch'
+                                ? '✏️'
+                                : l.kind === 'highlighter'
+                                  ? '🖍️'
+                                  : l.kind === 'dramatic'
+                                    ? l.el.mode === 'inverse'
+                                      ? '◱'
+                                      : l.el.mode === 'reflection'
+                                        ? '🔃'
+                                        : '🔠'
+                                    : l.el.kind === 'typewriter'
+                                      ? '⌨️'
+                                      : '💬';
                       const label =
                         l.kind === 'caption'
                           ? l.el.text.split('\n')[0] || l.name
                           : l.kind === 'dramatic'
                             ? (l.el.text || l.name).toUpperCase()
                             : l.name;
-                      const canMove = l.kind !== 'zoom';
+                      const canMove = l.kind !== 'zoom' && l.kind !== 'timemachine';
                       return (
                         <div key={l.id} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md border ${isSel ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]' : 'border-[var(--color-glass-border)]'}`}>
                           <button onClick={() => selectLayer(l.id)} className="flex items-center gap-2 text-left text-[13px] min-w-0 flex-1">
                             <span aria-hidden>{icon}</span>
                             <span className="truncate">{label}</span>
-                            {l.kind === 'zoom' && <span className="text-[10px] text-[var(--color-text-muted)]">base</span>}
+                            {(l.kind === 'zoom' || l.kind === 'timemachine') && <span className="text-[10px] text-[var(--color-text-muted)]">base</span>}
                           </button>
                           {canMove && (
                             <>
@@ -1339,6 +1458,8 @@ export default function VideoEditor() {
                       ? 'Entrance Banner'
                       : selectedLayer.kind === 'zoom'
                         ? 'Zoom'
+                        : selectedLayer.kind === 'timemachine'
+                          ? 'Time Machine'
                         : selectedLayer.kind === 'sketch'
                           ? 'Sketch'
                           : selectedLayer.kind === 'highlighter'
@@ -1388,6 +1509,19 @@ export default function VideoEditor() {
                       onSelectKf={(kfId) => selectZoomKf(selectedLayer.id, kfId)}
                       onEditKf={(kfId, patch) => updateZoomKf(selectedLayer.id, kfId, patch)}
                       onRemoveKf={(kfId) => removeZoomKf(selectedLayer.id, kfId)}
+                      onRemoveLayer={() => setConfirmDeleteId(selectedLayer.id)}
+                    />
+                  )}
+                  {selectedLayer.kind === 'timemachine' && (
+                    <TimeMachinePanel
+                      layer={selectedLayer as TimeMachineLayer}
+                      duration={timelineDuration}
+                      selectedKfId={selectedSpeedKfId}
+                      onAddKeyframe={addSpeedKeyframe}
+                      onAddFreeze={addFreezeBlock}
+                      onSelectKf={(kfId) => selectSpeedKf(selectedLayer.id, kfId)}
+                      onEditKf={(kfId, patch) => updateSpeedKf(selectedLayer.id, kfId, patch)}
+                      onRemoveKf={(kfId) => removeSpeedKf(selectedLayer.id, kfId)}
                       onRemoveLayer={() => setConfirmDeleteId(selectedLayer.id)}
                     />
                   )}
