@@ -952,11 +952,18 @@ export function dramaticWordLayout(
   return { lines, size, lineHeight, cx, cy, blockW, blockH, left: cx - blockW / 2, top: cy - blockH / 2 };
 }
 
-function drawWordText(ctx: CanvasRenderingContext2D, L: DramaticLayout): void {
+function drawWordText(ctx: CanvasRenderingContext2D, L: DramaticLayout, rot = 0): void {
+  ctx.save();
+  if (rot) {
+    ctx.translate(L.cx, L.cy);
+    ctx.rotate(rot);
+    ctx.translate(-L.cx, -L.cy);
+  }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const firstY = L.cy - L.blockH / 2 + L.lineHeight / 2;
   for (let i = 0; i < L.lines.length; i++) ctx.fillText(L.lines[i], L.cx, firstY + i * L.lineHeight);
+  ctx.restore();
 }
 
 let dramaticScratch: HTMLCanvasElement | null = null;
@@ -994,7 +1001,7 @@ export function drawDramaticWord(
     ctx.globalAlpha = Math.max(0, Math.min(1, word.opacity)) * env;
     ctx.fillStyle = word.color;
     ctx.font = `${L.size}px ${DRAMATIC_FONT}`;
-    drawWordText(ctx, L);
+    drawWordText(ctx, L, word.rotation);
     ctx.restore();
     return;
   }
@@ -1014,11 +1021,11 @@ export function drawDramaticWord(
     // invert the footage everywhere the letters cover
     rc.globalCompositeOperation = 'difference';
     rc.fillStyle = '#ffffff';
-    drawWordText(rc, L);
+    drawWordText(rc, L, word.rotation);
     // keep only the letter silhouette (rest becomes transparent)
     rc.globalCompositeOperation = 'destination-in';
     rc.fillStyle = '#000000';
-    drawWordText(rc, L);
+    drawWordText(rc, L, word.rotation);
     rc.globalCompositeOperation = 'source-over';
     ctx.save();
     ctx.globalAlpha = Math.max(0, Math.min(1, word.opacity)) * env;
@@ -1041,7 +1048,7 @@ export function drawDramaticWord(
   sc.globalCompositeOperation = 'destination-out';
   sc.fillStyle = '#000';
   sc.font = `${L.size}px ${DRAMATIC_FONT}`;
-  drawWordText(sc, L);
+  drawWordText(sc, L, word.rotation);
   sc.globalCompositeOperation = 'source-over';
   ctx.drawImage(dramaticScratch!, 0, 0);
 }

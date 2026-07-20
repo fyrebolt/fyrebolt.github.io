@@ -218,6 +218,20 @@ export class Compositor {
   }
 
   /** Draw one caption layer + its attachments, and fire its SFX. */
+  /** Run `draw` with the context rotated by `rot` radians about (cx, cy) device px. */
+  private withRotation(cx: number, cy: number, rot: number, draw: () => void): void {
+    if (!rot) {
+      draw();
+      return;
+    }
+    this.ctx.save();
+    this.ctx.translate(cx, cy);
+    this.ctx.rotate(rot);
+    this.ctx.translate(-cx, -cy);
+    draw();
+    this.ctx.restore();
+  }
+
   private drawCaptionLayer(
     layer: CaptionLayer,
     outputT: number,
@@ -312,7 +326,10 @@ export class Compositor {
 
     for (const layer of overlayLayers(p)) {
       if (layer.kind === 'caption') {
-        this.drawCaptionLayer(layer, outputT, p, sfxOn, riffleOwnerId, when);
+        // Rotate the whole caption (text + attachments) about its block centre.
+        this.withRotation(layer.el.x * this.out.w, layer.el.y * this.out.h, layer.el.rotation, () =>
+          this.drawCaptionLayer(layer, outputT, p, sfxOn, riffleOwnerId, when),
+        );
       } else if (layer.kind === 'banner') {
         drawBanner(this.ctx, this.out, layer.style, bannerFrameAt(layer, outputT, performance.now() / 1000));
         if (sfxOn && layer.sfx && !this.firedEntrance && crossedLock(layer, this.prevT, outputT)) {
@@ -323,7 +340,9 @@ export class Compositor {
         const el = layer.el;
         if (outputT < el.start || outputT >= sketchEnd(el)) continue;
         const area = { x: el.x * this.out.w, y: el.y * this.out.h, w: el.w * this.out.w, h: el.h * this.out.h };
-        drawSketch(this.ctx, area, el, outputT);
+        this.withRotation(area.x + area.w / 2, area.y + area.h / 2, el.rotation, () =>
+          drawSketch(this.ctx, area, el, outputT),
+        );
         // Pencil-on-paper: fire grains at a fixed cadence during the draw phase.
         if (sfxOn && el.sound && el.animationDur > 0 && outputT - el.start < el.animationDur) {
           const last = this.lastPencil.get(el.id) ?? -Infinity;
@@ -335,11 +354,14 @@ export class Compositor {
       } else if (layer.kind === 'highlighter') {
         const el = layer.el;
         if (outputT < el.start || outputT >= highlightEnd(el)) continue;
-        drawHighlightBox(this.ctx, this.out, el, outputT);
+        this.withRotation((el.x + el.w / 2) * this.out.w, (el.y + el.h / 2) * this.out.h, el.rotation, () =>
+          drawHighlightBox(this.ctx, this.out, el, outputT),
+        );
       } else if (layer.kind === 'dramatic') {
         const el = layer.el;
         if (outputT < el.start || outputT >= dramaticEnd(el)) continue;
-        // inverse / reflection read the pixels already painted below this layer.
+        // inverse / reflection read the pixels already painted below this layer, so
+        // drawDramaticWord rotates only its letter passes (not the frame sampling).
         drawDramaticWord(this.ctx, this.out, el, outputT);
       }
     }

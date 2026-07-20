@@ -43,6 +43,8 @@ export interface SketchElement {
   y: number;
   w: number;
   h: number;
+  /** Rotation about the placement-box centre, in radians (clockwise). */
+  rotation: number;
   /** Draw the pencil-tip tracer during the animation phase. */
   tracer: boolean;
   /** Play the pencil-on-paper sound during the animation phase. */
@@ -218,6 +220,7 @@ export function createSketch(overrides: Partial<SketchElement> = {}): SketchElem
     y: 0,
     w: 1,
     h: 1,
+    rotation: 0,
     tracer: true,
     sound: true,
     ...overrides,

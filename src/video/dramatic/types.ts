@@ -21,6 +21,8 @@ export interface DramaticWord {
   y: number;
   /** Multiplier on the base font size (which scales with frame height). */
   sizeScale: number;
+  /** Rotation about the word's centre, in radians (clockwise). */
+  rotation: number;
   /** normal → word colour; inverse → scrim colour. */
   color: string;
   /** Translucency (0..1): normal = word opacity; inverse = scrim opacity. */
@@ -65,6 +67,7 @@ export function createDramaticWord(overrides: Partial<DramaticWord> = {}): Drama
     x: 0.5,
     y: 0.5,
     sizeScale: 1,
+    rotation: 0,
     // normal: light grey translucent word; inverse: black scrim; reflection:
     // colour is unused (the video is inverted) — keep a sensible placeholder.
     color: mode === 'inverse' ? '#000000' : '#dcdcdc',
