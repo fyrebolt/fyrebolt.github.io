@@ -1117,6 +1117,54 @@ export function drawZoomed(
   ctx.drawImage(src, vx, vy, vw, vh, ddx, ddy, ddw, ddh);
 }
 
+// ---- sticker (image / video overlay: cropped source drawn into a frame box) ----
+
+/** A placement box in output pixels (top-left + size). */
+export interface StickerBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Draw the sticker's crop region (source-normalised) into its frame box. Because
+ * the box is aspect-locked to the crop, the crop maps onto the box with no
+ * distortion. Out-of-bounds crop is clipped to the valid source region and
+ * mapped proportionally, so an over-dragged crop letterboxes rather than smears.
+ * Rotation is applied by the compositor (withRotation) around the box centre.
+ */
+export function drawSticker(
+  ctx: CanvasRenderingContext2D,
+  box: StickerBox,
+  src: Source,
+  crop: ZoomRect,
+): void {
+  const { w: srcW, h: srcH } = sourceDims(src);
+  if (srcW <= 0 || srcH <= 0 || box.w <= 0 || box.h <= 0) return;
+
+  const sx = crop.x * srcW;
+  const sy = crop.y * srcH;
+  const sw = crop.w * srcW;
+  const sh = crop.h * srcH;
+  if (sw <= 0 || sh <= 0) return;
+
+  // Clip the crop to the valid source region, mapping proportionally into the box.
+  const vx = Math.max(sx, 0);
+  const vy = Math.max(sy, 0);
+  const vx2 = Math.min(sx + sw, srcW);
+  const vy2 = Math.min(sy + sh, srcH);
+  if (vx2 <= vx || vy2 <= vy) return;
+  const vw = vx2 - vx;
+  const vh = vy2 - vy;
+
+  const ddx = box.x + ((vx - sx) / sw) * box.w;
+  const ddy = box.y + ((vy - sy) / sh) * box.h;
+  const ddw = (vw / sw) * box.w;
+  const ddh = (vh / sh) * box.h;
+  ctx.drawImage(src, vx, vy, vw, vh, ddx, ddy, ddw, ddh);
+}
+
 // ---- sketch (freehand strokes projected onto the frame) ----
 
 /** A placement box in canvas pixels. */

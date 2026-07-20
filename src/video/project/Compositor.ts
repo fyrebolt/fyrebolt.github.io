@@ -16,6 +16,7 @@ import {
   drawTypewriter,
   drawAttachmentsLayer,
   drawSketch,
+  drawSticker,
   drawHighlightBox,
   drawDramaticWord,
   dramaticWordLayout,
@@ -33,6 +34,7 @@ import { sortedSpeeds } from '../timemachine/types';
 import { elementEnd as sketchEnd } from '../sketch/types';
 import { elementEnd as highlightEnd } from '../highlight/types';
 import { elementEnd as dramaticEnd } from '../dramatic/types';
+import { elementEnd as stickerEnd } from '../sticker/types';
 import type { Project, CaptionLayer } from './types';
 import { bannerLayer, zoomLayer, timeMachineLayer, overlayLayers, layerSpan } from './types';
 
@@ -98,15 +100,19 @@ export class Compositor {
   private canvas: HTMLCanvasElement;
   private getProject: () => Project;
   private onTime?: (outputSec: number) => void;
+  /** Resolve a sticker's decoded media by registry id (kept outside the project). */
+  private getStickerMedia?: (srcId: string) => HTMLImageElement | HTMLVideoElement | undefined;
 
   constructor(
     canvas: HTMLCanvasElement,
     getProject: () => Project,
     onTime?: (outputSec: number) => void,
+    getStickerMedia?: (srcId: string) => HTMLImageElement | HTMLVideoElement | undefined,
   ) {
     this.canvas = canvas;
     this.getProject = getProject;
     this.onTime = onTime;
+    this.getStickerMedia = getStickerMedia;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas context unavailable');
     this.ctx = ctx;
@@ -198,6 +204,77 @@ export class Compositor {
       const mute = frozen || Math.abs(speed - 1) > 0.02;
       // Short ramp so toggling in/out of an effect doesn't click.
       this.srcGain.gain.setTargetAtTime(mute ? 0 : 1, this.audioCtx.currentTime, 0.01);
+    }
+  }
+
+  /**
+   * A video sticker's local playback time (seconds into its own clip). It follows
+   * the main clip's WARPED progression — so it slows / freezes with Time Machine —
+   * and loops if its hold outlasts the clip. Over an image main clip (no warp),
+   * it advances on raw output time.
+   */
+  private stickerLocalTime(el: { srcId: string; start: number; clipDur: number }, outputT: number): number {
+    const hasVideoMain = this.media?.kind === 'video';
+    const warp = this.warp();
+    const now = hasVideoMain ? warp.sourceAt(outputT) : outputT;
+    const startSrc = hasVideoMain ? warp.sourceAt(el.start) : el.start;
+    const elapsed = Math.max(0, now - startSrc);
+    return el.clipDur > 0 ? elapsed % el.clipDur : elapsed;
+  }
+
+  /**
+   * Steer every VIDEO sticker's <video> so its frame matches OUTPUT time. While
+   * playing/recording (`allowPlay`) it plays at the warp's instantaneous rate
+   * (paused on a freeze), correcting only large drift; while paused/scrubbing it
+   * seeks to the exact frame and redraws once the seek lands. Embedded audio is
+   * always muted (sticker audio is a separate feature).
+   */
+  private driveStickerVideos(outputT: number, allowPlay: boolean): void {
+    if (!this.getStickerMedia) return;
+    const hasVideoMain = this.media?.kind === 'video';
+    const warp = this.warp();
+    const rate = hasVideoMain ? warp.speedAt(outputT) : 1;
+    const frozen = hasVideoMain && warp.frozen(outputT);
+    for (const layer of this.getProject().layers) {
+      if (layer.kind !== 'sticker' || layer.el.source !== 'video') continue;
+      const el = layer.el;
+      const v = this.getStickerMedia(el.srcId);
+      if (!(v instanceof HTMLVideoElement)) continue;
+      v.muted = true;
+      v.loop = true;
+      const visible = outputT >= el.start && outputT < stickerEnd(el);
+      if (!visible) {
+        if (!v.paused) v.pause();
+        continue;
+      }
+      const cap = el.clipDur > 0 ? Math.max(0, el.clipDur - 0.03) : 0;
+      const target = Math.min(this.stickerLocalTime(el, outputT), cap);
+      if (allowPlay && !frozen) {
+        const r = Math.min(4, Math.max(0.0625, rate));
+        if (v.playbackRate !== r) v.playbackRate = r;
+        if (v.paused) void v.play().catch(() => undefined);
+        if (Math.abs(v.currentTime - target) > 0.3) v.currentTime = target;
+      } else {
+        if (!v.paused) v.pause();
+        if (Math.abs(v.currentTime - target) > 0.05) {
+          const draw = () => {
+            v.removeEventListener('seeked', draw);
+            if (!this.playing) this.drawFrameAt(this.pausedT, false);
+          };
+          v.addEventListener('seeked', draw);
+          v.currentTime = target;
+        }
+      }
+    }
+  }
+
+  /** Pause every sticker video (lifecycle stop / teardown). */
+  private pauseStickerVideos(): void {
+    if (!this.getStickerMedia) return;
+    for (const layer of this.getProject().layers) {
+      if (layer.kind !== 'sticker' || layer.el.source !== 'video') continue;
+      const v = this.getStickerMedia(layer.el.srcId);
+      if (v instanceof HTMLVideoElement && !v.paused) v.pause();
     }
   }
 
@@ -389,6 +466,15 @@ export class Compositor {
         // inverse / reflection read the pixels already painted below this layer, so
         // drawDramaticWord rotates only its letter passes (not the frame sampling).
         drawDramaticWord(this.ctx, this.out, el, outputT);
+      } else if (layer.kind === 'sticker') {
+        const el = layer.el;
+        if (outputT < el.start || outputT >= stickerEnd(el)) continue;
+        const src = this.getStickerMedia?.(el.srcId);
+        if (!src) continue;
+        const box = { x: el.x * this.out.w, y: el.y * this.out.h, w: el.w * this.out.w, h: el.h * this.out.h };
+        this.withRotation(box.x + box.w / 2, box.y + box.h / 2, el.rotation, () =>
+          drawSticker(this.ctx, box, src, el.crop),
+        );
       }
     }
 
@@ -398,6 +484,7 @@ export class Compositor {
   /** Draw the current frame without advancing (paused / after a seek). No SFX. */
   renderStatic(): void {
     if (!this.media || this.editing) return;
+    this.driveStickerVideos(this.pausedT, false);
     this.drawFrameAt(this.pausedT, false);
   }
 
@@ -509,6 +596,7 @@ export class Compositor {
       }
       this.startPlayback();
       if (this.media.kind === 'video') this.driveVideo(0);
+      this.driveStickerVideos(0, true);
       this.drawFrameAt(0, false);
       this.onTime?.(0);
       this.raf = requestAnimationFrame(this.loop);
@@ -516,6 +604,7 @@ export class Compositor {
     }
 
     if (this.media.kind === 'video') this.driveVideo(outputT);
+    this.driveStickerVideos(outputT, true);
     this.drawFrameAt(outputT, true);
     this.onTime?.(outputT);
     this.raf = requestAnimationFrame(this.loop);
@@ -529,6 +618,7 @@ export class Compositor {
     this.editing = false;
     this.prevT = sec;
     this.pausedT = sec;
+    this.driveStickerVideos(sec, false);
     const srcT = this.warp().sourceAt(sec);
     if (this.media.kind === 'video' && this.media.video) {
       const v = this.media.video;
@@ -620,7 +710,7 @@ export class Compositor {
     const p = this.getProject();
     const layer = p.layers.find((l) => l.id === layerId);
     if (!layer) return null;
-    if (layer.kind === 'sketch' || layer.kind === 'highlighter') {
+    if (layer.kind === 'sketch' || layer.kind === 'highlighter' || layer.kind === 'sticker') {
       const el = layer.el;
       return { left: el.x * this.out.w, top: el.y * this.out.h, width: el.w * this.out.w, height: el.h * this.out.h, rotation: el.rotation, pad: 0 };
     }
@@ -668,6 +758,7 @@ export class Compositor {
     this.stopLoop();
     this.playing = false;
     if (this.media?.video) this.media.video.pause();
+    this.pauseStickerVideos();
   }
 
   // ---- export ----
