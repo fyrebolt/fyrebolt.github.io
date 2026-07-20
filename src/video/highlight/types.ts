@@ -20,6 +20,8 @@ export interface Highlighter {
   y: number;
   w: number;
   h: number;
+  /** Rotation about the box centre, in radians (clockwise). */
+  rotation: number;
   color: string;
   /** Fill opacity (0..1). */
   opacity: number;
@@ -44,6 +46,7 @@ export function createHighlighter(overrides: Partial<Highlighter> = {}): Highlig
     y: 0.46,
     w: 0.5,
     h: 0.08,
+    rotation: 0,
     color: '#ffe14d',
     opacity: 0.4,
     ...overrides,

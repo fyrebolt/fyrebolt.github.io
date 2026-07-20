@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { OutputSize } from '../types';
 import { containRect } from '../render';
 import type { ZoomRect } from './types';
+import type { GuideSettings } from '../transform/snapEngine';
 
 type Mode = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
@@ -26,15 +27,18 @@ interface Props {
   srcW: number;
   srcH: number;
   out: OutputSize;
+  /** Global guide-lock toggles (shared with the overlay TransformBox). Absent = centre snapping on. */
+  settings?: GuideSettings;
   onChange: (rect: ZoomRect) => void;
 }
 
 /**
  * Rectangle editor drawn over the full-frame preview: 8 resize handles + body
- * drag, in source-normalised coords. Hard-snaps to the frame centre (H/V) and
- * to the output aspect ratio, with purple guide lines while snapped.
+ * drag, in source-normalised coords. The crop stays axis-aligned (crop
+ * semantics), snapping to the frame centre (gated by the shared centre toggles)
+ * and always to the output aspect ratio, with purple guide lines while snapped.
  */
-export default function ZoomRectEditor({ rect, srcW, srcH, out, onChange }: Props) {
+export default function ZoomRectEditor({ rect, srcW, srcH, out, settings, onChange }: Props) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ mode: Mode; orig: ZoomRect; startSrc: { x: number; y: number } } | null>(null);
   const [guides, setGuides] = useState({ cx: false, cy: false, ar: false });
@@ -97,12 +101,12 @@ export default function ZoomRectEditor({ rect, srcW, srcH, out, onChange }: Prop
         const h = bottom - top;
         const cx = (left + right) / 2;
         const cy = (top + bottom) / 2;
-        if (Math.abs(cx - 0.5) < CENTER_SNAP) {
+        if ((settings?.centerH ?? true) && Math.abs(cx - 0.5) < CENTER_SNAP) {
           left = 0.5 - w / 2;
           right = 0.5 + w / 2;
           g.cx = true;
         }
-        if (Math.abs(cy - 0.5) < CENTER_SNAP) {
+        if ((settings?.centerV ?? true) && Math.abs(cy - 0.5) < CENTER_SNAP) {
           top = 0.5 - h / 2;
           bottom = 0.5 + h / 2;
           g.cy = true;
@@ -122,7 +126,7 @@ export default function ZoomRectEditor({ rect, srcW, srcH, out, onChange }: Prop
       setGuides(g);
       onChange({ x: left, y: top, w: right - left, h: bottom - top });
     },
-    [onChange, outAR, srcH, srcW, toSrc],
+    [onChange, outAR, srcH, srcW, toSrc, settings?.centerH, settings?.centerV],
   );
 
   const end = useCallback((e: ReactPointerEvent) => {

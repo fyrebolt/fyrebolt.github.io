@@ -47,6 +47,8 @@ export interface CaptionTextStyle {
   color: string;
   /** Multiplier on the base font size (which scales with frame height). */
   sizeScale: number;
+  /** Rotation about the text block's centre, in radians (clockwise). */
+  rotation: number;
   align: TextAlign;
   legibility: Legibility;
 }
@@ -189,6 +191,7 @@ export function createCaption(overrides: Partial<Caption> = {}): Caption {
     y: 0.5,
     color: '#ffffff',
     sizeScale: 1,
+    rotation: 0,
     align: 'center',
     legibility: 'outline',
     settleFontIndex: 0,
@@ -208,6 +211,7 @@ export function createTypewriter(overrides: Partial<TypewriterCaption> = {}): Ty
     y: 0.72,
     color: '#ffffff',
     sizeScale: 1,
+    rotation: 0,
     align: 'center',
     legibility: 'outline',
     fontKey: 'default:9', // Space Mono — reads typewriter-ish
