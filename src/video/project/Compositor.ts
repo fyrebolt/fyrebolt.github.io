@@ -15,6 +15,10 @@ import {
   drawCaption,
   drawTypewriter,
   drawAttachmentsLayer,
+  drawSketch,
+  drawHighlightBox,
+  drawDramaticWord,
+  dramaticWordLayout,
   measureCaption,
   outputSizeFor,
 } from '../render';
@@ -25,8 +29,14 @@ import type { BoilFont } from '../captions/fonts';
 import type { CaptionEl } from '../captions/types';
 import { boilFontIndex, elementEnd as captionEnd, typewriterProgress } from '../captions/types';
 import { FULL_RECT, rectAt, sortedZooms } from '../zoom/types';
+import { elementEnd as sketchEnd } from '../sketch/types';
+import { elementEnd as highlightEnd } from '../highlight/types';
+import { elementEnd as dramaticEnd } from '../dramatic/types';
 import type { Project, CaptionLayer } from './types';
 import { bannerLayer, zoomLayer, overlayLayers, layerSpan } from './types';
+
+/** Seconds between pencil-on-paper grains while a sketch animates. */
+const PENCIL_INTERVAL = 0.06;
 import {
   bannerFrameAt,
   crossedLock,
@@ -83,6 +93,7 @@ export class Compositor {
   private lastFontIdx = new Map<string, number>();
   private lastReveal = new Map<string, number>();
   private deleteCueFired = new Set<string>();
+  private lastPencil = new Map<string, number>();
 
   private canvas: HTMLCanvasElement;
   private getProject: () => Project;
@@ -308,6 +319,28 @@ export class Compositor {
           this.firedEntrance = true;
           this.sfx!.trigger('entrance', when);
         }
+      } else if (layer.kind === 'sketch') {
+        const el = layer.el;
+        if (outputT < el.start || outputT >= sketchEnd(el)) continue;
+        const area = { x: el.x * this.out.w, y: el.y * this.out.h, w: el.w * this.out.w, h: el.h * this.out.h };
+        drawSketch(this.ctx, area, el, outputT);
+        // Pencil-on-paper: fire grains at a fixed cadence during the draw phase.
+        if (sfxOn && el.sound && el.animationDur > 0 && outputT - el.start < el.animationDur) {
+          const last = this.lastPencil.get(el.id) ?? -Infinity;
+          if (when - last >= PENCIL_INTERVAL) {
+            this.sfx!.trigger('pencil', when);
+            this.lastPencil.set(el.id, when);
+          }
+        }
+      } else if (layer.kind === 'highlighter') {
+        const el = layer.el;
+        if (outputT < el.start || outputT >= highlightEnd(el)) continue;
+        drawHighlightBox(this.ctx, this.out, el, outputT);
+      } else if (layer.kind === 'dramatic') {
+        const el = layer.el;
+        if (outputT < el.start || outputT >= dramaticEnd(el)) continue;
+        // inverse / reflection read the pixels already painted below this layer.
+        drawDramaticWord(this.ctx, this.out, el, outputT);
       }
     }
 
@@ -376,6 +409,7 @@ export class Compositor {
     this.lastFontIdx.clear();
     this.lastReveal.clear();
     this.deleteCueFired.clear();
+    this.lastPencil.clear();
     this.prevT = 0;
     this.pausedT = 0;
     const spec = freezeSpecOf(bannerLayer(this.getProject()));
@@ -482,7 +516,8 @@ export class Compositor {
 
   // ---- caption pointer helpers (normalised 0..1 coords) ----
 
-  hitTestCaption(nx: number, ny: number): string | null {
+  /** Top-most draggable overlay (caption or dramatic word) under a normalised point. */
+  hitTestDraggable(nx: number, ny: number): string | null {
     if (!this.media) return null;
     const px = nx * this.out.w;
     const py = ny * this.out.h;
@@ -491,18 +526,20 @@ export class Compositor {
     const overlays = overlayLayers(p);
     for (let i = overlays.length - 1; i >= 0; i--) {
       const layer = overlays[i];
-      if (layer.kind !== 'caption') continue;
-      const el = layer.el;
-      const font = this.fontFor(el, outputT, p.boilPool);
-      const L = measureCaption(this.ctx, this.out, el, font, el.kind === 'boil' && p.normalize);
-      const pad = L.sizePx * 0.3;
-      if (
-        px >= L.left - pad &&
-        px <= L.left + L.blockW + pad &&
-        py >= L.top - pad &&
-        py <= L.top + L.blockH + pad
-      ) {
-        return layer.id;
+      if (layer.kind === 'caption') {
+        const el = layer.el;
+        const font = this.fontFor(el, outputT, p.boilPool);
+        const L = measureCaption(this.ctx, this.out, el, font, el.kind === 'boil' && p.normalize);
+        const pad = L.sizePx * 0.3;
+        if (px >= L.left - pad && px <= L.left + L.blockW + pad && py >= L.top - pad && py <= L.top + L.blockH + pad) {
+          return layer.id;
+        }
+      } else if (layer.kind === 'dramatic') {
+        const L = dramaticWordLayout(this.ctx, this.out, layer.el);
+        const pad = L.size * 0.25;
+        if (px >= L.left - pad && px <= L.left + L.blockW + pad && py >= L.top - pad && py <= L.top + L.blockH + pad) {
+          return layer.id;
+        }
       }
     }
     return null;

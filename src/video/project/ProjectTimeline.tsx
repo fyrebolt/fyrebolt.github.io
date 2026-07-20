@@ -16,8 +16,20 @@ import type { Attachment, CaptionEl } from '../captions/types';
 import { elementEnd as captionEnd, staticWindowOf } from '../captions/types';
 import type { ZoomKeyframe } from '../zoom/types';
 import { sortedZooms } from '../zoom/types';
-import type { BannerLayer, CaptionLayer, Layer, ZoomLayer } from './types';
-import { layerSpan } from './types';
+import type { SketchElement } from '../sketch/types';
+import type { Highlighter } from '../highlight/types';
+import type { DramaticWord } from '../dramatic/types';
+import { elementEnd as dramaticEnd } from '../dramatic/types';
+import type {
+  BannerLayer,
+  CaptionLayer,
+  DramaticLayer,
+  HighlighterLayer,
+  Layer,
+  SketchLayer,
+  ZoomLayer,
+} from './types';
+import { dramaticSpans, layerSpan } from './types';
 
 const MIN_DURATION = 0.2;
 const MIN_ATTACH_DURATION = 0.2;
@@ -27,6 +39,8 @@ const PHASE_COLORS = { typing: '#6ee7b7', hold: '#93c5fd', del: '#fca5a5' };
 const ZOOM_TRANSITION = '#a78bfa';
 const ZOOM_HOLDING = 'rgba(167,139,250,0.28)';
 const BANNER_COLOR = '#f0883e';
+const SKETCH_COLOR = '#c4a7fb';
+const SKETCH_ANIM = 'rgba(196,167,251,0.45)';
 
 const ROW_COLORS = ['#8be9c7', '#74b9ff', '#ffeaa7', '#ff9ff3', '#ffa07a', '#81ecec'];
 
@@ -56,6 +70,9 @@ interface Props {
   onEditBanner: (layerId: string, patch: Partial<BannerLayer>) => void;
   onSelectZoomKf: (layerId: string, kfId: string) => void;
   onEditZoomKf: (layerId: string, kfId: string, patch: Partial<ZoomKeyframe>) => void;
+  onEditSketch: (layerId: string, patch: Partial<SketchElement>) => void;
+  onEditHighlighter: (layerId: string, patch: Partial<Highlighter>) => void;
+  onEditDramatic: (layerId: string, patch: Partial<DramaticWord>) => void;
 }
 
 type CaptionDragMode = 'start' | 'end' | 'body' | 'div1' | 'div2';
@@ -87,6 +104,20 @@ interface ZoomDrag {
   startX: number;
   orig: ZoomKeyframe;
 }
+/** Generic overlay-range drag (sketch / highlighter / dramatic). */
+interface RangeDrag {
+  layerId: string;
+  kind: 'sketch' | 'highlighter' | 'dramatic';
+  mode: 'move' | 'end';
+  startX: number;
+  origStart: number;
+  /** The resizable trailing span (sketch: freezeDur, else: duration). */
+  origTrail: number;
+  /** Movement bounds in seconds (dramatic clamps to neighbours; others [0, dur]). */
+  minStart: number;
+  maxStart: number;
+  maxTrail: number;
+}
 
 export default function ProjectTimeline({
   duration,
@@ -103,12 +134,16 @@ export default function ProjectTimeline({
   onEditBanner,
   onSelectZoomKf,
   onEditZoomKf,
+  onEditSketch,
+  onEditHighlighter,
+  onEditDramatic,
 }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
   const capDrag = useRef<CaptionDrag | null>(null);
   const attachDrag = useRef<AttachDrag | null>(null);
   const bannerDrag = useRef<BannerDrag | null>(null);
   const zoomDrag = useRef<ZoomDrag | null>(null);
+  const rangeDrag = useRef<RangeDrag | null>(null);
 
   const dur = Math.max(0.001, duration);
 
@@ -274,6 +309,72 @@ export default function ProjectTimeline({
     [dur, fracFromClientX, onEditZoomKf],
   );
 
+  // ---- generic overlay-range drag (sketch / highlighter / dramatic) ----
+  const onRangeDown = useCallback(
+    (e: ReactPointerEvent, layer: SketchLayer | HighlighterLayer | DramaticLayer, mode: 'move' | 'end') => {
+      e.stopPropagation();
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      onSelectLayer(layer.id);
+      // Sketch resizes its trailing FREEZE; highlighter/dramatic resize DURATION.
+      const origStart = layer.el.start;
+      const origTrail = layer.kind === 'sketch' ? layer.el.freezeDur : layer.el.duration;
+      const head = layer.kind === 'sketch' ? layer.el.animationDur : 0;
+      // Dramatic words never overlap: clamp between the nearest neighbours.
+      let minStart = 0;
+      let maxStart = Math.max(0, dur - head - origTrail);
+      let maxTrail = dur;
+      if (layer.kind === 'dramatic') {
+        const w = layer.el;
+        const end = dramaticEnd(w);
+        let prevEnd = 0;
+        let nextStart = dur;
+        for (const s of dramaticSpans(layers, layer.id)) {
+          if (s.start <= w.start && s.end <= end) prevEnd = Math.max(prevEnd, s.end);
+          if (s.start >= end || s.start > w.start) nextStart = Math.min(nextStart, s.start);
+        }
+        minStart = prevEnd;
+        maxStart = Math.max(prevEnd, nextStart - w.duration);
+        maxTrail = Math.max(MIN_DURATION, nextStart - w.start);
+      }
+      rangeDrag.current = {
+        layerId: layer.id,
+        kind: layer.kind,
+        mode,
+        startX: e.clientX,
+        origStart,
+        origTrail,
+        minStart,
+        maxStart,
+        maxTrail,
+      };
+    },
+    [dur, layers, onSelectLayer],
+  );
+  const onRangeMove = useCallback(
+    (e: ReactPointerEvent) => {
+      const d = rangeDrag.current;
+      if (!d || e.buttons === 0) return;
+      const delta = (fracFromClientX(e.clientX) - fracFromClientX(d.startX)) * dur;
+      if (d.mode === 'move') {
+        const start = clamp(d.minStart, d.maxStart, d.origStart + delta);
+        if (d.kind === 'sketch') onEditSketch(d.layerId, { start });
+        else if (d.kind === 'highlighter') onEditHighlighter(d.layerId, { start });
+        else onEditDramatic(d.layerId, { start });
+      } else {
+        // Resize the trailing span: sketch → freezeDur, highlighter/dramatic → duration.
+        const trail = clamp(MIN_DURATION, d.maxTrail, d.origTrail + delta);
+        if (d.kind === 'sketch') onEditSketch(d.layerId, { freezeDur: trail });
+        else if (d.kind === 'highlighter') onEditHighlighter(d.layerId, { duration: trail });
+        else onEditDramatic(d.layerId, { duration: trail });
+      }
+    },
+    [dur, fracFromClientX, onEditSketch, onEditHighlighter, onEditDramatic],
+  );
+
   const onUp = useCallback((e: ReactPointerEvent) => {
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
@@ -284,6 +385,7 @@ export default function ProjectTimeline({
     attachDrag.current = null;
     bannerDrag.current = null;
     zoomDrag.current = null;
+    rangeDrag.current = null;
   }, []);
 
   return (
@@ -396,6 +498,89 @@ export default function ProjectTimeline({
                   style={{ left: `${Math.min(100, Math.max(0, freezePct))}%` }}
                 >
                   <div className="w-[3px] h-full bg-[var(--color-primary-green)]" />
+                </div>
+              </div>
+            );
+          }
+
+          if (layer.kind === 'sketch') {
+            const span = layerSpan(layer);
+            const leftPct = (span.start / dur) * 100;
+            const widthPct = ((span.end - span.start) / dur) * 100;
+            const total = Math.max(0.001, span.end - span.start);
+            const animF = layer.el.animationDur / total;
+            const label = layer.el.strokes.length === 0 ? 'empty sketch' : layer.name;
+            return (
+              <div key={layer.id} className="relative h-8 rounded-md bg-[var(--color-bg-elevated)]">
+                <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                <div
+                  onPointerDown={(e) => onRangeDown(e, layer, 'move')}
+                  onPointerMove={onRangeMove}
+                  onPointerUp={onUp}
+                  className={`absolute top-0 bottom-0 rounded-md flex items-center px-2 cursor-grab active:cursor-grabbing touch-none overflow-hidden ${ring}`}
+                  style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: SKETCH_COLOR }}
+                  title="Drag to move · drag the right edge for the freeze time"
+                >
+                  {layer.el.animationDur > 0 && (
+                    <div className="absolute inset-y-0 left-0 pointer-events-none" style={{ width: `${animF * 100}%`, background: SKETCH_ANIM }} />
+                  )}
+                  <span className="relative text-[10px] font-medium text-black/80 whitespace-nowrap truncate pointer-events-none">✏️ {label}</span>
+                  <div onPointerDown={(e) => onRangeDown(e, layer, 'end')} onPointerMove={onRangeMove} onPointerUp={onUp} className="absolute right-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-md touch-none z-20" />
+                </div>
+              </div>
+            );
+          }
+
+          if (layer.kind === 'highlighter') {
+            const h = layer.el;
+            const leftPct = (h.start / dur) * 100;
+            const widthPct = (h.duration / dur) * 100;
+            const inF = Math.max(0, Math.min(1, h.sweepIn / Math.max(0.001, h.duration)));
+            const outF = Math.max(0, Math.min(1, h.sweepOut / Math.max(0.001, h.duration)));
+            return (
+              <div key={layer.id} className="relative h-8 rounded-md bg-[var(--color-bg-elevated)]">
+                <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                <div
+                  onPointerDown={(e) => onRangeDown(e, layer, 'move')}
+                  onPointerMove={onRangeMove}
+                  onPointerUp={onUp}
+                  className={`absolute top-0 bottom-0 rounded-md flex items-center px-2 cursor-grab active:cursor-grabbing touch-none overflow-hidden ${ring}`}
+                  style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: h.color, opacity: 0.85 }}
+                  title="Drag to move · drag the right edge for the duration"
+                >
+                  <div className="absolute inset-y-0 left-0 pointer-events-none bg-white/45" style={{ width: `${inF * 100}%` }} />
+                  <div className="absolute inset-y-0 right-0 pointer-events-none bg-black/30" style={{ width: `${outF * 100}%` }} />
+                  <span className="relative text-[10px] font-medium text-black/80 whitespace-nowrap truncate pointer-events-none">🖍️ {layer.name}</span>
+                  <div onPointerDown={(e) => onRangeDown(e, layer, 'end')} onPointerMove={onRangeMove} onPointerUp={onUp} className="absolute right-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-md touch-none z-20" />
+                </div>
+              </div>
+            );
+          }
+
+          if (layer.kind === 'dramatic') {
+            const w = layer.el;
+            const leftPct = (w.start / dur) * 100;
+            const widthPct = (w.duration / dur) * 100;
+            const inF = Math.max(0, Math.min(1, w.fadeIn / Math.max(0.001, w.duration)));
+            const outF = Math.max(0, Math.min(1, w.fadeOut / Math.max(0.001, w.duration)));
+            const bg = w.mode === 'inverse' ? '#6b7280' : w.mode === 'reflection' ? '#c084fc' : '#a3bffa';
+            const glyph = w.mode === 'inverse' ? '◱' : w.mode === 'reflection' ? '🔃' : '▤';
+            const label = (w.text || 'word').toUpperCase();
+            return (
+              <div key={layer.id} className="relative h-8 rounded-md bg-[var(--color-bg-elevated)]">
+                <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                <div
+                  onPointerDown={(e) => onRangeDown(e, layer, 'move')}
+                  onPointerMove={onRangeMove}
+                  onPointerUp={onUp}
+                  className={`absolute top-0 bottom-0 rounded-md flex items-center px-2 cursor-grab active:cursor-grabbing touch-none overflow-hidden ${ring}`}
+                  style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: bg }}
+                  title="Drag to move (clamped between neighbours) · drag the right edge for the hold"
+                >
+                  <div className="absolute inset-y-0 left-0 pointer-events-none bg-white/40" style={{ width: `${inF * 100}%` }} />
+                  <div className="absolute inset-y-0 right-0 pointer-events-none bg-black/25" style={{ width: `${outF * 100}%` }} />
+                  <span className="relative text-[10px] font-bold text-black/75 whitespace-nowrap truncate pointer-events-none">{glyph} {label}</span>
+                  <div onPointerDown={(e) => onRangeDown(e, layer, 'end')} onPointerMove={onRangeMove} onPointerUp={onUp} className="absolute right-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-md touch-none z-20" />
                 </div>
               </div>
             );
