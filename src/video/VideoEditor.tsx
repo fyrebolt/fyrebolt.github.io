@@ -34,6 +34,7 @@ import type {
   Project,
   SketchLayer,
   Span,
+  StickerLayer,
   TimeMachineLayer,
   ZoomLayer,
 } from './project/types';
@@ -52,7 +53,9 @@ import {
   createSketchLayer,
   createHighlighterLayer,
   createDramaticLayer,
+  createStickerLayer,
 } from './project/types';
+import type { StickerElement } from './sticker/types';
 import { compileWarp } from './project/timeMap';
 import { Panel, Field, ChoiceGrid } from './project/ui';
 import { RATIO_LABELS, FILL_MODES } from './project/constants';
@@ -64,6 +67,8 @@ import SketchPanel from './project/panels/SketchPanel';
 import type { Pen } from './project/panels/SketchPanel';
 import HighlighterPanel from './project/panels/HighlighterPanel';
 import DramaticPanel from './project/panels/DramaticPanel';
+import StickerPanel from './project/panels/StickerPanel';
+import StickerCropEditor from './sticker/StickerCropEditor';
 import { useHistory } from './project/useHistory';
 import type { HistoryApi } from './project/useHistory';
 
@@ -98,9 +103,12 @@ interface EditorSnapshot {
 }
 
 /** Layers that carry a free on-canvas placement (box or anchored text). */
-type PlaceableLayer = SketchLayer | HighlighterLayer | CaptionLayer | DramaticLayer;
+type PlaceableLayer = SketchLayer | HighlighterLayer | CaptionLayer | DramaticLayer | StickerLayer;
 function isPlaceable(l: Layer | null | undefined): l is PlaceableLayer {
-  return !!l && (l.kind === 'sketch' || l.kind === 'highlighter' || l.kind === 'caption' || l.kind === 'dramatic');
+  return (
+    !!l &&
+    (l.kind === 'sketch' || l.kind === 'highlighter' || l.kind === 'caption' || l.kind === 'dramatic' || l.kind === 'sticker')
+  );
 }
 function rotationOf(l: PlaceableLayer): number {
   return l.el.rotation;
@@ -136,7 +144,9 @@ type AddKind =
   | 'highlighter'
   | 'dramatic-normal'
   | 'dramatic-inverse'
-  | 'dramatic-reflection';
+  | 'dramatic-reflection'
+  | 'sticker-image'
+  | 'sticker-video';
 
 const ADD_ITEMS: { kind: AddKind; label: string; icon: string }[] = [
   { kind: 'banner', label: 'Entrance Banner', icon: '⚔️' },
@@ -146,6 +156,8 @@ const ADD_ITEMS: { kind: AddKind; label: string; icon: string }[] = [
   { kind: 'timemachine', label: 'Time Machine', icon: '⏱️' },
   { kind: 'sketch', label: 'Sketch', icon: '✏️' },
   { kind: 'highlighter', label: 'Highlighter', icon: '🖍️' },
+  { kind: 'sticker-image', label: 'Image sticker', icon: '🖼️' },
+  { kind: 'sticker-video', label: 'Video sticker', icon: '🎬' },
   { kind: 'dramatic-normal', label: 'Dramatic word', icon: '🔠' },
   { kind: 'dramatic-inverse', label: 'Inverse word', icon: '◱' },
   { kind: 'dramatic-reflection', label: 'Reflection word', icon: '🔃' },
@@ -215,6 +227,13 @@ export default function VideoEditor() {
   const compRef = useRef<Compositor | null>(null);
   const projectRef = useRef<Project>({ layers: [], ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration });
   const objectUrls = useRef<string[]>([]);
+  /** Decoded sticker media (image / video), kept out of the project so layers stay plain data. */
+  const stickerMedia = useRef<Map<string, HTMLImageElement | HTMLVideoElement>>(new Map());
+  /** Hidden file inputs used to pick sticker media on demand. */
+  const stickerImageInput = useRef<HTMLInputElement>(null);
+  const stickerVideoInput = useRef<HTMLInputElement>(null);
+  /** Sticker layer currently in crop mode (double-clicked), else null. */
+  const [croppingId, setCroppingId] = useState<string | null>(null);
   /** Size/rotation reference captured when a text-layer transform grab starts. */
   const textGrab = useRef<{ id: string; sizeScale: number; w: number } | null>(null);
   /** Group-move gesture: ids + each layer's origin (x,y) captured at grab. */
@@ -265,7 +284,12 @@ export default function VideoEditor() {
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    const c = new Compositor(canvasRef.current, () => projectRef.current, (sec) => setCurrentSec(sec));
+    const c = new Compositor(
+      canvasRef.current,
+      () => projectRef.current,
+      (sec) => setCurrentSec(sec),
+      (srcId) => stickerMedia.current.get(srcId),
+    );
     compRef.current = c;
     return () => {
       c.destroy();
@@ -287,6 +311,12 @@ export default function VideoEditor() {
         !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
       const mod = e.metaKey || e.ctrlKey;
 
+      if (e.key === 'Escape' && croppingId) {
+        e.preventDefault();
+        setCroppingId(null);
+        return;
+      }
+
       if (mod && (e.key === 'z' || e.key === 'Z')) {
         if (editable) return; // let native text-undo win inside form fields
         e.preventDefault();
@@ -307,7 +337,7 @@ export default function VideoEditor() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, selectedLayerId, confirmDeleteId]);
+  }, [undo, redo, selectedLayerId, confirmDeleteId, croppingId]);
 
   const setEditingZoomBoth = (v: boolean) => {
     editingRef.current = v;
@@ -338,6 +368,7 @@ export default function VideoEditor() {
     setSelectedAttachmentId(null);
     setGroupIds((g) => g.filter((id) => s.layers.some((l) => l.id === id)));
     setSelectedLayerId((cur) => (cur && s.layers.some((l) => l.id === cur) ? cur : null));
+    setCroppingId((cur) => (cur && s.layers.some((l) => l.id === cur) ? cur : null));
   }, []);
   const snapshotEqual = useCallback(
     (a: EditorSnapshot, b: EditorSnapshot) =>
@@ -423,6 +454,15 @@ export default function VideoEditor() {
     (kind: AddKind) => {
       setAddOpen(false);
       if (!mediaKind) return;
+      // Stickers need media first — open the picker; the layer is created on select.
+      if (kind === 'sticker-image') {
+        stickerImageInput.current?.click();
+        return;
+      }
+      if (kind === 'sticker-video') {
+        stickerVideoInput.current?.click();
+        return;
+      }
       sealDiscrete();
       const z = nextZ(projectRef.current);
       const outSize = srcDims.w > 0 ? outputSizeFor(ratio, srcDims.w, srcDims.h) : outputSizeFor(ratio, 1080, 1920);
@@ -514,6 +554,80 @@ export default function VideoEditor() {
     [mediaKind, duration, ratio, srcDims, timelineDuration, staggerStart, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime, sealDiscrete],
   );
 
+  /** Fit a source-aspect box into ~40% of the frame, centred (out-normalised). */
+  const fitStickerBox = useCallback(
+    (srcW: number, srcH: number) => {
+      const outSize = srcDims.w > 0 ? outputSizeFor(ratio, srcDims.w, srcDims.h) : outputSizeFor(ratio, 1080, 1920);
+      const aspect = srcH > 0 ? srcW / srcH : 1;
+      let wPx = 0.4 * outSize.w;
+      let hPx = wPx / aspect;
+      if (hPx > 0.4 * outSize.h) {
+        hPx = 0.4 * outSize.h;
+        wPx = hPx * aspect;
+      }
+      const w = wPx / outSize.w;
+      const h = hPx / outSize.h;
+      return { x: 0.5 - w / 2, y: 0.5 - h / 2, w, h };
+    },
+    [ratio, srcDims.w, srcDims.h],
+  );
+
+  /** Register decoded sticker media and add its layer, placed + timed. */
+  const addStickerLayer = useCallback(
+    (source: 'image' | 'video', srcId: string, srcW: number, srcH: number, clipDur: number) => {
+      sealDiscrete();
+      const z = nextZ(projectRef.current);
+      const layer = createStickerLayer(z, { source, srcId, srcW, srcH, clipDur });
+      const box = fitStickerBox(srcW, srcH);
+      layer.el.x = box.x;
+      layer.el.y = box.y;
+      layer.el.w = box.w;
+      layer.el.h = box.h;
+      layer.el.start = staggerStart();
+      setLayers((ls) => [...ls, layer]);
+      clearZoomEdit();
+      setSelectedLayerId(layer.id);
+      setSelectedAttachmentId(null);
+      seekTo(layer.el.start + Math.min(0.5, layer.el.hold / 2));
+    },
+    [sealDiscrete, fitStickerBox, staggerStart, clearZoomEdit, seekTo],
+  );
+
+  /** Decode a picked file into an image / video element, then add the sticker. */
+  const onStickerFile = useCallback(
+    (file: File, source: 'image' | 'video') => {
+      const url = URL.createObjectURL(file);
+      objectUrls.current.push(url);
+      const srcId = `stkmedia-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      if (source === 'image') {
+        const img = new Image();
+        img.onload = () => {
+          stickerMedia.current.set(srcId, img);
+          addStickerLayer('image', srcId, img.naturalWidth, img.naturalHeight, 0);
+        };
+        img.onerror = () => setStatus('Could not load that image.');
+        img.src = url;
+      } else {
+        const v = document.createElement('video');
+        v.src = url;
+        v.muted = true;
+        v.loop = true;
+        v.playsInline = true;
+        v.preload = 'auto';
+        v.addEventListener('loadedmetadata', () => {
+          stickerMedia.current.set(srcId, v);
+          addStickerLayer('video', srcId, v.videoWidth, v.videoHeight, v.duration || 0);
+        });
+        v.addEventListener('error', () => setStatus('Could not load that video.'));
+      }
+    },
+    [addStickerLayer],
+  );
+
+  const updateStickerEl = useCallback((id: string, patch: Partial<StickerElement>) => {
+    setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'sticker' ? { ...l, el: { ...l.el, ...patch } } : l)));
+  }, []);
+
   const updateCaptionEl = useCallback((layerId: string, patch: Partial<Caption> | Partial<TypewriterCaption>) => {
     setLayers((ls) =>
       ls.map((l) => (l.id === layerId && l.kind === 'caption' ? { ...l, el: { ...l.el, ...patch } as CaptionEl } : l)),
@@ -565,6 +679,7 @@ export default function VideoEditor() {
       setLayers((ls) => ls.filter((l) => l.id !== id));
       setSelectedLayerId((s) => (s === id ? null : s));
       setSelectedAttachmentId(null);
+      setCroppingId((c) => (c === id ? null : c));
       clearZoomEdit();
     },
     [clearZoomEdit, sealDiscrete],
@@ -807,6 +922,7 @@ export default function VideoEditor() {
       if (!layer) return;
       setSelectedLayerId(id);
       setSelectedAttachmentId(null);
+      setCroppingId((c) => (c === id ? c : null)); // leave crop mode when switching layers
       if (layer.kind === 'zoom') {
         const first = layer.keyframes[0];
         if (first) selectZoomKf(id, first.id);
@@ -829,6 +945,7 @@ export default function VideoEditor() {
       else if (layer.kind === 'sketch') seekTo(layer.el.start + layer.el.animationDur + Math.min(0.3, layer.el.freezeDur / 2));
       else if (layer.kind === 'highlighter') seekTo(layer.el.start + Math.min(0.5, layer.el.duration / 2));
       else if (layer.kind === 'dramatic') seekTo(layer.el.start + Math.min(0.5, layer.el.duration / 2));
+      else if (layer.kind === 'sticker') seekTo(layer.el.start + Math.min(0.5, layer.el.hold / 2));
     },
     [layers, selectZoomKf, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime, timelineDuration],
   );
@@ -869,6 +986,7 @@ export default function VideoEditor() {
     (layer: PlaceableLayer, t: Transform) => {
       if (layer.kind === 'sketch') updateSketchEl(layer.id, { x: t.x, y: t.y, w: t.w, h: t.h, rotation: t.rotation });
       else if (layer.kind === 'highlighter') updateHighlighterEl(layer.id, { x: t.x, y: t.y, w: t.w, h: t.h, rotation: t.rotation });
+      else if (layer.kind === 'sticker') updateStickerEl(layer.id, { x: t.x, y: t.y, w: t.w, h: t.h, rotation: t.rotation });
       else {
         // caption / dramatic: box centre → anchor; box width → uniform font scale.
         const g = textGrab.current;
@@ -879,7 +997,26 @@ export default function VideoEditor() {
         else updateDramaticEl(layer.id, patch);
       }
     },
-    [updateSketchEl, updateHighlighterEl, updateCaptionEl, updateDramaticEl],
+    [updateSketchEl, updateHighlighterEl, updateStickerEl, updateCaptionEl, updateDramaticEl],
+  );
+
+  /** Double-click a sticker on the canvas to toggle crop mode for it. */
+  const onCanvasDoubleClick = useCallback(
+    (e: { clientX: number; clientY: number }) => {
+      if (editingRef.current) return;
+      const c = compRef.current;
+      if (!c) return;
+      const { nx, ny } = normFromPointer(e.clientX, e.clientY);
+      const hit = c.hitTestDraggable(nx, ny);
+      const target = hit ?? (selectedLayer?.kind === 'sticker' ? selectedLayer.id : null);
+      if (!target) return;
+      const layer = layers.find((l) => l.id === target);
+      if (!layer || layer.kind !== 'sticker') return;
+      setSelectedLayerId(target);
+      setSelectedAttachmentId(null);
+      setCroppingId((cur) => (cur === target ? null : target));
+    },
+    [normFromPointer, layers, selectedLayer],
   );
 
   // ---- export ----
@@ -1159,6 +1296,30 @@ export default function VideoEditor() {
                 />
               </label>
 
+              {/* Hidden pickers for sticker media (triggered from the + menu). */}
+              <input
+                ref={stickerImageInput}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onStickerFile(f, 'image');
+                  e.target.value = '';
+                }}
+              />
+              <input
+                ref={stickerVideoInput}
+                type="file"
+                accept="video/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onStickerFile(f, 'video');
+                  e.target.value = '';
+                }}
+              />
+
               <div className="glass-card p-3">
                 <div ref={wrapRef} className="relative mx-auto max-w-[420px]">
                   <canvas
@@ -1166,6 +1327,7 @@ export default function VideoEditor() {
                     onPointerDown={onCanvasPointerDown}
                     onPointerMove={onCanvasPointerMove}
                     onPointerUp={onCanvasPointerUp}
+                    onDoubleClick={onCanvasDoubleClick}
                     className="w-full h-auto rounded-lg bg-black block touch-none"
                     width={1080}
                     height={1920}
@@ -1192,6 +1354,19 @@ export default function VideoEditor() {
                     />
                   )}
 
+                  {/* sticker crop editor (double-click) — replaces the transform widget */}
+                  {croppingId &&
+                    mediaKind &&
+                    srcDims.w > 0 &&
+                    selectedLayer?.kind === 'sticker' &&
+                    selectedLayer.id === croppingId && (
+                      <StickerCropEditor
+                        el={selectedLayer.el}
+                        media={stickerMedia.current.get(selectedLayer.el.srcId)}
+                        onChange={(patch) => updateStickerEl(selectedLayer.id, patch)}
+                      />
+                    )}
+
                   {/* unified transform widget for the single selected placeable layer */}
                   {!editingZoom &&
                     !isGroup &&
@@ -1199,6 +1374,7 @@ export default function VideoEditor() {
                     srcDims.w > 0 &&
                     isPlaceable(selectedLayer) &&
                     selBox &&
+                    !(selectedLayer.kind === 'sticker' && selectedLayer.id === croppingId) &&
                     !(selectedLayer.kind === 'sketch' && selectedLayer.el.strokes.length === 0) &&
                     (() => {
                       const sel: PlaceableLayer = selectedLayer;
@@ -1356,6 +1532,7 @@ export default function VideoEditor() {
                     onEditSketch={updateSketchEl}
                     onEditHighlighter={updateHighlighterEl}
                     onEditDramatic={updateDramaticEl}
+                    onEditSticker={updateStickerEl}
                   />
                 )}
 
@@ -1412,6 +1589,10 @@ export default function VideoEditor() {
                               ? '⏱️'
                               : l.kind === 'sketch'
                                 ? '✏️'
+                                : l.kind === 'sticker'
+                                  ? l.el.source === 'video'
+                                    ? '🎬'
+                                    : '🖼️'
                                 : l.kind === 'highlighter'
                                   ? '🖍️'
                                   : l.kind === 'dramatic'
@@ -1462,6 +1643,10 @@ export default function VideoEditor() {
                           ? 'Time Machine'
                         : selectedLayer.kind === 'sketch'
                           ? 'Sketch'
+                          : selectedLayer.kind === 'sticker'
+                            ? selectedLayer.el.source === 'video'
+                              ? 'Video sticker'
+                              : 'Image sticker'
                           : selectedLayer.kind === 'highlighter'
                             ? 'Highlighter'
                             : selectedLayer.kind === 'dramatic'
@@ -1550,6 +1735,16 @@ export default function VideoEditor() {
                       layer={selectedLayer as DramaticLayer}
                       duration={timelineDuration}
                       onEdit={(patch) => updateDramaticEl(selectedLayer.id, patch)}
+                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                    />
+                  )}
+                  {selectedLayer.kind === 'sticker' && (
+                    <StickerPanel
+                      layer={selectedLayer as StickerLayer}
+                      duration={timelineDuration}
+                      cropping={croppingId === selectedLayer.id}
+                      onEdit={(patch) => updateStickerEl(selectedLayer.id, patch)}
+                      onToggleCrop={() => setCroppingId((c) => (c === selectedLayer.id ? null : selectedLayer.id))}
                       onRemove={() => setConfirmDeleteId(selectedLayer.id)}
                     />
                   )}
