@@ -21,7 +21,7 @@ function scratchCtx(): CanvasRenderingContext2D | null {
 
 /** Placement box (output-normalised, top-left + size) of any placeable layer. */
 export function measurePlaceableBox(layer: Layer, project: Project, out: OutputSize, timeSec: number): Box | null {
-  if (layer.kind === 'sketch' || layer.kind === 'highlighter') {
+  if (layer.kind === 'sketch' || layer.kind === 'highlighter' || layer.kind === 'sticker') {
     const el = layer.el;
     return { x: el.x, y: el.y, w: el.w, h: el.h };
   }

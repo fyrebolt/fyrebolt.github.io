@@ -22,6 +22,7 @@ import type { SketchElement } from '../sketch/types';
 import type { Highlighter } from '../highlight/types';
 import type { DramaticWord } from '../dramatic/types';
 import { elementEnd as dramaticEnd } from '../dramatic/types';
+import type { StickerElement } from '../sticker/types';
 import type {
   BannerLayer,
   CaptionLayer,
@@ -29,6 +30,7 @@ import type {
   HighlighterLayer,
   Layer,
   SketchLayer,
+  StickerLayer,
   TimeMachineLayer,
   ZoomLayer,
 } from './types';
@@ -56,6 +58,7 @@ function speedTag(speed: number): string {
 const BANNER_COLOR = '#f0883e';
 const SKETCH_COLOR = '#c4a7fb';
 const SKETCH_ANIM = 'rgba(196,167,251,0.45)';
+const STICKER_COLOR = '#fbbf77';
 
 const ROW_COLORS = ['#8be9c7', '#74b9ff', '#ffeaa7', '#ff9ff3', '#ffa07a', '#81ecec'];
 
@@ -91,6 +94,7 @@ interface Props {
   onEditSketch: (layerId: string, patch: Partial<SketchElement>) => void;
   onEditHighlighter: (layerId: string, patch: Partial<Highlighter>) => void;
   onEditDramatic: (layerId: string, patch: Partial<DramaticWord>) => void;
+  onEditSticker: (layerId: string, patch: Partial<StickerElement>) => void;
 }
 
 type CaptionDragMode = 'start' | 'end' | 'body' | 'div1' | 'div2';
@@ -129,10 +133,10 @@ interface SpeedDrag {
   startX: number;
   orig: SpeedKeyframe;
 }
-/** Generic overlay-range drag (sketch / highlighter / dramatic). */
+/** Generic overlay-range drag (sketch / highlighter / dramatic / sticker). */
 interface RangeDrag {
   layerId: string;
-  kind: 'sketch' | 'highlighter' | 'dramatic';
+  kind: 'sketch' | 'highlighter' | 'dramatic' | 'sticker';
   mode: 'move' | 'end';
   startX: number;
   origStart: number;
@@ -165,6 +169,7 @@ export default function ProjectTimeline({
   onEditSketch,
   onEditHighlighter,
   onEditDramatic,
+  onEditSticker,
 }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
   const capDrag = useRef<CaptionDrag | null>(null);
@@ -365,7 +370,7 @@ export default function ProjectTimeline({
 
   // ---- generic overlay-range drag (sketch / highlighter / dramatic) ----
   const onRangeDown = useCallback(
-    (e: ReactPointerEvent, layer: SketchLayer | HighlighterLayer | DramaticLayer, mode: 'move' | 'end') => {
+    (e: ReactPointerEvent, layer: SketchLayer | HighlighterLayer | DramaticLayer | StickerLayer, mode: 'move' | 'end') => {
       e.stopPropagation();
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -373,9 +378,10 @@ export default function ProjectTimeline({
         /* ignore */
       }
       onSelectLayer(layer.id);
-      // Sketch resizes its trailing FREEZE; highlighter/dramatic resize DURATION.
+      // Sketch resizes its trailing FREEZE; sticker resizes HOLD; others DURATION.
       const origStart = layer.el.start;
-      const origTrail = layer.kind === 'sketch' ? layer.el.freezeDur : layer.el.duration;
+      const origTrail =
+        layer.kind === 'sketch' ? layer.el.freezeDur : layer.kind === 'sticker' ? layer.el.hold : layer.el.duration;
       const head = layer.kind === 'sketch' ? layer.el.animationDur : 0;
       // Dramatic words never overlap: clamp between the nearest neighbours.
       let minStart = 0;
@@ -417,16 +423,18 @@ export default function ProjectTimeline({
         const start = clamp(d.minStart, d.maxStart, d.origStart + delta);
         if (d.kind === 'sketch') onEditSketch(d.layerId, { start });
         else if (d.kind === 'highlighter') onEditHighlighter(d.layerId, { start });
+        else if (d.kind === 'sticker') onEditSticker(d.layerId, { start });
         else onEditDramatic(d.layerId, { start });
       } else {
-        // Resize the trailing span: sketch → freezeDur, highlighter/dramatic → duration.
+        // Resize the trailing span: sketch → freezeDur, sticker → hold, others → duration.
         const trail = clamp(MIN_DURATION, d.maxTrail, d.origTrail + delta);
         if (d.kind === 'sketch') onEditSketch(d.layerId, { freezeDur: trail });
         else if (d.kind === 'highlighter') onEditHighlighter(d.layerId, { duration: trail });
+        else if (d.kind === 'sticker') onEditSticker(d.layerId, { hold: trail });
         else onEditDramatic(d.layerId, { duration: trail });
       }
     },
-    [dur, fracFromClientX, onEditSketch, onEditHighlighter, onEditDramatic],
+    [dur, fracFromClientX, onEditSketch, onEditHighlighter, onEditDramatic, onEditSticker],
   );
 
   const onUp = useCallback((e: ReactPointerEvent) => {
@@ -694,6 +702,29 @@ export default function ProjectTimeline({
                   <div className="absolute inset-y-0 left-0 pointer-events-none bg-white/40" style={{ width: `${inF * 100}%` }} />
                   <div className="absolute inset-y-0 right-0 pointer-events-none bg-black/25" style={{ width: `${outF * 100}%` }} />
                   <span className="relative text-[10px] font-bold text-black/75 whitespace-nowrap truncate pointer-events-none">{glyph} {label}</span>
+                  <div onPointerDown={(e) => onRangeDown(e, layer, 'end')} onPointerMove={onRangeMove} onPointerUp={onUp} className="absolute right-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-md touch-none z-20" />
+                </div>
+              </div>
+            );
+          }
+
+          if (layer.kind === 'sticker') {
+            const s = layer.el;
+            const leftPct = (s.start / dur) * 100;
+            const widthPct = (s.hold / dur) * 100;
+            const glyph = s.source === 'video' ? '🎬' : '🖼️';
+            return (
+              <div key={layer.id} className="relative h-8 rounded-md bg-[var(--color-bg-elevated)]">
+                <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                <div
+                  onPointerDown={(e) => onRangeDown(e, layer, 'move')}
+                  onPointerMove={onRangeMove}
+                  onPointerUp={onUp}
+                  className={`absolute top-0 bottom-0 rounded-md flex items-center px-2 cursor-grab active:cursor-grabbing touch-none overflow-hidden ${ring}`}
+                  style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: STICKER_COLOR }}
+                  title="Drag to move · drag the right edge for the hold time"
+                >
+                  <span className="relative text-[10px] font-medium text-black/80 whitespace-nowrap truncate pointer-events-none">{glyph} {layer.name}</span>
                   <div onPointerDown={(e) => onRangeDown(e, layer, 'end')} onPointerMove={onRangeMove} onPointerUp={onUp} className="absolute right-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-md touch-none z-20" />
                 </div>
               </div>
