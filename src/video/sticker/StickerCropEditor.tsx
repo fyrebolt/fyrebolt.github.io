@@ -149,7 +149,7 @@ export default function StickerCropEditor({ el, media, onChange }: Props) {
   const srcUrl = media instanceof HTMLImageElement ? media.src : media?.currentSrc || (media as HTMLVideoElement | undefined)?.src;
 
   return (
-    <div ref={overlayRef} onPointerMove={move} onPointerUp={end} className="absolute inset-0 z-30 touch-none">
+    <div ref={overlayRef} onPointerMove={move} onPointerUp={end} className="absolute inset-0 z-30 touch-none overflow-hidden rounded-lg">
       {/* pinned full source (context outside the crop); outside is dimmed by the
           crop box's spotlight shadow below */}
       <div
