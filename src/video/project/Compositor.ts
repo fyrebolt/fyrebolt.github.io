@@ -1,12 +1,21 @@
-// ===== Unified compositor: one clock, one audio graph, one export =====
+// ===== Unified compositor: one clock, a stitched clip sequence, one export =====
 //
 // Replaces the per-tool BannerPlayer / CaptionsPlayer / ZoomPlayer. Each frame it
 //   1. resolves the OUTPUT time (freeze-aware clock),
-//   2. draws the BASE frame — a zoom crop if a zoom layer exists, else the plain
-//      aspect-composited source,
-//   3. draws every OVERLAY layer in z-order (banner, captions, …) on top,
-//   4. fires each layer's SFX.
+//   2. maps it through the time-warp to a BASE-sequence time, then resolves WHICH
+//      clip is showing and the SOURCE time inside that clip (see project/clips.ts),
+//   3. draws the BASE frame — a zoom crop if a zoom layer exists, else the plain
+//      aspect-composited active clip,
+//   4. draws every OVERLAY layer in z-order (banner, captions, …) on top,
+//   5. fires each layer's SFX.
 // Preview playback, scrubbing, zoom-rect editing, and MP4 export all share this.
+//
+// The base sequence is the ONLY thing that knows about multiple clips. Overlays
+// and the warp operate in OUTPUT / base time exactly as in the single-source
+// editor, so a one-clip project is bit-for-bit the old behaviour. Clip boundaries
+// are hard CUTS: the active clip's <video> plays / is steered, every other clip's
+// <video> is paused (and, once the export audio graph exists, gain-muted), so the
+// audio hard-cuts at each boundary. Crossfade / wipe transitions are a follow-up.
 
 import {
   drawSource,
@@ -37,6 +46,8 @@ import { elementEnd as dramaticEnd } from '../dramatic/types';
 import { elementEnd as stickerEnd } from '../sticker/types';
 import type { Project, CaptionLayer } from './types';
 import { bannerLayer, zoomLayer, timeMachineLayer, overlayLayers, layerSpan } from './types';
+import type { VideoClip, BaseHit } from './clips';
+import { baseDuration, resolveBase, hasVideoClip } from './clips';
 
 /** Seconds between pencil-on-paper grains while a sketch animates. */
 const PENCIL_INTERVAL = 0.06;
@@ -47,12 +58,8 @@ const FPS = 30;
 
 export type MediaKind = 'video' | 'image';
 
-export interface LoadedMedia {
-  kind: MediaKind;
-  video?: HTMLVideoElement;
-  image?: HTMLImageElement;
-  duration: number;
-}
+/** A decoded clip media element resolved from the registry. */
+export type ClipEl = HTMLVideoElement | HTMLImageElement;
 
 export interface CaptionBounds {
   left: number;
@@ -61,33 +68,38 @@ export interface CaptionBounds {
   height: number;
 }
 
+/** Per-video-clip audio nodes, built lazily for export (see ensureClipAudio). */
+interface ClipAudio {
+  node: MediaElementAudioSourceNode;
+  gain: GainNode;
+}
+
 export class Compositor {
   private ctx: CanvasRenderingContext2D;
   private out: OutputSize = { w: 2, h: 2 };
-  private media: LoadedMedia | null = null;
   private raf = 0;
   private recording = false;
   private editing = false; // zoom-rect edit view (full un-zoomed frame)
   private playing = false;
 
-  // clock — OUTPUT time is wall-clock driven; the <video> is steered to match.
+  // clock — OUTPUT time is wall-clock driven; the active clip <video> is steered to match.
   private playStartWall = 0;
   private playStartOutput = 0;
   private prevT = 0;
   /** Last resolved OUTPUT time — what a static redraw / hit-test uses while paused. */
   private pausedT = 0;
 
-  // cached compiled time-warp (rebuilt when the project reference changes)
+  // cached compiled time-warp (rebuilt when the project ref or base duration changes)
   private warpCache: TimeWarp | null = null;
   private warpProject: Project | null = null;
-  private warpClip = -1;
+  private warpBase = -1;
 
   // audio
   private audioCtx: AudioContext | null = null;
-  private srcNode: MediaElementAudioSourceNode | null = null;
-  private srcGain: GainNode | null = null; // muted during non-1x / frozen spans
   private streamDest: MediaStreamAudioDestinationNode | null = null;
   private sfx: SfxEngine | null = null;
+  /** One source+gain per VIDEO clip element (keyed by clip srcId), built for export. */
+  private clipAudio = new Map<string, ClipAudio>();
 
   // per-pass SFX edge tracking
   private firedEntrance = false;
@@ -100,17 +112,21 @@ export class Compositor {
   private canvas: HTMLCanvasElement;
   private getProject: () => Project;
   private onTime?: (outputSec: number) => void;
+  /** Resolve a clip's decoded media by registry id (kept outside the project). */
+  private getClipMedia: (srcId: string) => ClipEl | undefined;
   /** Resolve a sticker's decoded media by registry id (kept outside the project). */
   private getStickerMedia?: (srcId: string) => HTMLImageElement | HTMLVideoElement | undefined;
 
   constructor(
     canvas: HTMLCanvasElement,
     getProject: () => Project,
+    getClipMedia: (srcId: string) => ClipEl | undefined,
     onTime?: (outputSec: number) => void,
     getStickerMedia?: (srcId: string) => HTMLImageElement | HTMLVideoElement | undefined,
   ) {
     this.canvas = canvas;
     this.getProject = getProject;
+    this.getClipMedia = getClipMedia;
     this.onTime = onTime;
     this.getStickerMedia = getStickerMedia;
     const ctx = canvas.getContext('2d');
@@ -118,10 +134,47 @@ export class Compositor {
     this.ctx = ctx;
   }
 
-  attach(media: LoadedMedia): void {
+  // ---- clip sequence accessors ----
+
+  private clips(): VideoClip[] {
+    return this.getProject().clips;
+  }
+
+  private hasVideo(): boolean {
+    return hasVideoClip(this.clips());
+  }
+
+  /** Any clips loaded at all? */
+  get loaded(): boolean {
+    return this.clips().length > 0;
+  }
+
+  private firstClip(): VideoClip | null {
+    return this.clips()[0] ?? null;
+  }
+
+  private elOf(clip: VideoClip): ClipEl | undefined {
+    return this.getClipMedia(clip.srcId);
+  }
+
+  /** Resolve the clip + source time showing at OUTPUT time `outputT`. */
+  private hitAt(outputT: number): BaseHit | null {
+    return resolveBase(this.clips(), this.warp().sourceAt(outputT));
+  }
+
+  /** The active clip's decoded element at OUTPUT time `outputT`. */
+  private activeEl(outputT: number): ClipEl | null {
+    const hit = this.hitAt(outputT);
+    if (!hit) return null;
+    return this.elOf(hit.clip) ?? null;
+  }
+
+  /** Called by the editor after clips change: resize the canvas + first paint. */
+  attach(): void {
     this.stop();
-    this.media = media;
+    this.warpCache = null;
     this.syncOutputSize();
+    // Seed the active clip's frame if it's a video needing a seek, else draw.
     this.renderStatic();
   }
 
@@ -130,15 +183,14 @@ export class Compositor {
   }
 
   sourceDims(): { w: number; h: number } {
-    if (!this.media) return { w: 0, h: 0 };
-    if (this.media.video) return { w: this.media.video.videoWidth, h: this.media.video.videoHeight };
-    return { w: this.media.image!.naturalWidth, h: this.media.image!.naturalHeight };
+    const c = this.firstClip();
+    return c ? { w: c.w, h: c.h } : { w: 0, h: 0 };
   }
 
   private syncOutputSize(): void {
-    if (!this.media) return;
-    const { w: sw, h: sh } = this.sourceDims();
-    const size = outputSizeFor(this.getProject().ratio, sw, sh);
+    const c = this.firstClip();
+    if (!c) return;
+    const size = outputSizeFor(this.getProject().ratio, c.w, c.h);
     if (size.w !== this.out.w || size.h !== this.out.h) {
       this.out = size;
       this.canvas.width = size.w;
@@ -146,75 +198,107 @@ export class Compositor {
     }
   }
 
-  /** The compiled output→source time-warp for the current project (cached). */
+  /** The compiled output→base time-warp for the current project (cached). */
   private warp(): TimeWarp {
     const p = this.getProject();
-    const clip = this.media?.kind === 'video' ? this.media.duration : 0;
-    if (this.warpCache && this.warpProject === p && this.warpClip === clip) return this.warpCache;
-    this.warpCache = compileWarp(p, clip);
+    const video = this.hasVideo();
+    const base = baseDuration(p.clips);
+    if (this.warpCache && this.warpProject === p && this.warpBase === base) return this.warpCache;
+    this.warpCache = compileWarp(p, base, video);
     this.warpProject = p;
-    this.warpClip = clip;
+    this.warpBase = base;
     return this.warpCache;
   }
 
-  /** Total OUTPUT duration in seconds (clip warped by speed/freeze, or the image length). */
+  /** Total OUTPUT duration (base sequence warped by speed/freeze, or the image length). */
   totalSec(): number {
-    if (!this.media) return 0;
+    if (!this.loaded) return 0;
     const p = this.getProject();
-    if (this.media.kind === 'video') return Math.max(0.1, this.warp().totalOutput);
-    if (p.imageDuration && p.imageDuration > 0) return p.imageDuration;
+    if (this.hasVideo()) return Math.max(0.1, this.warp().totalOutput);
+    // Image-only sequence: base length, but never shorter than a placed overlay.
     const ends = p.layers.map((l) => layerSpan(l).end);
-    return Math.max(3, ...ends);
+    return Math.max(3, baseDuration(p.clips), ...ends);
   }
 
   // ---- clock ----
 
   /** Wall-clock OUTPUT time for the current frame. */
   private computeOutputT(): number {
-    if (!this.media || !this.playing) return this.pausedT;
+    if (!this.loaded || !this.playing) return this.pausedT;
     return this.playStartOutput + (performance.now() - this.playStartWall) / 1000;
   }
 
   /**
-   * Steer the <video> so its frame + rate match OUTPUT time `outputT`: pause on a
-   * freeze, otherwise play at the warp's instantaneous speed, correcting drift.
-   * Original audio is muted whenever the speed is not ~1 (or frozen).
+   * Steer every VIDEO clip so the ACTIVE one's frame + rate match OUTPUT time
+   * `outputT` (pause on a freeze, else play at the warp's instantaneous speed,
+   * correcting drift), pre-roll the NEXT clip to its in-point, and pause all
+   * others. Original audio (when the export graph exists) is gain-muted on any
+   * clip that isn't the audible active one, or whenever speed isn't ~1.
    */
-  private driveVideo(outputT: number): void {
-    const v = this.media?.video;
-    if (!v) return;
+  private driveClips(outputT: number, allowPlay: boolean): void {
+    const clips = this.clips();
+    if (clips.length === 0) return;
     const warp = this.warp();
-    const speed = warp.speedAt(outputT);
-    const frozen = warp.frozen(outputT);
-    const srcTarget = warp.sourceAt(outputT);
+    const hasVideo = this.hasVideo();
+    const speed = hasVideo ? warp.speedAt(outputT) : 1;
+    const frozen = hasVideo && warp.frozen(outputT);
+    const hit = resolveBase(clips, warp.sourceAt(outputT));
+    const activeIdx = hit ? hit.index : -1;
+    const nextIdx = activeIdx >= 0 && activeIdx + 1 < clips.length ? activeIdx + 1 : -1;
+    const when = this.audioCtx ? this.audioCtx.currentTime : 0;
 
-    if (frozen) {
-      if (!v.paused) v.pause();
-    } else {
-      const rate = Math.min(4, Math.max(0.0625, speed));
-      if (v.playbackRate !== rate) v.playbackRate = rate;
-      if (v.paused) void v.play().catch(() => undefined);
-      // Correct only large drift (post-freeze resume already lands on target).
-      if (Math.abs(v.currentTime - srcTarget) > 0.3) {
-        v.currentTime = Math.max(0, Math.min(srcTarget, this.media!.duration - 0.03));
+    for (let i = 0; i < clips.length; i++) {
+      const clip = clips[i];
+      if (clip.kind !== 'video') continue;
+      const v = this.elOf(clip);
+      if (!(v instanceof HTMLVideoElement)) continue;
+      const audio = this.clipAudio.get(clip.srcId);
+      const cap = Math.max(0, clip.srcDuration - 0.03);
+
+      if (i === activeIdx && hit) {
+        const target = Math.min(hit.sourceT, cap);
+        if (frozen || !allowPlay) {
+          if (!v.paused) v.pause();
+          if (Math.abs(v.currentTime - target) > 0.05) v.currentTime = Math.max(0, target);
+        } else {
+          const rate = Math.min(4, Math.max(0.0625, speed));
+          if (v.playbackRate !== rate) v.playbackRate = rate;
+          if (v.paused) void v.play().catch(() => undefined);
+          // Correct only large drift (a fresh clip start already lands on target).
+          if (Math.abs(v.currentTime - target) > 0.3) v.currentTime = Math.max(0, target);
+        }
+        if (audio && this.audioCtx) {
+          const mute = frozen || Math.abs(speed - 1) > 0.02;
+          audio.gain.gain.setTargetAtTime(mute ? 0 : 1, when, 0.01);
+        }
+      } else {
+        if (!v.paused) v.pause();
+        if (audio && this.audioCtx) audio.gain.gain.setTargetAtTime(0, when, 0.01);
+        // Pre-roll the upcoming clip to its trim in-point so the cut is instant.
+        if (i === nextIdx && Math.abs(v.currentTime - clip.in) > 0.1) {
+          v.currentTime = Math.max(0, Math.min(clip.in, cap));
+        }
       }
     }
+  }
 
-    if (this.srcGain && this.audioCtx) {
-      const mute = frozen || Math.abs(speed - 1) > 0.02;
-      // Short ramp so toggling in/out of an effect doesn't click.
-      this.srcGain.gain.setTargetAtTime(mute ? 0 : 1, this.audioCtx.currentTime, 0.01);
+  /** Pause every clip video (lifecycle stop / teardown). */
+  private pauseClipVideos(): void {
+    for (const clip of this.clips()) {
+      if (clip.kind !== 'video') continue;
+      const v = this.elOf(clip);
+      if (v instanceof HTMLVideoElement && !v.paused) v.pause();
     }
   }
 
   /**
    * A video sticker's local playback time (seconds into its own clip). It follows
-   * the main clip's WARPED progression — so it slows / freezes with Time Machine —
-   * and loops if its hold outlasts the clip. Over an image main clip (no warp),
-   * it advances on raw output time.
+   * the main sequence's WARPED base progression — so it slows / freezes with Time
+   * Machine — and loops if its hold outlasts its own clip. Over an image-only main
+   * sequence (no warp) it advances on raw output time.
    */
   private stickerLocalTime(el: { srcId: string; start: number; clipDur: number }, outputT: number): number {
-    const hasVideoMain = this.media?.kind === 'video';
+    const hasVideoMain = this.hasVideo();
     const warp = this.warp();
     const now = hasVideoMain ? warp.sourceAt(outputT) : outputT;
     const startSrc = hasVideoMain ? warp.sourceAt(el.start) : el.start;
@@ -231,7 +315,7 @@ export class Compositor {
    */
   private driveStickerVideos(outputT: number, allowPlay: boolean): void {
     if (!this.getStickerMedia) return;
-    const hasVideoMain = this.media?.kind === 'video';
+    const hasVideoMain = this.hasVideo();
     const warp = this.warp();
     const rate = hasVideoMain ? warp.speedAt(outputT) : 1;
     const frozen = hasVideoMain && warp.frozen(outputT);
@@ -285,13 +369,12 @@ export class Compositor {
 
   // ---- drawing ----
 
-  private currentSource(): HTMLVideoElement | HTMLImageElement {
-    return this.media!.video ?? this.media!.image!;
-  }
-
   private drawBase(outputT: number): void {
     const p = this.getProject();
-    const src = this.currentSource();
+    const hit = this.hitAt(outputT);
+    if (!hit) return;
+    const src = this.elOf(hit.clip);
+    if (!src) return;
     const zoom = zoomLayer(p);
     if (zoom && zoom.keyframes.length > 0) {
       drawZoomed(this.ctx, src, this.out, rectAt(outputT, zoom.keyframes));
@@ -309,7 +392,6 @@ export class Compositor {
     return fontByKey(el.fontKey);
   }
 
-  /** Draw one caption layer + its attachments, and fire its SFX. */
   /** Run `draw` with the context rotated by `rot` radians about (cx, cy) device px. */
   private withRotation(cx: number, cy: number, rot: number, draw: () => void): void {
     if (!rot) {
@@ -324,6 +406,7 @@ export class Compositor {
     this.ctx.restore();
   }
 
+  /** Draw one caption layer + its attachments, and fire its SFX. */
   private drawCaptionLayer(
     layer: CaptionLayer,
     outputT: number,
@@ -383,7 +466,7 @@ export class Compositor {
 
   /** Composite one output frame at output time `outputT`. */
   private drawFrameAt(outputT: number, fireSfx: boolean): void {
-    if (!this.media) return;
+    if (!this.loaded) return;
     this.syncOutputSize();
     const p = this.getProject();
 
@@ -481,11 +564,32 @@ export class Compositor {
     this.prevT = outputT;
   }
 
-  /** Draw the current frame without advancing (paused / after a seek). No SFX. */
+  /**
+   * Draw the current frame without advancing (paused / after an edit). No SFX.
+   * The active clip's <video> is seeked to the exact frame when it has drifted
+   * (e.g. after a reorder / trim changes which clip shows at the cursor), redrawing
+   * once the seek lands; other clips are paused.
+   */
   renderStatic(): void {
-    if (!this.media || this.editing) return;
-    this.driveStickerVideos(this.pausedT, false);
-    this.drawFrameAt(this.pausedT, false);
+    if (!this.loaded || this.editing) return;
+    const sec = this.pausedT;
+    this.driveStickerVideos(sec, false);
+    const hit = this.hitAt(sec);
+    const active = hit && hit.clip.kind === 'video' ? this.elOf(hit.clip) : null;
+    this.pauseClipVideos();
+    if (active instanceof HTMLVideoElement && hit) {
+      const cap = Math.max(0, hit.clip.srcDuration - 0.03);
+      const target = Math.max(0, Math.min(hit.sourceT, cap));
+      if (Math.abs(active.currentTime - target) > 0.02) {
+        const draw = () => {
+          active.removeEventListener('seeked', draw);
+          if (!this.playing) this.drawFrameAt(sec, false);
+        };
+        active.addEventListener('seeked', draw);
+        active.currentTime = target;
+      }
+    }
+    this.drawFrameAt(sec, false);
   }
 
   // ---- audio graph ----
@@ -510,23 +614,35 @@ export class Compositor {
     }
   }
 
-  private ensureAudio(): MediaStream | null {
-    if (!this.media?.video) return null;
+  /**
+   * Route every VIDEO clip element through its own source→gain into a shared
+   * stream destination (for the recorder) + the speakers. Each element can only
+   * be wrapped once, so nodes are cached by srcId. driveClips raises only the
+   * active, ~1× clip's gain, so the recorded audio hard-cuts at each boundary.
+   * Returns the recorder stream (with all clip audio), or null if none.
+   */
+  private ensureClipAudio(): MediaStream | null {
+    const clips = this.clips().filter((c) => c.kind === 'video');
+    if (clips.length === 0) return null;
     const ctx = this.ensureCtx();
-    if (!this.streamDest) {
-      this.srcNode = ctx.createMediaElementSource(this.media.video);
-      // A gain stage the clock drops to 0 during non-1x / frozen spans, so the
-      // pitch-shifted original audio never leaks into a slow-mo or freeze.
-      this.srcGain = ctx.createGain();
-      this.srcGain.gain.value = 1;
-      this.streamDest = ctx.createMediaStreamDestination();
-      // Audible during preview AND a continuous timeline for the recorder, so the
-      // frozen (paused-video) gap stays A/V-synced.
-      this.srcNode.connect(this.srcGain);
-      this.srcGain.connect(ctx.destination);
-      this.srcGain.connect(this.streamDest);
-      this.sfx?.output.connect(this.streamDest);
+    if (!this.streamDest) this.streamDest = ctx.createMediaStreamDestination();
+    for (const clip of clips) {
+      if (this.clipAudio.has(clip.srcId)) continue;
+      const v = this.elOf(clip);
+      if (!(v instanceof HTMLVideoElement)) continue;
+      try {
+        const node = ctx.createMediaElementSource(v);
+        const gain = ctx.createGain();
+        gain.gain.value = 0; // driveClips brings the active clip up
+        node.connect(gain);
+        gain.connect(ctx.destination);
+        gain.connect(this.streamDest);
+        this.clipAudio.set(clip.srcId, { node, gain });
+      } catch {
+        /* element already wrapped elsewhere — skip */
+      }
     }
+    if (this.sfx) this.sfx.output.connect(this.streamDest);
     return this.streamDest.stream ?? null;
   }
 
@@ -534,7 +650,7 @@ export class Compositor {
 
   /** Start (or resume) preview playback from OUTPUT second `fromSec` (default 0). */
   playPreview(fromSec = 0): void {
-    if (!this.media) return;
+    if (!this.loaded) return;
     this.stopLoop();
     this.recording = false;
     this.editing = false;
@@ -544,7 +660,7 @@ export class Compositor {
   }
 
   private startPlayback(fromSec = 0): void {
-    if (!this.media) return;
+    if (!this.loaded) return;
     this.firedEntrance = false;
     this.firedWhoosh.clear();
     this.lastFontIdx.clear();
@@ -570,21 +686,12 @@ export class Compositor {
     const tm = timeMachineLayer(p);
     if (tm) for (const kf of tm.keyframes) if (start >= kf.start) this.firedWhoosh.add(kf.id);
 
-    if (this.media.kind === 'video' && this.media.video) {
-      const v = this.media.video;
-      const warp = this.warp();
-      const cap = Math.max(0, this.media.duration - 0.03);
-      v.pause();
-      v.currentTime = Math.min(warp.sourceAt(start), cap);
-      if (!warp.frozen(start)) {
-        v.playbackRate = Math.min(4, Math.max(0.0625, warp.speedAt(start)));
-        void v.play().catch(() => undefined);
-      }
-    }
+    // Steer clips to the start frame (pauses non-active, plays the active one).
+    this.driveClips(start, true);
   }
 
   private loop = (): void => {
-    if (!this.media) return;
+    if (!this.loaded) return;
     const outputT = this.computeOutputT();
     this.pausedT = outputT;
 
@@ -595,7 +702,7 @@ export class Compositor {
         return;
       }
       this.startPlayback();
-      if (this.media.kind === 'video') this.driveVideo(0);
+      this.driveClips(0, true);
       this.driveStickerVideos(0, true);
       this.drawFrameAt(0, false);
       this.onTime?.(0);
@@ -603,7 +710,7 @@ export class Compositor {
       return;
     }
 
-    if (this.media.kind === 'video') this.driveVideo(outputT);
+    this.driveClips(outputT, true);
     this.driveStickerVideos(outputT, true);
     this.drawFrameAt(outputT, true);
     this.onTime?.(outputT);
@@ -612,23 +719,26 @@ export class Compositor {
 
   /** Seek to output time `sec` and draw the composited (not editing) frame. */
   scrubTo(sec: number): void {
-    if (!this.media) return;
+    if (!this.loaded) return;
     this.stopLoop();
     this.playing = false;
     this.editing = false;
     this.prevT = sec;
     this.pausedT = sec;
     this.driveStickerVideos(sec, false);
-    const srcT = this.warp().sourceAt(sec);
-    if (this.media.kind === 'video' && this.media.video) {
-      const v = this.media.video;
-      v.pause();
+
+    const hit = this.hitAt(sec);
+    const activeVideo = hit && hit.clip.kind === 'video' ? this.elOf(hit.clip) : null;
+    // Pause every clip; only the active one needs a seek to show its frame.
+    this.pauseClipVideos();
+    if (activeVideo instanceof HTMLVideoElement && hit) {
+      const cap = Math.max(0, hit.clip.srcDuration - 0.03);
       const draw = () => {
         this.drawFrameAt(sec, false);
-        v.removeEventListener('seeked', draw);
+        activeVideo.removeEventListener('seeked', draw);
       };
-      v.addEventListener('seeked', draw);
-      v.currentTime = Math.max(0, Math.min(srcT, this.media.duration - 0.03));
+      activeVideo.addEventListener('seeked', draw);
+      activeVideo.currentTime = Math.max(0, Math.min(hit.sourceT, cap));
     } else {
       this.drawFrameAt(sec, false);
     }
@@ -637,33 +747,37 @@ export class Compositor {
   // ---- zoom-rect edit view (always the full, un-zoomed source frame) ----
 
   editZoomAt(outputT: number): void {
-    if (!this.media) return;
+    if (!this.loaded) return;
     this.stopLoop();
     this.playing = false;
     this.editing = true;
     this.pausedT = outputT;
-    const srcT = this.warp().sourceAt(outputT);
-    if (this.media.video) {
-      const v = this.media.video;
-      v.pause();
+    const hit = this.hitAt(outputT);
+    if (!hit) return;
+    const el = this.elOf(hit.clip);
+    if (!el) return;
+    if (el instanceof HTMLVideoElement) {
+      const cap = Math.max(0, hit.clip.srcDuration - 0.03);
+      this.pauseClipVideos();
       const draw = () => {
         this.syncOutputSize();
-        drawZoomed(this.ctx, v, this.out, FULL_RECT);
-        v.removeEventListener('seeked', draw);
+        drawZoomed(this.ctx, el, this.out, FULL_RECT);
+        el.removeEventListener('seeked', draw);
       };
-      v.addEventListener('seeked', draw);
-      v.currentTime = Math.max(0, Math.min(srcT, this.media.duration - 0.03));
+      el.addEventListener('seeked', draw);
+      el.currentTime = Math.max(0, Math.min(hit.sourceT, cap));
     } else {
       this.syncOutputSize();
-      drawZoomed(this.ctx, this.media.image!, this.out, FULL_RECT);
+      drawZoomed(this.ctx, el, this.out, FULL_RECT);
     }
   }
 
   redrawEditZoom(): void {
-    if (!this.media) return;
+    if (!this.loaded) return;
     this.editing = true;
     this.syncOutputSize();
-    drawZoomed(this.ctx, this.currentSource(), this.out, FULL_RECT);
+    const el = this.activeEl(this.pausedT);
+    if (el) drawZoomed(this.ctx, el, this.out, FULL_RECT);
   }
 
   exitEdit(): void {
@@ -675,7 +789,7 @@ export class Compositor {
 
   /** Top-most draggable overlay (any placeable kind) under a normalised point. */
   hitTestDraggable(nx: number, ny: number): string | null {
-    if (!this.media) return null;
+    if (!this.loaded) return null;
     const px = nx * this.out.w;
     const py = ny * this.out.h;
     const p = this.getProject();
@@ -706,7 +820,7 @@ export class Compositor {
   private boundsPx(
     layerId: string,
   ): { left: number; top: number; width: number; height: number; rotation: number; pad: number } | null {
-    if (!this.media) return null;
+    if (!this.loaded) return null;
     const p = this.getProject();
     const layer = p.layers.find((l) => l.id === layerId);
     if (!layer) return null;
@@ -735,7 +849,7 @@ export class Compositor {
   }
 
   boundsOfCaption(layerId: string): CaptionBounds | null {
-    if (!this.media) return null;
+    if (!this.loaded) return null;
     const p = this.getProject();
     const layer = p.layers.find((l) => l.id === layerId);
     if (!layer || layer.kind !== 'caption') return null;
@@ -757,22 +871,22 @@ export class Compositor {
   stop(): void {
     this.stopLoop();
     this.playing = false;
-    if (this.media?.video) this.media.video.pause();
+    this.pauseClipVideos();
     this.pauseStickerVideos();
   }
 
   // ---- export ----
 
   async record(onProgress?: (sec: number) => void): Promise<Blob> {
-    if (!this.media) throw new Error('No media loaded');
+    if (!this.loaded) throw new Error('No media loaded');
     this.stopLoop();
     this.recording = true;
     this.editing = false;
     this.ensureSfx();
 
     const stream = this.canvas.captureStream(FPS);
-    if (this.media.kind === 'video') {
-      const audio = this.ensureAudio();
+    if (this.hasVideo()) {
+      const audio = this.ensureClipAudio();
       audio?.getAudioTracks().forEach((t) => stream.addTrack(t));
     } else if (this.sfx) {
       const dest = this.ensureCtx().createMediaStreamDestination();
@@ -800,7 +914,7 @@ export class Compositor {
     };
     this.loop();
 
-    // The loop stops itself (raf === 0) once the source reaches its end.
+    // The loop stops itself (raf === 0) once the sequence reaches its end.
     await new Promise<void>((resolve) => {
       const poll = setInterval(() => {
         if (this.raf === 0 || !this.recording) {
@@ -821,18 +935,18 @@ export class Compositor {
   destroy(): void {
     this.stop();
     try {
-      this.srcNode?.disconnect();
-      this.srcGain?.disconnect();
+      for (const { node, gain } of this.clipAudio.values()) {
+        node.disconnect();
+        gain.disconnect();
+      }
       this.streamDest?.disconnect();
       void this.audioCtx?.close();
     } catch {
       /* ignore */
     }
+    this.clipAudio.clear();
     this.audioCtx = null;
-    this.srcNode = null;
-    this.srcGain = null;
     this.streamDest = null;
     this.sfx = null;
-    this.media = null;
   }
 }
