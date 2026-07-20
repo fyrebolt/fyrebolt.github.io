@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--", "--port", "5175", "--strictPort"],
       "port": 5175
+    },
+    {
+      "name": "verify",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "autoPort": true
     }
   ]
 }

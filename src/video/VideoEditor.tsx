@@ -791,7 +791,7 @@ export default function VideoEditor() {
 
                   {/* zoom-rect editor overlay */}
                   {selectedZoomRect && mediaKind && srcDims.w > 0 && (
-                    <ZoomRectEditor rect={selectedZoomRect} srcW={srcDims.w} srcH={srcDims.h} out={out} onChange={onZoomRectChange} />
+                    <ZoomRectEditor rect={selectedZoomRect} srcW={srcDims.w} srcH={srcDims.h} out={out} settings={effectiveGuides} onChange={onZoomRectChange} />
                   )}
 
                   {/* unified transform widget for the selected placeable layer */}
