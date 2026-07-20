@@ -67,10 +67,16 @@ export function speedAt(t: number, kfs: SpeedKeyframe[]): number {
   return from;
 }
 
-/** The highest target speed at or after OUTPUT time `t` (incl. the current hold). */
+/**
+ * The highest speed the clip could still reach at or after OUTPUT time `t` — the
+ * current speed plus the target of every keyframe not yet fully in the past (its
+ * ramp still landing). Used to tell a temporary freeze (a resume is coming) from
+ * a permanent end-freeze. A keyframe counts while `t` is before its ramp END, so
+ * the speed ramping *up* out of a freeze is still seen once its start is behind.
+ */
 export function maxSpeedFrom(t: number, kfs: SpeedKeyframe[]): number {
   let m = speedAt(t, kfs);
-  for (const kf of kfs) if (kf.start >= t) m = Math.max(m, kf.speed);
+  for (const kf of kfs) if (kf.start + Math.max(0.0001, kf.duration) >= t) m = Math.max(m, kf.speed);
   return m;
 }
 
