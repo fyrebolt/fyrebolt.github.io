@@ -8,7 +8,7 @@ import ZoomRectEditor from './zoom/ZoomRectEditor';
 import TransformBox from './transform/TransformBox';
 import type { Transform } from './transform/TransformBox';
 import type { Box, GuideSettings, Guide } from './transform/snapEngine';
-import { DEFAULT_GUIDES } from './transform/snapEngine';
+import { DEFAULT_GUIDES, snapMove } from './transform/snapEngine';
 import { measurePlaceableBox } from './transform/measure';
 import { outputSizeFor } from './render';
 import { transcodeToMp4, ensureFFmpeg } from './ffmpeg';
@@ -77,7 +77,7 @@ type ExportStage = 'idle' | 'recording' | 'preparing' | 'encoding' | 'done' | 'e
 
 /** Layers that carry a free on-canvas placement (box or anchored text). */
 type PlaceableLayer = SketchLayer | HighlighterLayer | CaptionLayer | DramaticLayer;
-function isPlaceable(l: Layer | null): l is PlaceableLayer {
+function isPlaceable(l: Layer | null | undefined): l is PlaceableLayer {
   return !!l && (l.kind === 'sketch' || l.kind === 'highlighter' || l.kind === 'caption' || l.kind === 'dramatic');
 }
 function rotationOf(l: PlaceableLayer): number {
@@ -150,6 +150,10 @@ export default function VideoEditor() {
   // ---- selection / editing ----
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null);
+  /** Extra placeable ids co-selected for group move (raw; includes the primary). */
+  const [groupIds, setGroupIds] = useState<string[]>([]);
+  /** Marquee rect (output-normalised) while drag-selecting, else null. */
+  const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [selectedZoomKfId, setSelectedZoomKfId] = useState<string | null>(null);
   const [editingZoom, setEditingZoom] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -175,6 +179,10 @@ export default function VideoEditor() {
   const objectUrls = useRef<string[]>([]);
   /** Size/rotation reference captured when a text-layer transform grab starts. */
   const textGrab = useRef<{ id: string; sizeScale: number; w: number } | null>(null);
+  /** Group-move gesture: ids + each layer's origin (x,y) captured at grab. */
+  const groupDrag = useRef<{ startN: { x: number; y: number }; items: { id: string; x: number; y: number }[] } | null>(null);
+  /** Marquee gesture origin (normalised), else null. */
+  const marqueeStart = useRef<{ x: number; y: number } | null>(null);
   const editingRef = useRef(false);
 
   const project: Project = useMemo(
@@ -617,26 +625,13 @@ export default function VideoEditor() {
     [],
   );
 
-  // ---- canvas selection (dragging/resizing/rotating is owned by TransformBox) ----
+  // ---- canvas selection (single-layer transforms are owned by TransformBox) ----
   const normFromPointer = useCallback((clientX: number, clientY: number) => {
     const el = canvasRef.current;
     if (!el) return { nx: 0.5, ny: 0.5 };
     const rect = el.getBoundingClientRect();
     return { nx: (clientX - rect.left) / rect.width, ny: (clientY - rect.top) / rect.height };
   }, []);
-
-  const onCanvasPointerDown = useCallback(
-    (e: ReactPointerEvent) => {
-      if (editingRef.current) return; // zoom-rect editor owns the canvas
-      const c = compRef.current;
-      if (!c) return;
-      const { nx, ny } = normFromPointer(e.clientX, e.clientY);
-      const hit = c.hitTestDraggable(nx, ny);
-      setSelectedLayerId(hit);
-      setSelectedAttachmentId(null);
-    },
-    [normFromPointer],
-  );
 
   // ---- transformable-layer plumbing ----
   const effectiveGuides = guidesOn ? guideSettings : GUIDES_OFF;
@@ -732,6 +727,162 @@ export default function VideoEditor() {
     [placeableBoxes, selectedLayerId],
   );
 
+  // Effective group selection: the raw group only counts when it still holds the
+  // primary and has >1 member; otherwise selection is just the primary layer.
+  const groupSel = useMemo(() => {
+    if (selectedLayerId && groupIds.length > 1 && groupIds.includes(selectedLayerId)) {
+      return groupIds.filter((id) => placeableBoxes[id]);
+    }
+    return selectedLayerId ? [selectedLayerId] : [];
+  }, [groupIds, selectedLayerId, placeableBoxes]);
+  const isGroup = groupSel.length > 1;
+
+  /** Union box of the group selection (output-normalised), for its outline. */
+  const groupBox = useMemo(() => {
+    if (!isGroup) return null;
+    let x0 = 1;
+    let y0 = 1;
+    let x1 = 0;
+    let y1 = 0;
+    for (const id of groupSel) {
+      const b = placeableBoxes[id];
+      if (!b) continue;
+      x0 = Math.min(x0, b.x);
+      y0 = Math.min(y0, b.y);
+      x1 = Math.max(x1, b.x + b.w);
+      y1 = Math.max(y1, b.y + b.h);
+    }
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }, [isGroup, groupSel, placeableBoxes]);
+
+  // ---- canvas pointer: select, shift-select, marquee, and group move ----
+  const onCanvasPointerDown = useCallback(
+    (e: ReactPointerEvent) => {
+      if (editingRef.current) return; // zoom-rect editor owns the canvas
+      const c = compRef.current;
+      if (!c) return;
+      const { nx, ny } = normFromPointer(e.clientX, e.clientY);
+      const hit = c.hitTestDraggable(nx, ny);
+      const capture = () => {
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
+      };
+
+      if (e.shiftKey) {
+        // Toggle a layer in/out of the group selection.
+        if (!hit) return;
+        setSelectedAttachmentId(null);
+        setGroupIds((g) => {
+          const base = selectedLayerId && g.includes(selectedLayerId) ? g : selectedLayerId ? [selectedLayerId] : [];
+          const next = base.includes(hit) ? base.filter((id) => id !== hit) : [...base, hit];
+          setSelectedLayerId(next[next.length - 1] ?? null);
+          return next;
+        });
+        return;
+      }
+
+      if (!hit) {
+        // Empty canvas: begin a marquee drag-select.
+        setSelectedLayerId(null);
+        setSelectedAttachmentId(null);
+        setGroupIds([]);
+        marqueeStart.current = { x: nx, y: ny };
+        setMarquee({ x: nx, y: ny, w: 0, h: 0 });
+        capture();
+        return;
+      }
+
+      // Click on a member of the current group → start moving the whole group.
+      if (isGroup && groupSel.includes(hit)) {
+        const items = groupSel
+          .map((id) => {
+            const b = placeableBoxes[id];
+            const layer = layers.find((l) => l.id === id);
+            if (!b || !isPlaceable(layer)) return null;
+            // Anchor each layer by its stored position (box top-left for boxes,
+            // centre for text) so relative arrangement is preserved.
+            return layer.kind === 'caption' || layer.kind === 'dramatic'
+              ? { id, x: layer.el.x, y: layer.el.y }
+              : { id, x: b.x, y: b.y };
+          })
+          .filter((v): v is { id: string; x: number; y: number } => !!v);
+        groupDrag.current = { startN: { x: nx, y: ny }, items };
+        capture();
+        return;
+      }
+
+      // Plain single selection.
+      setSelectedLayerId(hit);
+      setSelectedAttachmentId(null);
+      setGroupIds([hit]);
+    },
+    [normFromPointer, selectedLayerId, isGroup, groupSel, placeableBoxes, layers],
+  );
+
+  const onCanvasPointerMove = useCallback(
+    (e: ReactPointerEvent) => {
+      if (e.buttons === 0) return;
+      const { nx, ny } = normFromPointer(e.clientX, e.clientY);
+
+      if (marqueeStart.current) {
+        const s = marqueeStart.current;
+        setMarquee({ x: Math.min(s.x, nx), y: Math.min(s.y, ny), w: Math.abs(nx - s.x), h: Math.abs(ny - s.y) });
+        return;
+      }
+
+      const gd = groupDrag.current;
+      if (gd) {
+        let dx = nx - gd.startN.x;
+        let dy = ny - gd.startN.y;
+        if (groupBox && effectiveGuides) {
+          const moved: Box = { x: groupBox.x + dx, y: groupBox.y + dy, w: groupBox.w, h: groupBox.h };
+          const r = snapMove(moved, { settings: effectiveGuides, others: otherBoxes, cursor: { x: nx, y: ny } });
+          dx = r.box.x - groupBox.x;
+          dy = r.box.y - groupBox.y;
+          setGuideLines(r.guides);
+        }
+        for (const it of gd.items) {
+          const layer = layers.find((l) => l.id === it.id);
+          if (!isPlaceable(layer)) continue;
+          const pos = { x: it.x + dx, y: it.y + dy };
+          if (layer.kind === 'sketch') updateSketchEl(it.id, pos);
+          else if (layer.kind === 'highlighter') updateHighlighterEl(it.id, pos);
+          else if (layer.kind === 'caption') updateCaptionEl(it.id, pos);
+          else updateDramaticEl(it.id, pos);
+        }
+      }
+    },
+    [normFromPointer, groupBox, effectiveGuides, otherBoxes, layers, updateSketchEl, updateHighlighterEl, updateCaptionEl, updateDramaticEl],
+  );
+
+  const onCanvasPointerUp = useCallback(
+    (e: ReactPointerEvent) => {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      if (marqueeStart.current && marquee) {
+        // Commit the marquee: select every placeable box it intersects.
+        const m = marquee;
+        const hit: string[] = [];
+        for (const [id, b] of Object.entries(placeableBoxes)) {
+          if (b.x < m.x + m.w && b.x + b.w > m.x && b.y < m.y + m.h && b.y + b.h > m.y) hit.push(id);
+        }
+        setGroupIds(hit);
+        setSelectedLayerId(hit[hit.length - 1] ?? null);
+      }
+      marqueeStart.current = null;
+      groupDrag.current = null;
+      setMarquee(null);
+      setGuideLines([]);
+    },
+    [marquee, placeableBoxes],
+  );
+
   return (
     <IpadFrame orientation="landscape" ariaLabel="Camera">
       <div className="ios-editor text-[var(--color-text-primary)]">
@@ -784,6 +935,8 @@ export default function VideoEditor() {
                   <canvas
                     ref={canvasRef}
                     onPointerDown={onCanvasPointerDown}
+                    onPointerMove={onCanvasPointerMove}
+                    onPointerUp={onCanvasPointerUp}
                     className="w-full h-auto rounded-lg bg-black block touch-none"
                     width={1080}
                     height={1920}
@@ -794,8 +947,25 @@ export default function VideoEditor() {
                     <ZoomRectEditor rect={selectedZoomRect} srcW={srcDims.w} srcH={srcDims.h} out={out} settings={effectiveGuides} onChange={onZoomRectChange} />
                   )}
 
-                  {/* unified transform widget for the selected placeable layer */}
+                  {/* group-move selection: union outline (single-layer widget hidden) */}
+                  {isGroup && groupBox && mediaKind && (
+                    <div
+                      className="pointer-events-none absolute z-10 border-2 border-dashed border-[var(--color-primary-green)]"
+                      style={{ left: `${groupBox.x * 100}%`, top: `${groupBox.y * 100}%`, width: `${groupBox.w * 100}%`, height: `${groupBox.h * 100}%` }}
+                    />
+                  )}
+
+                  {/* marquee drag-select rectangle */}
+                  {marquee && (
+                    <div
+                      className="pointer-events-none absolute z-10 border border-[var(--color-primary-green)] bg-[rgba(139,233,199,0.12)]"
+                      style={{ left: `${marquee.x * 100}%`, top: `${marquee.y * 100}%`, width: `${marquee.w * 100}%`, height: `${marquee.h * 100}%` }}
+                    />
+                  )}
+
+                  {/* unified transform widget for the single selected placeable layer */}
                   {!editingZoom &&
+                    !isGroup &&
                     mediaKind &&
                     srcDims.w > 0 &&
                     isPlaceable(selectedLayer) &&
