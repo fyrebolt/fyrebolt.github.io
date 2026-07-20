@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import IpadFrame from '../ios/IpadFrame';
 import { Compositor } from './project/Compositor';
-import type { LoadedMedia } from './project/Compositor';
+import type { ClipEl } from './project/Compositor';
 import ProjectTimeline from './project/ProjectTimeline';
+import ClipStrip from './project/ClipStrip';
 import ZoomRectEditor from './zoom/ZoomRectEditor';
 import TransformBox from './transform/TransformBox';
 import type { Transform } from './transform/TransformBox';
@@ -56,6 +57,8 @@ import {
   createStickerLayer,
 } from './project/types';
 import type { StickerElement } from './sticker/types';
+import type { VideoClip } from './project/clips';
+import { createClip, clipLen, baseDuration, MIN_CLIP_LEN, IMAGE_CLIP_MAX } from './project/clips';
 import { compileWarp } from './project/timeMap';
 import { Panel, Field, ChoiceGrid } from './project/ui';
 import { RATIO_LABELS, FILL_MODES } from './project/constants';
@@ -91,6 +94,7 @@ type ExportStage = 'idle' | 'recording' | 'preparing' | 'encoding' | 'done' | 'e
 
 /** One immutable snapshot of the whole project, for the undo/redo history. */
 interface EditorSnapshot {
+  clips: VideoClip[];
   layers: Layer[];
   ratio: RatioKey;
   fillMode: FillMode;
@@ -170,12 +174,12 @@ const FREEZE_SNAP_RAMP = 0.12;
 
 export default function VideoEditor() {
   // ---- media ----
-  const [mediaKind, setMediaKind] = useState<MediaKind>(null);
-  const [duration, setDuration] = useState(0); // clip seconds (0 for image)
   const [currentSec, setCurrentSec] = useState(0); // OUTPUT seconds
-  const [srcDims, setSrcDims] = useState({ w: 0, h: 0 });
 
   // ---- project ----
+  // The base timeline: an ordered list of stitched clips. mediaKind / duration /
+  // srcDims below are DERIVED from it, so a one-clip project == the old single source.
+  const [clips, setClips] = useState<VideoClip[]>([]);
   const [layers, setLayers] = useState<Layer[]>([]);
   const [ratio, setRatio] = useState<RatioKey>('9:16');
   const [fillMode, setFillMode] = useState<FillMode>('crop');
@@ -225,8 +229,12 @@ export default function VideoEditor() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const compRef = useRef<Compositor | null>(null);
-  const projectRef = useRef<Project>({ layers: [], ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration });
+  const projectRef = useRef<Project>({ clips: [], layers: [], ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration });
   const objectUrls = useRef<string[]>([]);
+  /** Decoded clip media (video / image), keyed by clip srcId, kept out of the project. */
+  const clipMedia = useRef<Map<string, ClipEl>>(new Map());
+  /** Hidden file input used to add another clip to the sequence. */
+  const clipInput = useRef<HTMLInputElement>(null);
   /** Decoded sticker media (image / video), kept out of the project so layers stay plain data. */
   const stickerMedia = useRef<Map<string, HTMLImageElement | HTMLVideoElement>>(new Map());
   /** Hidden file inputs used to pick sticker media on demand. */
@@ -243,9 +251,20 @@ export default function VideoEditor() {
   const editingRef = useRef(false);
 
   const project: Project = useMemo(
-    () => ({ layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration }),
-    [layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration],
+    () => ({ clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration }),
+    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration],
   );
+
+  // ---- media facts DERIVED from the clip sequence ----
+  // 'video' if any clip is video, else 'image', else null (nothing loaded).
+  const mediaKind: MediaKind = useMemo(
+    () => (clips.length === 0 ? null : clips.some((c) => c.kind === 'video') ? 'video' : 'image'),
+    [clips],
+  );
+  // Base-sequence duration (sum of trimmed clip lengths) — the old single "clip seconds".
+  const duration = useMemo(() => baseDuration(clips), [clips]);
+  // Output sizing reference = the first clip's native dimensions.
+  const srcDims = useMemo(() => (clips[0] ? { w: clips[0].w, h: clips[0].h } : { w: 0, h: 0 }), [clips]);
 
   const banner = bannerLayer(project);
   const zoom = zoomLayer(project);
@@ -263,10 +282,10 @@ export default function VideoEditor() {
   // Timeline / output duration (seconds). For video this is the warped output
   // length (speed track + banner freeze can stretch or shrink it).
   const timelineDuration = useMemo(() => {
-    if (mediaKind === 'video') return Math.max(0.1, compileWarp(project, duration).totalOutput);
+    if (mediaKind === 'video') return Math.max(0.1, compileWarp(project, duration, true).totalOutput);
     const ends = layers.map((l) => layerSpan(l).end);
-    return Math.max(3, imageDuration, ...ends);
-  }, [project, mediaKind, duration, layers, imageDuration]);
+    return Math.max(3, duration, ...ends);
+  }, [project, mediaKind, duration, layers]);
 
   // Preload fonts up front so switching pools / drawing never falls back.
   useEffect(() => {
@@ -287,6 +306,7 @@ export default function VideoEditor() {
     const c = new Compositor(
       canvasRef.current,
       () => projectRef.current,
+      (srcId) => clipMedia.current.get(srcId),
       (sec) => setCurrentSec(sec),
       (srcId) => stickerMedia.current.get(srcId),
     );
@@ -346,10 +366,11 @@ export default function VideoEditor() {
 
   // ---- undo / redo engine (whole-project snapshots) ----
   const snapshot: EditorSnapshot = useMemo(
-    () => ({ layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, pen }),
-    [layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, pen],
+    () => ({ clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, pen }),
+    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, pen],
   );
   const restoreSnapshot = useCallback((s: EditorSnapshot) => {
+    setClips(s.clips);
     setLayers(s.layers);
     setRatio(s.ratio);
     setFillMode(s.fillMode);
@@ -372,6 +393,7 @@ export default function VideoEditor() {
   }, []);
   const snapshotEqual = useCallback(
     (a: EditorSnapshot, b: EditorSnapshot) =>
+      a.clips === b.clips &&
       a.layers === b.layers &&
       a.ratio === b.ratio &&
       a.fillMode === b.fillMode &&
@@ -386,48 +408,155 @@ export default function VideoEditor() {
   const history = useHistory<EditorSnapshot>({ live: snapshot, restore: restoreSnapshot, equal: snapshotEqual });
   historyRef.current = history;
 
-  // ---- media load ----
-  const onFile = useCallback((file: File) => {
-    const c = compRef.current;
-    if (!c) return;
-    const url = URL.createObjectURL(file);
-    objectUrls.current.push(url);
-    setDownloadUrl(null);
-    setStage('idle');
-    setProgress(0);
+  // ---- media load (append a clip to the base sequence) ----
+  const clipSrcId = useCallback(
+    () => `clipsrc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    [],
+  );
 
-    if (file.type.startsWith('video')) {
-      const video = document.createElement('video');
-      video.src = url;
-      video.playsInline = true;
-      video.crossOrigin = 'anonymous';
-      video.addEventListener('loadedmetadata', () => {
-        setMediaKind('video');
-        setDuration(video.duration);
-        setSrcDims({ w: video.videoWidth, h: video.videoHeight });
-        const media: LoadedMedia = { kind: 'video', video, duration: video.duration };
-        c.attach(media);
-        setStatus('Loaded. Add layers with “+”, then Export when ready.');
-      });
-    } else if (file.type.startsWith('image')) {
-      const image = new Image();
-      image.onload = () => {
-        setMediaKind('image');
-        setDuration(0);
-        setSrcDims({ w: image.naturalWidth, h: image.naturalHeight });
-        const media: LoadedMedia = { kind: 'image', image, duration: 0 };
-        c.attach(media);
-        setStatus('Photo loaded. Add layers with “+”.');
+  const onFile = useCallback(
+    (file: File) => {
+      const c = compRef.current;
+      if (!c) return;
+      const url = URL.createObjectURL(file);
+      objectUrls.current.push(url);
+      setDownloadUrl(null);
+      setStage('idle');
+      setProgress(0);
+      const name = file.name.replace(/\.[^./\\]+$/, '') || 'Clip';
+
+      const append = (clip: VideoClip) => {
+        sealDiscrete();
+        setClips((cs) => [...cs, clip]);
+        setStatus(
+          clip.kind === 'video'
+            ? 'Clip added. Add more clips, add layers with “+”, then Export.'
+            : 'Photo added. Add more clips or add layers with “+”.',
+        );
       };
-      image.src = url;
-    }
-  }, []);
+
+      if (file.type.startsWith('video')) {
+        const video = document.createElement('video');
+        video.src = url;
+        video.playsInline = true;
+        video.preload = 'auto';
+        video.crossOrigin = 'anonymous';
+        // Paint the opening frame as soon as it decodes (metadata alone isn't enough).
+        video.addEventListener('loadeddata', () => compRef.current?.renderStatic(), { once: true });
+        video.addEventListener('loadedmetadata', () => {
+          const srcId = clipSrcId();
+          clipMedia.current.set(srcId, video);
+          append(
+            createClip({
+              srcId,
+              kind: 'video',
+              name,
+              srcDuration: video.duration,
+              w: video.videoWidth,
+              h: video.videoHeight,
+            }),
+          );
+        });
+      } else if (file.type.startsWith('image')) {
+        const image = new Image();
+        image.onload = () => {
+          const srcId = clipSrcId();
+          clipMedia.current.set(srcId, image);
+          append(
+            createClip(
+              { srcId, kind: 'image', name, srcDuration: 0, w: image.naturalWidth, h: image.naturalHeight },
+              { out: imageDuration },
+            ),
+          );
+        };
+        image.src = url;
+      }
+    },
+    [imageDuration, sealDiscrete, clipSrcId],
+  );
 
   // ---- seeking ----
   const seekTo = useCallback((sec: number) => {
     compRef.current?.scrubTo(sec);
     setCurrentSec(sec);
   }, []);
+
+  // Re-sync the compositor whenever a clip is added/removed: resize the canvas to
+  // the first clip + paint. On the very first clip, land on the opening frame.
+  const clipCountRef = useRef(0);
+  useEffect(() => {
+    const c = compRef.current;
+    if (!c) return;
+    if (clips.length !== clipCountRef.current) {
+      const wasEmpty = clipCountRef.current === 0;
+      clipCountRef.current = clips.length;
+      c.attach();
+      if (wasEmpty && clips.length > 0) seekTo(0);
+    }
+  }, [clips, seekTo]);
+
+  // ---- clip sequence management ----
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+
+  /** Base-sequence start time of each clip (for scrubbing to a clip's head). */
+  const clipStarts = useMemo(() => {
+    const out: number[] = [];
+    let acc = 0;
+    for (const c of clips) {
+      out.push(acc);
+      acc += clipLen(c);
+    }
+    return out;
+  }, [clips]);
+
+  const selectClip = useCallback(
+    (id: string) => {
+      setSelectedClipId(id);
+      const i = clips.findIndex((c) => c.id === id);
+      if (i >= 0) seekTo(Math.min(clipStarts[i] + 0.001, timelineDuration));
+    },
+    [clips, clipStarts, seekTo, timelineDuration],
+  );
+
+  const reorderClip = useCallback(
+    (from: number, to: number) => {
+      setClips((cs) => {
+        if (from < 0 || from >= cs.length || to < 0 || to >= cs.length || from === to) return cs;
+        sealDiscrete();
+        const next = cs.slice();
+        const [moved] = next.splice(from, 1);
+        next.splice(to, 0, moved);
+        return next;
+      });
+    },
+    [sealDiscrete],
+  );
+
+  const removeClip = useCallback(
+    (id: string) => {
+      sealDiscrete();
+      setClips((cs) => cs.filter((c) => c.id !== id));
+      setSelectedClipId((cur) => (cur === id ? null : cur));
+    },
+    [sealDiscrete],
+  );
+
+  /** Trim a clip's in/out (SOURCE seconds), clamped to the media + min length. */
+  const trimClip = useCallback((id: string, patch: { in?: number; out?: number }) => {
+    setClips((cs) =>
+      cs.map((c) => {
+        if (c.id !== id) return c;
+        const max = c.kind === 'image' ? IMAGE_CLIP_MAX : c.srcDuration;
+        let inP = c.kind === 'image' ? 0 : patch.in ?? c.in; // a still has no in-point
+        let outP = patch.out ?? c.out;
+        inP = Math.max(0, Math.min(inP, max - MIN_CLIP_LEN));
+        outP = Math.max(inP + MIN_CLIP_LEN, Math.min(outP, max));
+        return { ...c, in: inP, out: outP };
+      }),
+    );
+  }, []);
+
+  const addClipClick = useCallback(() => clipInput.current?.click(), []);
 
   const midOfCaption = useCallback((el: CaptionEl): number => {
     if (el.kind === 'boil') return (el.start + el.end) / 2;
@@ -1277,14 +1406,14 @@ export default function VideoEditor() {
             <span className="gradient-text">Layer editor</span>
           </h1>
           <p className="text-[var(--color-text-secondary)] mt-1 mb-6 max-w-2xl text-[15px] leading-relaxed">
-            One clip, one timeline. Add a banner, captions, and a zoom as layers, arrange them, and export a single MP4 — all in your browser.
+            Stitch clips into one timeline. Trim and reorder them, add a banner, captions, and a zoom as layers, then export a single MP4 — all in your browser.
           </p>
 
           <div className="grid lg:grid-cols-[minmax(0,1fr)_360px] gap-8 items-start">
             {/* ---- Preview + timeline ---- */}
             <section>
               <label className="block glass-card p-4 mb-4 cursor-pointer hover:bg-[var(--color-glass-hover)] transition-colors">
-                <span className="text-sm font-medium">Photo or video</span>
+                <span className="text-sm font-medium">{clips.length === 0 ? 'Photo or video' : 'Add another clip'}</span>
                 <input
                   type="file"
                   accept="image/*,video/*"
@@ -1292,9 +1421,23 @@ export default function VideoEditor() {
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) onFile(f);
+                    e.target.value = '';
                   }}
                 />
               </label>
+
+              {/* Hidden input used by the clip strip's "+ Clip" tile. */}
+              <input
+                ref={clipInput}
+                type="file"
+                accept="image/*,video/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onFile(f);
+                  e.target.value = '';
+                }}
+              />
 
               {/* Hidden pickers for sticker media (triggered from the + menu). */}
               <input
@@ -1508,6 +1651,21 @@ export default function VideoEditor() {
                   <p className="text-[11px] text-[var(--color-primary-green)] mt-2 text-center">
                     Editing zoom rectangle — showing the full original frame. Drag the box; it snaps to centre / output ratio.
                   </p>
+                )}
+
+                {clips.length > 0 && (
+                  <div className="mt-3 mb-1">
+                    <div className="text-[11px] font-medium text-[var(--color-text-muted)] mb-1">Clips (base sequence)</div>
+                    <ClipStrip
+                      clips={clips}
+                      selectedClipId={selectedClipId}
+                      onSelect={selectClip}
+                      onReorder={reorderClip}
+                      onRemove={removeClip}
+                      onTrim={trimClip}
+                      onAddClip={addClipClick}
+                    />
+                  </div>
                 )}
 
                 {mediaKind && (
@@ -1759,11 +1917,16 @@ export default function VideoEditor() {
                 <Field label="Fill mode (when input ratio ≠ output)">
                   <ChoiceGrid cols={3} value={fillMode} options={FILL_MODES.map((m) => ({ key: m, label: m === 'crop' ? 'Crop' : m === 'fit' ? 'Fit' : 'Blur' }))} onChange={(v) => { sealDiscrete(); setFillMode(v); }} />
                 </Field>
-                {mediaKind === 'image' && (
-                  <Field label={`Clip length — ${imageDuration.toFixed(1)}s`}>
-                    <input type="range" min={2} max={20} step={0.5} value={imageDuration} onChange={(e) => setImageDuration(Number(e.target.value))} className="w-full accent-[var(--color-primary-green)]" />
+                {mediaKind === 'image' && (() => {
+                  // Precise length control for the selected image clip (else the first).
+                  const target = clips.find((c) => c.id === selectedClipId && c.kind === 'image') ?? clips.find((c) => c.kind === 'image');
+                  const len = target ? clipLen(target) : imageDuration;
+                  return (
+                  <Field label={`Clip length — ${len.toFixed(1)}s`}>
+                    <input type="range" min={2} max={20} step={0.5} value={len} onChange={(e) => { const v = Number(e.target.value); setImageDuration(v); if (target) trimClip(target.id, { out: v }); }} className="w-full accent-[var(--color-primary-green)]" />
                   </Field>
-                )}
+                  );
+                })()}
                 <div className="flex items-center gap-4 text-xs text-[var(--color-text-secondary)]">
                   <label className="flex items-center gap-2">
                     <input type="checkbox" checked={guidesOn} onChange={(e) => setGuidesOn(e.target.checked)} />

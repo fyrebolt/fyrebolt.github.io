@@ -82,10 +82,14 @@ function interp(xs: number[], ys: number[], x: number): number {
  * monotonic output→source warp. Sampled forward in output time and compacted so
  * constant-speed runs collapse to two breakpoints (ramps keep their curve).
  */
-export function compileWarp(project: Project, clipDur: number): TimeWarp {
-  const tm = timeMachineLayer(project);
+export function compileWarp(project: Project, clipDur: number, videoBase = true): TimeWarp {
+  // Time Machine + banner freeze are video-only distortions: over a pure-image
+  // base sequence the clock is the plain identity (base time === output time), so
+  // an image sequence's total output is just its concatenated length. This keeps
+  // a single-image project's output length unchanged (a banner never stretches it).
+  const tm = videoBase ? timeMachineLayer(project) : null;
   const kfs = tm ? tm.keyframes : [];
-  const spec = freezeSpecOf(bannerLayer(project));
+  const spec = videoBase ? freezeSpecOf(bannerLayer(project)) : null;
   const dur = Math.max(0, clipDur);
 
   const outs: number[] = [0];

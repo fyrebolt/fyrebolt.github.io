@@ -43,6 +43,8 @@ import type { DramaticWord, WordMode } from '../dramatic/types';
 import { elementEnd as dramaticEnd } from '../dramatic/types';
 import type { StickerElement, StickerSeed } from '../sticker/types';
 import { createSticker, elementEnd as stickerEnd } from '../sticker/types';
+import type { VideoClip } from './clips';
+import { baseDuration } from './clips';
 
 export interface LayerBase {
   id: string;
@@ -123,6 +125,9 @@ export type LayerKind = Layer['kind'];
 
 /** Everything the compositor needs to draw + export the whole project. */
 export interface Project {
+  /** Ordered base timeline: clips concatenate into one continuous source clock.
+   *  Empty for a not-yet-loaded project. A single clip == the old single source. */
+  clips: VideoClip[];
   layers: Layer[];
   ratio: RatioKey;
   fillMode: FillMode;
@@ -138,6 +143,17 @@ export interface Project {
 }
 
 // ---- classification helpers ----
+
+/** Total base-sequence duration (sum of trimmed clip lengths), in seconds. */
+export function projectBaseDuration(p: Project): number {
+  return baseDuration(p.clips);
+}
+
+/** The media kind of the sequence: 'video' if any clip is video, else 'image', else null. */
+export function projectMediaKind(p: Project): 'video' | 'image' | null {
+  if (p.clips.length === 0) return null;
+  return p.clips.some((c) => c.kind === 'video') ? 'video' : 'image';
+}
 
 export function bannerLayer(p: Project): BannerLayer | null {
   return (p.layers.find((l) => l.kind === 'banner') as BannerLayer | undefined) ?? null;
