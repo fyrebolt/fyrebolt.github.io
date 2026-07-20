@@ -5,8 +5,11 @@ import { Compositor } from './project/Compositor';
 import type { LoadedMedia } from './project/Compositor';
 import ProjectTimeline from './project/ProjectTimeline';
 import ZoomRectEditor from './zoom/ZoomRectEditor';
-import SketchRectEditor from './sketch/SketchRectEditor';
-import HighlightRectEditor from './highlight/HighlightRectEditor';
+import TransformBox from './transform/TransformBox';
+import type { Transform } from './transform/TransformBox';
+import type { Box, GuideSettings, Guide } from './transform/snapEngine';
+import { DEFAULT_GUIDES } from './transform/snapEngine';
+import { measurePlaceableBox } from './transform/measure';
 import { outputSizeFor } from './render';
 import { transcodeToMp4, ensureFFmpeg } from './ffmpeg';
 import { preloadAllFontPools, FONT_POOLS } from './captions/fonts';
@@ -72,15 +75,34 @@ function findDramaticGap(spans: Span[], total: number, want: number): { start: n
 type MediaKind = 'video' | 'image' | null;
 type ExportStage = 'idle' | 'recording' | 'preparing' | 'encoding' | 'done' | 'error';
 
-// canvas placement snapping (centre + safe-zone edges)
-const SNAP_THRESHOLD = 0.018;
-const SNAP_X = [0.5, 0.07, 0.93];
-const SNAP_Y = [0.5, 0.13, 0.8];
-function snap(v: number, targets: number[], enabled: boolean): { v: number; guide: number | null } {
-  if (!enabled) return { v, guide: null };
-  for (const t of targets) if (Math.abs(v - t) < SNAP_THRESHOLD) return { v: t, guide: t };
-  return { v, guide: null };
+/** Layers that carry a free on-canvas placement (box or anchored text). */
+type PlaceableLayer = SketchLayer | HighlighterLayer | CaptionLayer | DramaticLayer;
+function isPlaceable(l: Layer | null): l is PlaceableLayer {
+  return !!l && (l.kind === 'sketch' || l.kind === 'highlighter' || l.kind === 'caption' || l.kind === 'dramatic');
 }
+function rotationOf(l: PlaceableLayer): number {
+  return l.el.rotation;
+}
+
+const GUIDE_TOGGLES: { key: keyof GuideSettings; label: string }[] = [
+  { key: 'centerH', label: 'Centre horizontally' },
+  { key: 'centerV', label: 'Centre vertically' },
+  { key: 'fitWidth', label: 'Fit to width' },
+  { key: 'fitHeight', label: 'Fit to height' },
+  { key: 'border', label: 'Snap to borders' },
+  { key: 'object', label: 'Snap to objects' },
+  { key: 'cursor', label: 'Snap to cursor' },
+];
+
+const GUIDES_OFF: GuideSettings = {
+  centerH: false,
+  centerV: false,
+  fitWidth: false,
+  fitHeight: false,
+  border: false,
+  object: false,
+  cursor: false,
+};
 
 type AddKind =
   | 'banner'
@@ -135,7 +157,9 @@ export default function VideoEditor() {
   // ---- ui ----
   const [showSafeZones, setShowSafeZones] = useState(true);
   const [guidesOn, setGuidesOn] = useState(true);
-  const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
+  const [guideSettings, setGuideSettings] = useState<GuideSettings>(DEFAULT_GUIDES);
+  const [gearOpen, setGearOpen] = useState(false);
+  const [guideLines, setGuideLines] = useState<Guide[]>([]);
 
   // ---- export ----
   const [stage, setStage] = useState<ExportStage>('idle');
@@ -149,7 +173,8 @@ export default function VideoEditor() {
   const compRef = useRef<Compositor | null>(null);
   const projectRef = useRef<Project>({ layers: [], ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration });
   const objectUrls = useRef<string[]>([]);
-  const capDrag = useRef<{ id: string; kind: 'caption' | 'dramatic'; grabDX: number; grabDY: number } | null>(null);
+  /** Size/rotation reference captured when a text-layer transform grab starts. */
+  const textGrab = useRef<{ id: string; sizeScale: number; w: number } | null>(null);
   const editingRef = useRef(false);
 
   const project: Project = useMemo(
@@ -592,7 +617,7 @@ export default function VideoEditor() {
     [],
   );
 
-  // ---- canvas caption drag ----
+  // ---- canvas selection (dragging/resizing/rotating is owned by TransformBox) ----
   const normFromPointer = useCallback((clientX: number, clientY: number) => {
     const el = canvasRef.current;
     if (!el) return { nx: 0.5, ny: 0.5 };
@@ -607,49 +632,32 @@ export default function VideoEditor() {
       if (!c) return;
       const { nx, ny } = normFromPointer(e.clientX, e.clientY);
       const hit = c.hitTestDraggable(nx, ny);
-      if (!hit) {
-        setSelectedLayerId(null);
-        setSelectedAttachmentId(null);
-        return;
-      }
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId);
-      } catch {
-        /* ignore */
-      }
-      const layer = layers.find((l) => l.id === hit);
-      if (!layer || (layer.kind !== 'caption' && layer.kind !== 'dramatic')) return;
       setSelectedLayerId(hit);
       setSelectedAttachmentId(null);
-      capDrag.current = { id: hit, kind: layer.kind, grabDX: layer.el.x - nx, grabDY: layer.el.y - ny };
     },
-    [layers, normFromPointer],
+    [normFromPointer],
   );
 
-  const onCanvasPointerMove = useCallback(
-    (e: ReactPointerEvent) => {
-      const d = capDrag.current;
-      if (!d || e.buttons === 0) return;
-      const { nx, ny } = normFromPointer(e.clientX, e.clientY);
-      const sx = snap(nx + d.grabDX, SNAP_X, guidesOn);
-      const sy = snap(ny + d.grabDY, SNAP_Y, guidesOn);
-      setGuides({ x: sx.guide, y: sy.guide });
-      const pos = { x: Math.max(0, Math.min(1, sx.v)), y: Math.max(0, Math.min(1, sy.v)) };
-      if (d.kind === 'dramatic') updateDramaticEl(d.id, pos);
-      else updateCaptionEl(d.id, pos);
-    },
-    [guidesOn, normFromPointer, updateCaptionEl, updateDramaticEl],
-  );
+  // ---- transformable-layer plumbing ----
+  const effectiveGuides = guidesOn ? guideSettings : GUIDES_OFF;
 
-  const onCanvasPointerUp = useCallback((e: ReactPointerEvent) => {
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    capDrag.current = null;
-    setGuides({ x: null, y: null });
-  }, []);
+  /** Commit a TransformBox change back to the selected layer. */
+  const onTransform = useCallback(
+    (layer: PlaceableLayer, t: Transform) => {
+      if (layer.kind === 'sketch') updateSketchEl(layer.id, { x: t.x, y: t.y, w: t.w, h: t.h, rotation: t.rotation });
+      else if (layer.kind === 'highlighter') updateHighlighterEl(layer.id, { x: t.x, y: t.y, w: t.w, h: t.h, rotation: t.rotation });
+      else {
+        // caption / dramatic: box centre → anchor; box width → uniform font scale.
+        const g = textGrab.current;
+        const ref = g && g.id === layer.id ? g : { sizeScale: layer.el.sizeScale, w: Math.max(1e-4, t.w) };
+        const sizeScale = Math.max(0.08, ref.sizeScale * (t.w / Math.max(1e-4, ref.w)));
+        const patch = { x: t.x + t.w / 2, y: t.y + t.h / 2, rotation: t.rotation, sizeScale };
+        if (layer.kind === 'caption') updateCaptionEl(layer.id, patch);
+        else updateDramaticEl(layer.id, patch);
+      }
+    },
+    [updateSketchEl, updateHighlighterEl, updateCaptionEl, updateDramaticEl],
+  );
 
   // ---- export ----
   const busy = stage === 'recording' || stage === 'preparing' || stage === 'encoding';
@@ -707,6 +715,23 @@ export default function VideoEditor() {
   const selectedZoomRect =
     editingZoom && selectedLayer?.kind === 'zoom' ? selectedLayer.keyframes.find((k) => k.id === selectedZoomKfId)?.rect ?? null : null;
 
+  // Measured placement boxes for every placeable layer (pure — no compositor ref).
+  const placeableBoxes = useMemo(() => {
+    const m: Record<string, Box> = {};
+    for (const l of layers) {
+      if (!isPlaceable(l)) continue;
+      const b = measurePlaceableBox(l, project, out, currentSec);
+      if (b) m[l.id] = b;
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layers, project, out.w, out.h, currentSec]);
+  const selBox = selectedLayer && isPlaceable(selectedLayer) ? placeableBoxes[selectedLayer.id] ?? null : null;
+  const otherBoxes = useMemo(
+    () => Object.entries(placeableBoxes).filter(([id]) => id !== selectedLayerId).map(([, b]) => b),
+    [placeableBoxes, selectedLayerId],
+  );
+
   return (
     <IpadFrame orientation="landscape" ariaLabel="Camera">
       <div className="ios-editor text-[var(--color-text-primary)]">
@@ -759,8 +784,6 @@ export default function VideoEditor() {
                   <canvas
                     ref={canvasRef}
                     onPointerDown={onCanvasPointerDown}
-                    onPointerMove={onCanvasPointerMove}
-                    onPointerUp={onCanvasPointerUp}
                     className="w-full h-auto rounded-lg bg-black block touch-none"
                     width={1080}
                     height={1920}
@@ -771,24 +794,39 @@ export default function VideoEditor() {
                     <ZoomRectEditor rect={selectedZoomRect} srcW={srcDims.w} srcH={srcDims.h} out={out} onChange={onZoomRectChange} />
                   )}
 
-                  {/* sketch placement overlay (ratio-locked to the drawing) */}
-                  {selectedLayer?.kind === 'sketch' && selectedLayer.el.strokes.length > 0 && mediaKind && srcDims.w > 0 && (
-                    <SketchRectEditor
-                      rect={{ x: selectedLayer.el.x, y: selectedLayer.el.y, w: selectedLayer.el.w, h: selectedLayer.el.h }}
-                      padAspect={selectedLayer.el.padAspect}
-                      out={out}
-                      onChange={(r) => updateSketchEl(selectedLayer.id, r)}
-                    />
-                  )}
-
-                  {/* highlighter placement overlay (free 8-handle resize) */}
-                  {selectedLayer?.kind === 'highlighter' && mediaKind && (
-                    <HighlightRectEditor
-                      rect={{ x: selectedLayer.el.x, y: selectedLayer.el.y, w: selectedLayer.el.w, h: selectedLayer.el.h }}
-                      color={selectedLayer.el.color}
-                      onChange={(r) => updateHighlighterEl(selectedLayer.id, r)}
-                    />
-                  )}
+                  {/* unified transform widget for the selected placeable layer */}
+                  {!editingZoom &&
+                    mediaKind &&
+                    srcDims.w > 0 &&
+                    isPlaceable(selectedLayer) &&
+                    selBox &&
+                    !(selectedLayer.kind === 'sketch' && selectedLayer.el.strokes.length === 0) &&
+                    (() => {
+                      const sel: PlaceableLayer = selectedLayer;
+                      const box = selBox;
+                      const t: Transform = { ...box, rotation: rotationOf(sel) };
+                      const locked = sel.kind !== 'highlighter';
+                      let lockedAspectPx: number | undefined;
+                      if (sel.kind === 'sketch') lockedAspectPx = sel.el.padAspect;
+                      else if (locked) lockedAspectPx = (box.w * out.w) / Math.max(1e-4, box.h * out.h);
+                      return (
+                        <TransformBox
+                          transform={t}
+                          resize={locked ? 'locked' : 'free'}
+                          lockedAspectPx={lockedAspectPx}
+                          out={out}
+                          settings={effectiveGuides}
+                          others={otherBoxes}
+                          onGrab={() => {
+                            if (sel.kind === 'caption' || sel.kind === 'dramatic') {
+                              textGrab.current = { id: sel.id, sizeScale: sel.el.sizeScale, w: box.w };
+                            }
+                          }}
+                          onChange={(nt) => onTransform(sel, nt)}
+                          onGuides={setGuideLines}
+                        />
+                      );
+                    })()}
 
                   {/* safe zones */}
                   {showSafeZones && ratio === '9:16' && !editingZoom && (
@@ -798,9 +836,14 @@ export default function VideoEditor() {
                       <div className="absolute top-[12%] bottom-[20%] right-0 w-[7%] bg-[rgba(255,0,80,0.08)] border-l border-[rgba(255,0,80,0.25)]" />
                     </div>
                   )}
-                  {/* alignment guides */}
-                  {guides.x !== null && <div className="pointer-events-none absolute top-0 bottom-0 w-px bg-[#b57cff] shadow-[0_0_6px_#b57cff]" style={{ left: `${guides.x * 100}%` }} />}
-                  {guides.y !== null && <div className="pointer-events-none absolute left-0 right-0 h-px bg-[#b57cff] shadow-[0_0_6px_#b57cff]" style={{ top: `${guides.y * 100}%` }} />}
+                  {/* alignment guides (from the shared snap engine) */}
+                  {guideLines.map((g, i) =>
+                    g.axis === 'x' ? (
+                      <div key={i} className="pointer-events-none absolute top-0 bottom-0 w-px bg-[#b57cff] shadow-[0_0_6px_#b57cff]" style={{ left: `${g.at * 100}%` }} />
+                    ) : (
+                      <div key={i} className="pointer-events-none absolute left-0 right-0 h-px bg-[#b57cff] shadow-[0_0_6px_#b57cff]" style={{ top: `${g.at * 100}%` }} />
+                    ),
+                  )}
 
                   {/* corner "+" add-layer button */}
                   {mediaKind && (
@@ -831,6 +874,46 @@ export default function VideoEditor() {
                               </button>
                             );
                           })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* corner guide-lock (gear) affordance */}
+                  {mediaKind && (
+                    <div
+                      className="absolute top-2 left-2"
+                      onMouseEnter={() => setGearOpen(true)}
+                      onMouseLeave={() => setGearOpen(false)}
+                    >
+                      <button
+                        onClick={() => setGearOpen((v) => !v)}
+                        className={`w-9 h-9 rounded-full shadow-md flex items-center justify-center text-lg transition-colors ${
+                          guidesOn ? 'bg-[var(--color-bg-surface)] text-[var(--color-primary-green)]' : 'bg-[var(--color-bg-surface)] text-[var(--color-text-muted)]'
+                        }`}
+                        title="Guide locks"
+                        aria-label="Guide locks"
+                      >
+                        ⚙
+                      </button>
+                      {gearOpen && (
+                        <div className="absolute left-0 mt-1.5 w-52 rounded-xl bg-[var(--color-bg-surface)] shadow-lg border border-[var(--color-glass-border)] overflow-hidden z-20 p-2 text-sm">
+                          <label className="flex items-center gap-2 px-2 py-1.5 font-medium">
+                            <input type="checkbox" checked={guidesOn} onChange={(e) => setGuidesOn(e.target.checked)} />
+                            <span>Guides &amp; snapping</span>
+                          </label>
+                          <div className={`mt-1 border-t border-[var(--color-glass-border)] pt-1 ${guidesOn ? '' : 'opacity-40 pointer-events-none'}`}>
+                            {GUIDE_TOGGLES.map((g) => (
+                              <label key={g.key} className="flex items-center gap-2 px-2 py-1 hover:bg-[var(--color-glass-hover)] rounded-md cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={guideSettings[g.key]}
+                                  onChange={(e) => setGuideSettings((s) => ({ ...s, [g.key]: e.target.checked }))}
+                                />
+                                <span>{g.label}</span>
+                              </label>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>

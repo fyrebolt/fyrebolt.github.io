@@ -538,33 +538,65 @@ export class Compositor {
 
   // ---- caption pointer helpers (normalised 0..1 coords) ----
 
-  /** Top-most draggable overlay (caption or dramatic word) under a normalised point. */
+  /** Top-most draggable overlay (any placeable kind) under a normalised point. */
   hitTestDraggable(nx: number, ny: number): string | null {
     if (!this.media) return null;
     const px = nx * this.out.w;
     const py = ny * this.out.h;
     const p = this.getProject();
-    const outputT = this.currentTimeSec();
     const overlays = overlayLayers(p);
     for (let i = overlays.length - 1; i >= 0; i--) {
       const layer = overlays[i];
-      if (layer.kind === 'caption') {
-        const el = layer.el;
-        const font = this.fontFor(el, outputT, p.boilPool);
-        const L = measureCaption(this.ctx, this.out, el, font, el.kind === 'boil' && p.normalize);
-        const pad = L.sizePx * 0.3;
-        if (px >= L.left - pad && px <= L.left + L.blockW + pad && py >= L.top - pad && py <= L.top + L.blockH + pad) {
-          return layer.id;
-        }
-      } else if (layer.kind === 'dramatic') {
-        const L = dramaticWordLayout(this.ctx, this.out, layer.el);
-        const pad = L.size * 0.25;
-        if (px >= L.left - pad && px <= L.left + L.blockW + pad && py >= L.top - pad && py <= L.top + L.blockH + pad) {
-          return layer.id;
-        }
+      const b = this.boundsPx(layer.id);
+      if (!b) continue;
+      // Transform the point into the box's local (unrotated) frame about its centre.
+      const cx = b.left + b.width / 2;
+      const cy = b.top + b.height / 2;
+      const rot = b.rotation;
+      const dx = px - cx;
+      const dy = py - cy;
+      const c = Math.cos(-rot);
+      const s = Math.sin(-rot);
+      const lx = cx + dx * c - dy * s;
+      const ly = cy + dx * s + dy * c;
+      const pad = b.pad;
+      if (lx >= b.left - pad && lx <= b.left + b.width + pad && ly >= b.top - pad && ly <= b.top + b.height + pad) {
+        return layer.id;
       }
     }
     return null;
+  }
+
+  /** Placement bounds of any placeable overlay, in OUTPUT PIXELS, or null. */
+  private boundsPx(
+    layerId: string,
+  ): { left: number; top: number; width: number; height: number; rotation: number; pad: number } | null {
+    if (!this.media) return null;
+    const p = this.getProject();
+    const layer = p.layers.find((l) => l.id === layerId);
+    if (!layer) return null;
+    if (layer.kind === 'sketch' || layer.kind === 'highlighter') {
+      const el = layer.el;
+      return { left: el.x * this.out.w, top: el.y * this.out.h, width: el.w * this.out.w, height: el.h * this.out.h, rotation: el.rotation, pad: 0 };
+    }
+    if (layer.kind === 'caption') {
+      const el = layer.el;
+      const font = this.fontFor(el, this.currentTimeSec(), p.boilPool);
+      const L = measureCaption(this.ctx, this.out, el, font, el.kind === 'boil' && p.normalize);
+      return { left: L.left, top: L.top, width: L.blockW, height: L.blockH, rotation: el.rotation, pad: L.sizePx * 0.3 };
+    }
+    if (layer.kind === 'dramatic') {
+      const L = dramaticWordLayout(this.ctx, this.out, layer.el);
+      return { left: L.left, top: L.top, width: L.blockW, height: L.blockH, rotation: layer.el.rotation, pad: L.size * 0.25 };
+    }
+    return null;
+  }
+
+  /** Placement box (top-left + size) of any placeable overlay in output-NORMALISED coords. */
+  boundsOf(layerId: string): { x: number; y: number; w: number; h: number } | null {
+    const b = this.boundsPx(layerId);
+    if (!b) return null;
+    return { x: b.left / this.out.w, y: b.top / this.out.h, w: b.width / this.out.w, h: b.height / this.out.h };
   }
 
   boundsOfCaption(layerId: string): CaptionBounds | null {

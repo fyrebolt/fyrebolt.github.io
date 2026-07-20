@@ -76,8 +76,9 @@ export default function TransformBox({
   onGrab,
 }: Props) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ mode: Mode; orig: Transform; startN: { x: number; y: number }; startAngle: number } | null>(null);
-  const [active, setActive] = useState(false);
+  const [activeMode, setActiveMode] = useState<Mode | null>(null);
 
   const minPx = minSize * Math.min(out.w, out.h);
 
@@ -95,7 +96,7 @@ export default function TransformBox({
       e.stopPropagation();
       onGrab?.();
       try {
-        overlayRef.current?.setPointerCapture(e.pointerId);
+        boxRef.current?.setPointerCapture(e.pointerId);
       } catch {
         /* ignore */
       }
@@ -104,7 +105,7 @@ export default function TransformBox({
       const cy = (transform.y + transform.h / 2) * out.h;
       const startAngle = Math.atan2(n.y * out.h - cy, n.x * out.w - cx);
       drag.current = { mode, orig: transform, startN: n, startAngle };
-      setActive(true);
+      setActiveMode(mode);
     },
     [transform, toNorm, out.w, out.h, onGrab],
   );
@@ -207,12 +208,12 @@ export default function TransformBox({
   const end = useCallback(
     (e: ReactPointerEvent) => {
       try {
-        overlayRef.current?.releasePointerCapture(e.pointerId);
+        boxRef.current?.releasePointerCapture(e.pointerId);
       } catch {
         /* ignore */
       }
       drag.current = null;
-      setActive(false);
+      setActiveMode(null);
       emitGuides([]);
     },
     [emitGuides],
@@ -222,10 +223,13 @@ export default function TransformBox({
   const degrees = (transform.rotation * 180) / Math.PI;
 
   return (
-    <div ref={overlayRef} onPointerMove={move} onPointerUp={end} className="absolute inset-0 z-20 touch-none">
+    <div ref={overlayRef} className="absolute inset-0 z-20 touch-none pointer-events-none">
       <div
+        ref={boxRef}
         onPointerDown={(e) => begin(e, 'move')}
-        className="absolute cursor-move"
+        onPointerMove={move}
+        onPointerUp={end}
+        className="absolute cursor-move pointer-events-auto"
         style={{
           left: `${transform.x * 100}%`,
           top: `${transform.y * 100}%`,
@@ -256,7 +260,7 @@ export default function TransformBox({
             />
           );
         })}
-        {active && drag.current?.mode === 'rotate' && (
+        {activeMode === 'rotate' && (
           <div className="absolute left-1/2 -top-12 -translate-x-1/2 text-[9px] px-1 rounded bg-black/70 text-white whitespace-nowrap pointer-events-none">
             {Math.round(((degrees % 360) + 360) % 360)}°
           </div>
