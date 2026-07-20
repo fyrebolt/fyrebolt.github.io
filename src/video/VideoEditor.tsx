@@ -1406,7 +1406,7 @@ export default function VideoEditor() {
             <span className="gradient-text">Layer editor</span>
           </h1>
           <p className="text-[var(--color-text-secondary)] mt-1 mb-6 max-w-2xl text-[15px] leading-relaxed">
-            One clip, one timeline. Add a banner, captions, and a zoom as layers, arrange them, and export a single MP4 — all in your browser.
+            Stitch clips into one timeline. Trim and reorder them, add a banner, captions, and a zoom as layers, then export a single MP4 — all in your browser.
           </p>
 
           <div className="grid lg:grid-cols-[minmax(0,1fr)_360px] gap-8 items-start">

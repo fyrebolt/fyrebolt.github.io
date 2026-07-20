@@ -15,6 +15,21 @@ const CARD_W = 150; // px, fixed
 const CARD_GAP = 8; // px, must match the flex gap below
 const TRACK_H = 26;
 
+function capture(e: ReactPointerEvent): void {
+  try {
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  } catch {
+    /* synthetic / already-released pointer — safe to ignore */
+  }
+}
+function release(e: ReactPointerEvent): void {
+  try {
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+  } catch {
+    /* ignore */
+  }
+}
+
 interface Props {
   clips: VideoClip[];
   selectedClipId: string | null;
@@ -58,7 +73,7 @@ export default function ClipStrip({
     (e: ReactPointerEvent, clip: VideoClip, index: number) => {
       e.preventDefault();
       e.stopPropagation();
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      capture(e);
       drag.current = { id: clip.id, from: index, startX: e.clientX };
       setDragId(clip.id);
       setDragDx(0);
@@ -76,7 +91,7 @@ export default function ClipStrip({
       setDragId(null);
       setDragDx(0);
       if (!d) return;
-      (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+      release(e);
       const stride = CARD_W + CARD_GAP;
       const delta = Math.round((e.clientX - d.startX) / stride);
       const to = Math.max(0, Math.min(clips.length - 1, d.from + delta));
@@ -90,7 +105,7 @@ export default function ClipStrip({
     (e: ReactPointerEvent, clip: VideoClip, edge: TrimEdge, trackW: number) => {
       e.preventDefault();
       e.stopPropagation();
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      capture(e);
       trim.current = {
         id: clip.id,
         edge,
@@ -116,7 +131,7 @@ export default function ClipStrip({
   );
   const onTrimUp = useCallback((e: ReactPointerEvent) => {
     trim.current = null;
-    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    release(e);
   }, []);
 
   if (clips.length === 0) return null;
