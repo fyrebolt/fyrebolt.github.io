@@ -229,7 +229,7 @@ export default function VideoEditor() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const compRef = useRef<Compositor | null>(null);
-  const projectRef = useRef<Project>({ clips: [], layers: [], ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration });
+  const projectRef = useRef<Project>({ clips: [], layers: [], ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration });
   const objectUrls = useRef<string[]>([]);
   /** Decoded clip media (video / image), keyed by clip srcId, kept out of the project. */
   const clipMedia = useRef<Map<string, ClipEl>>(new Map());
@@ -251,7 +251,7 @@ export default function VideoEditor() {
   const editingRef = useRef(false);
 
   const project: Project = useMemo(
-    () => ({ clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration }),
+    () => ({ clips, layers, ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration }),
     [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration],
   );
 
@@ -673,14 +673,19 @@ export default function VideoEditor() {
       layer.el.start = start;
       layer.el.x = 0.5;
       layer.el.y = 0.72;
-      if (layer.el.kind === 'boil') layer.el.end = start + 2;
+      if (layer.el.kind === 'boil') {
+        layer.el.end = start + 2;
+        // Seed the new caption's own pool/normalize from the project defaults.
+        layer.el.pool = boilPool;
+        layer.el.normalize = normalize;
+      }
       setLayers((ls) => [...ls, layer]);
       clearZoomEdit();
       setSelectedLayerId(layer.id);
       setSelectedAttachmentId(null);
       seekTo(midOfCaption(layer.el));
     },
-    [mediaKind, duration, ratio, srcDims, timelineDuration, staggerStart, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime, sealDiscrete],
+    [mediaKind, duration, ratio, srcDims, timelineDuration, staggerStart, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime, sealDiscrete, boilPool, normalize],
   );
 
   /** Fit a source-aspect box into ~40% of the frame, centred (out-normalised). */
@@ -1210,7 +1215,7 @@ export default function VideoEditor() {
     const m: Record<string, Box> = {};
     for (const l of layers) {
       if (!isPlaceable(l)) continue;
-      const b = measurePlaceableBox(l, project, out, currentSec);
+      const b = measurePlaceableBox(l, out, currentSec);
       if (b) m[l.id] = b;
     }
     return m;
@@ -1822,7 +1827,6 @@ export default function VideoEditor() {
                     <CaptionPanel
                       layer={selectedLayer as CaptionLayer}
                       duration={timelineDuration}
-                      boilPool={boilPool}
                       selectedAttachmentId={selectedAttachmentId}
                       onEdit={(patch) => updateCaptionEl(selectedLayer.id, patch)}
                       onAddAttachment={(type) => addAttachment(selectedLayer.id, type)}
@@ -1939,23 +1943,16 @@ export default function VideoEditor() {
                 </div>
               </Panel>
 
-              <Panel title="Font boil">
-                <Field label="Font pool (applies to all captions)">
+              <Panel title="Font boil defaults">
+                <p className="text-[11px] text-[var(--color-text-muted)] mb-2">
+                  Starting pool + even-sizing for <em>newly added</em> captions. Each caption keeps its own — change one in its panel without touching the rest.
+                </p>
+                <Field label="Default pool for new captions">
                   <div className="grid grid-cols-3 gap-1.5">
                     {FONT_POOLS.map((p) => (
                       <button
                         key={p.id}
-                        onClick={() => {
-                          sealDiscrete();
-                          setBoilPool(p.id);
-                          setLayers((ls) =>
-                            ls.map((l) =>
-                              l.kind === 'caption' && l.el.kind === 'boil' && l.el.settleFontIndex >= p.fonts.length
-                                ? { ...l, el: { ...l.el, settleFontIndex: p.fonts.length - 1 } }
-                                : l,
-                            ),
-                          );
-                        }}
+                        onClick={() => { sealDiscrete(); setBoilPool(p.id); }}
                         className={`px-1 py-2 rounded-md text-[11px] border ${boilPool === p.id ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]' : 'border-[var(--color-glass-border)]'}`}
                       >
                         {p.label}
@@ -1965,7 +1962,7 @@ export default function VideoEditor() {
                 </Field>
                 <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
                   <input type="checkbox" checked={normalize} onChange={(e) => { sealDiscrete(); setNormalize(e.target.checked); }} />
-                  Even sizing (normalize each font to a consistent height)
+                  Even sizing by default (normalize each font to a consistent height)
                 </label>
               </Panel>
 

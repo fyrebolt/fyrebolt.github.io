@@ -1,6 +1,6 @@
 // ===== Font pools for the caption "font boil" effect =====
 //
-// Multiple curated pools the boil can cycle through (chosen globally in the UI):
+// Multiple curated pools the boil can cycle through (chosen per-caption in the UI):
 //  - default:   the original mixed display/serif/script/mono set.
 //  - scripting: cohesive casual handwriting (Comic-Sans-ish, but nicer).
 //  - sketch:    marker / pen handwriting in the same spirit, a second option.

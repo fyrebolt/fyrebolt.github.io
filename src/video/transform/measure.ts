@@ -5,7 +5,7 @@
 // shared offscreen canvas so the selected layer's box can be derived purely.
 
 import type { OutputSize } from '../types';
-import type { Project, Layer } from '../project/types';
+import type { Layer } from '../project/types';
 import { poolById, fontByKey } from '../captions/fonts';
 import type { Caption } from '../captions/types';
 import { boilFontIndex } from '../captions/types';
@@ -20,7 +20,7 @@ function scratchCtx(): CanvasRenderingContext2D | null {
 }
 
 /** Placement box (output-normalised, top-left + size) of any placeable layer. */
-export function measurePlaceableBox(layer: Layer, project: Project, out: OutputSize, timeSec: number): Box | null {
+export function measurePlaceableBox(layer: Layer, out: OutputSize, timeSec: number): Box | null {
   if (layer.kind === 'sketch' || layer.kind === 'highlighter' || layer.kind === 'sticker') {
     const el = layer.el;
     return { x: el.x, y: el.y, w: el.w, h: el.h };
@@ -31,13 +31,13 @@ export function measurePlaceableBox(layer: Layer, project: Project, out: OutputS
     const el = layer.el;
     let font;
     if (el.kind === 'boil') {
-      const pool = poolById(project.boilPool);
+      const pool = poolById(el.pool);
       const fi = boilFontIndex(el as Caption, (timeSec - el.start) * 1000, pool.fonts.length);
       font = pool.fonts[fi] ?? pool.fonts[0];
     } else {
       font = fontByKey(el.fontKey);
     }
-    const L = measureCaption(ctx, out, el, font, el.kind === 'boil' && project.normalize);
+    const L = measureCaption(ctx, out, el, font, el.kind === 'boil' && el.normalize);
     return { x: L.left / out.w, y: L.top / out.h, w: L.blockW / out.w, h: L.blockH / out.h };
   }
   if (layer.kind === 'dramatic') {

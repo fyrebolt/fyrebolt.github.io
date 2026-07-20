@@ -1,5 +1,7 @@
 // ===== Overlay element model: font-boil captions + typewriter captions =====
 
+import type { BoilPoolId } from './fonts';
+
 export type BoilMode = 'off' | 'intro' | 'continuous';
 
 export type TextAlign = 'left' | 'center' | 'right';
@@ -66,9 +68,13 @@ export interface Caption extends BaseElement {
   kind: 'boil';
   /** End time in seconds. */
   end: number;
-  /** Index into the active pool — the font it settles on. */
+  /** Which font pool this caption boils through (per-caption, not project-global). */
+  pool: BoilPoolId;
+  /** Index into `pool` — the font it settles on. */
   settleFontIndex: number;
   boil: BoilMode;
+  /** Even out this caption's fonts to a consistent height as it boils. */
+  normalize: boolean;
 }
 
 /** Typewriter caption: types out, holds, then optionally deletes. */
@@ -194,8 +200,10 @@ export function createCaption(overrides: Partial<Caption> = {}): Caption {
     rotation: 0,
     align: 'center',
     legibility: 'outline',
+    pool: 'default',
     settleFontIndex: 0,
     boil: 'intro',
+    normalize: true,
     attachments: [],
     ...overrides,
   };

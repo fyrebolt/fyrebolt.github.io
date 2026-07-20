@@ -4,8 +4,7 @@
 
 import { useState } from 'react';
 import { Field } from '../ui';
-import { ALL_FONTS, poolById } from '../../captions/fonts';
-import type { BoilPoolId } from '../../captions/fonts';
+import { ALL_FONTS, FONT_POOLS, poolById } from '../../captions/fonts';
 import { captionWords, staticWindowOf } from '../../captions/types';
 import type {
   Attachment,
@@ -28,7 +27,6 @@ type CaptionPatch = Partial<Caption> | Partial<TypewriterCaption>;
 interface Props {
   layer: CaptionLayer;
   duration: number;
-  boilPool: BoilPoolId;
   selectedAttachmentId: string | null;
   onEdit: (patch: CaptionPatch) => void;
   onAddAttachment: (type: AttachmentType) => void;
@@ -41,7 +39,6 @@ interface Props {
 export default function CaptionPanel({
   layer,
   duration,
-  boilPool,
   selectedAttachmentId,
   onEdit,
   onAddAttachment,
@@ -93,19 +90,42 @@ export default function CaptionPanel({
             </div>
           </Field>
 
+          <Field label="Font pool">
+            <select
+              value={el.pool}
+              onChange={(e) => {
+                const pool = e.target.value as Caption['pool'];
+                // Keep the settle index in range for the new pool.
+                onEdit({ pool, settleFontIndex: Math.min(el.settleFontIndex, poolById(pool).fonts.length - 1) });
+              }}
+              className="input"
+            >
+              {FONT_POOLS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+
           <Field label="Settle font">
             <select
-              value={Math.min(el.settleFontIndex, poolById(boilPool).fonts.length - 1)}
+              value={Math.min(el.settleFontIndex, poolById(el.pool).fonts.length - 1)}
               onChange={(e) => onEdit({ settleFontIndex: Number(e.target.value) })}
               className="input"
             >
-              {poolById(boilPool).fonts.map((f, i) => (
+              {poolById(el.pool).fonts.map((f, i) => (
                 <option key={f.family} value={i}>
                   {f.label}
                 </option>
               ))}
             </select>
           </Field>
+
+          <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+            <input type="checkbox" checked={el.normalize} onChange={(e) => onEdit({ normalize: e.target.checked })} />
+            Even sizing (normalize each font to a consistent height)
+          </label>
         </>
       ) : (
         <>

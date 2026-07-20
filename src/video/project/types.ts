@@ -131,10 +131,13 @@ export interface Project {
   layers: Layer[];
   ratio: RatioKey;
   fillMode: FillMode;
-  /** Font-boil pool (project-global, shared by every caption layer). */
-  boilPool: BoilPoolId;
-  /** Per-font height normalisation for font-boil captions. */
-  normalize: boolean;
+  /** Pool a NEWLY added boil caption starts on. Seed only — each caption then
+   *  owns its own `pool` (see Caption), so this never affects existing captions
+   *  or rendering. */
+  defaultBoilPool: BoilPoolId;
+  /** Even-sizing a NEWLY added boil caption starts with. Seed only — same story
+   *  as `defaultBoilPool`; rendering reads each caption's own `normalize`. */
+  defaultNormalize: boolean;
   /** Master SFX toggle + bus gain (0..1). */
   sfxEnabled: boolean;
   sfxVolume: number;

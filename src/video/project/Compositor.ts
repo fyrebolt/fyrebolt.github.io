@@ -383,9 +383,9 @@ export class Compositor {
     }
   }
 
-  private fontFor(el: CaptionEl, outputT: number, boilPool: Project['boilPool']): BoilFont {
+  private fontFor(el: CaptionEl, outputT: number): BoilFont {
     if (el.kind === 'boil') {
-      const pool = poolById(boilPool);
+      const pool = poolById(el.pool);
       const fi = boilFontIndex(el, (outputT - el.start) * 1000, pool.fonts.length);
       return pool.fonts[fi] ?? pool.fonts[0];
     }
@@ -410,21 +410,21 @@ export class Compositor {
   private drawCaptionLayer(
     layer: CaptionLayer,
     outputT: number,
-    p: Project,
     sfxOn: boolean,
     riffleOwnerId: string | null,
     when: number,
   ): void {
     const el = layer.el;
     if (outputT < el.start || outputT >= captionEnd(el)) return;
-    const pool = poolById(p.boilPool);
 
     if (el.kind === 'boil') {
+      const pool = poolById(el.pool);
+      const norm = el.normalize;
       const fi = boilFontIndex(el, (outputT - el.start) * 1000, pool.fonts.length);
       const font = pool.fonts[fi] ?? pool.fonts[0];
-      drawAttachmentsLayer(this.ctx, this.out, el, font, outputT, p.normalize, 'below');
-      drawCaption(this.ctx, this.out, el, font, p.normalize, 1);
-      drawAttachmentsLayer(this.ctx, this.out, el, font, outputT, p.normalize, 'above');
+      drawAttachmentsLayer(this.ctx, this.out, el, font, outputT, norm, 'below');
+      drawCaption(this.ctx, this.out, el, font, norm, 1);
+      drawAttachmentsLayer(this.ctx, this.out, el, font, outputT, norm, 'above');
       if (sfxOn && el.boil !== 'off') {
         const prev = this.lastFontIdx.get(el.id);
         if (prev === undefined) this.lastFontIdx.set(el.id, fi);
@@ -439,9 +439,11 @@ export class Compositor {
     } else {
       const font = fontByKey(el.fontKey);
       const prog = typewriterProgress(el, outputT);
-      drawAttachmentsLayer(this.ctx, this.out, el, font, outputT, p.normalize, 'below');
+      // Typewriters are single-font: no normalisation (matches drawTypewriter),
+      // so attachment boxes line up with the drawn text.
+      drawAttachmentsLayer(this.ctx, this.out, el, font, outputT, false, 'below');
       drawTypewriter(this.ctx, this.out, el, font, prog);
-      drawAttachmentsLayer(this.ctx, this.out, el, font, outputT, p.normalize, 'above');
+      drawAttachmentsLayer(this.ctx, this.out, el, font, outputT, false, 'above');
       if (sfxOn) {
         if (prog.selectAll) {
           if (el.deleteEnabled && el.deleteStyle === 'selectAll' && !this.deleteCueFired.has(el.id)) {
@@ -514,7 +516,7 @@ export class Compositor {
       if (layer.kind === 'caption') {
         // Rotate the whole caption (text + attachments) about its block centre.
         this.withRotation(layer.el.x * this.out.w, layer.el.y * this.out.h, layer.el.rotation, () =>
-          this.drawCaptionLayer(layer, outputT, p, sfxOn, riffleOwnerId, when),
+          this.drawCaptionLayer(layer, outputT, sfxOn, riffleOwnerId, when),
         );
       } else if (layer.kind === 'banner') {
         drawBanner(this.ctx, this.out, layer.style, bannerFrameAt(layer, outputT, performance.now() / 1000));
@@ -830,8 +832,8 @@ export class Compositor {
     }
     if (layer.kind === 'caption') {
       const el = layer.el;
-      const font = this.fontFor(el, this.currentTimeSec(), p.boilPool);
-      const L = measureCaption(this.ctx, this.out, el, font, el.kind === 'boil' && p.normalize);
+      const font = this.fontFor(el, this.currentTimeSec());
+      const L = measureCaption(this.ctx, this.out, el, font, el.kind === 'boil' && el.normalize);
       return { left: L.left, top: L.top, width: L.blockW, height: L.blockH, rotation: el.rotation, pad: L.sizePx * 0.3 };
     }
     if (layer.kind === 'dramatic') {
@@ -855,8 +857,8 @@ export class Compositor {
     if (!layer || layer.kind !== 'caption') return null;
     const el = layer.el;
     const outputT = this.currentTimeSec();
-    const font = this.fontFor(el, outputT, p.boilPool);
-    const L = measureCaption(this.ctx, this.out, el, font, el.kind === 'boil' && p.normalize);
+    const font = this.fontFor(el, outputT);
+    const L = measureCaption(this.ctx, this.out, el, font, el.kind === 'boil' && el.normalize);
     const pad = L.sizePx * 0.25;
     return { left: L.left - pad, top: L.top - pad, width: L.blockW + pad * 2, height: L.blockH + pad * 2 };
   }
