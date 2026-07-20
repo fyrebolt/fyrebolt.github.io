@@ -41,6 +41,8 @@ import type { Highlighter } from '../highlight/types';
 import { createHighlighter, elementEnd as highlightEnd } from '../highlight/types';
 import type { DramaticWord, WordMode } from '../dramatic/types';
 import { elementEnd as dramaticEnd } from '../dramatic/types';
+import type { StickerElement, StickerSeed } from '../sticker/types';
+import { createSticker, elementEnd as stickerEnd } from '../sticker/types';
 
 export interface LayerBase {
   id: string;
@@ -101,6 +103,12 @@ export interface DramaticLayer extends LayerBase {
   el: DramaticWord;
 }
 
+/** One image / video sticker composited onto the frame (placed + cropped + timed). */
+export interface StickerLayer extends LayerBase {
+  kind: 'sticker';
+  el: StickerElement;
+}
+
 export type Layer =
   | BannerLayer
   | CaptionLayer
@@ -108,7 +116,8 @@ export type Layer =
   | TimeMachineLayer
   | SketchLayer
   | HighlighterLayer
-  | DramaticLayer;
+  | DramaticLayer
+  | StickerLayer;
 
 export type LayerKind = Layer['kind'];
 
@@ -185,6 +194,8 @@ export function layerSpan(layer: Layer): Span {
       return { start: layer.el.start, end: highlightEnd(layer.el) };
     case 'dramatic':
       return { start: layer.el.start, end: dramaticEnd(layer.el) };
+    case 'sticker':
+      return { start: layer.el.start, end: stickerEnd(layer.el) };
   }
 }
 
@@ -308,6 +319,21 @@ export function createDramaticLayer(
     z,
     name: mode === 'inverse' ? 'Inverse word' : mode === 'reflection' ? 'Reflection word' : 'Dramatic word',
     el,
+    ...overrides,
+  };
+}
+
+export function createStickerLayer(
+  z: number,
+  seed: StickerSeed,
+  overrides: Partial<StickerLayer> = {},
+): StickerLayer {
+  return {
+    kind: 'sticker',
+    id: id('stk'),
+    z,
+    name: seed.source === 'video' ? 'Video sticker' : 'Image sticker',
+    el: createSticker(seed),
     ...overrides,
   };
 }
