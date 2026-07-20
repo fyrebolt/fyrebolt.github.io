@@ -414,17 +414,18 @@ export class Compositor {
 
   // ---- preview ----
 
-  playPreview(): void {
+  /** Start (or resume) preview playback from OUTPUT second `fromSec` (default 0). */
+  playPreview(fromSec = 0): void {
     if (!this.media) return;
     this.stopLoop();
     this.recording = false;
     this.editing = false;
     this.ensureSfx();
-    this.startPlayback();
+    this.startPlayback(fromSec);
     this.loop();
   }
 
-  private startPlayback(): void {
+  private startPlayback(fromSec = 0): void {
     if (!this.media) return;
     this.firedEntrance = false;
     this.firedWhoosh.clear();
@@ -432,17 +433,46 @@ export class Compositor {
     this.lastReveal.clear();
     this.deleteCueFired.clear();
     this.lastPencil.clear();
-    this.prevT = 0;
-    this.pausedT = 0;
-    const spec = freezeSpecOf(bannerLayer(this.getProject()));
+
+    const p = this.getProject();
+    const spec = freezeSpecOf(bannerLayer(p));
+    // Clamp the resume point; treat "at/after the end" as a fresh restart at 0.
+    const total = this.totalSec();
+    const start = fromSec > 0.02 && fromSec < total - 0.05 ? fromSec : 0;
+    this.prevT = start;
+    this.pausedT = start;
+
+    // Suppress SFX for cues whose trigger instant already elapsed before `start`.
+    if (spec && start >= spec.freeze) this.firedEntrance = true;
+    const zoom = zoomLayer(p);
+    if (zoom) for (const kf of zoom.keyframes) if (start >= kf.start) this.firedWhoosh.add(kf.id);
+
     if (this.media.kind === 'video' && this.media.video) {
-      this.media.video.pause();
-      this.media.video.currentTime = 0;
-      this.phase = spec ? 'pre' : 'play';
-      void this.media.video.play().catch(() => undefined);
+      const v = this.media.video;
+      const cap = Math.max(0, this.media.duration - 0.03);
+      v.pause();
+      if (!spec) {
+        this.phase = 'play';
+        v.currentTime = Math.min(start, cap);
+        void v.play().catch(() => undefined);
+      } else if (start < spec.freeze) {
+        this.phase = 'pre';
+        v.currentTime = Math.min(start, cap);
+        void v.play().catch(() => undefined);
+      } else if (start < spec.freeze + spec.hold) {
+        // Resuming mid-freeze: hold on the freeze frame (video paused) for the
+        // remaining hold, then the freeze→post transition resumes the clip.
+        this.phase = 'freeze';
+        this.freezeWallStart = performance.now() - (start - spec.freeze) * 1000;
+        v.currentTime = Math.min(spec.freeze, cap);
+      } else {
+        this.phase = 'post';
+        v.currentTime = Math.min(start - spec.hold, cap);
+        void v.play().catch(() => undefined);
+      }
     } else {
       this.phase = 'play';
-      this.imgStart = performance.now();
+      this.imgStart = performance.now() - start * 1000;
     }
   }
 
