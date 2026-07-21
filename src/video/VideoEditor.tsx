@@ -210,6 +210,10 @@ export default function VideoEditor() {
   const [selectedSpeedIdx, setSelectedSpeedIdx] = useState<number | null>(null);
   const [editingZoom, setEditingZoom] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  /** Live preview play/pause state (reflects the compositor's actual playback). */
+  const [isPlaying, setIsPlaying] = useState(false);
+  /** In-app full-screen (breaks out of the iPad frame + dock). Transient view state. */
+  const [fullscreen, setFullscreen] = useState(false);
 
   // ---- ui ----
   const [showSafeZones, setShowSafeZones] = useState(true);
@@ -518,8 +522,9 @@ export default function VideoEditor() {
 
   // ---- seeking ----
   const seekTo = useCallback((sec: number) => {
-    compRef.current?.scrubTo(sec);
+    compRef.current?.scrubTo(sec); // scrubbing stops the preview loop
     setCurrentSec(sec);
+    setIsPlaying(false);
   }, []);
 
   // Re-sync the compositor whenever a clip is added/removed: resize the canvas to
@@ -903,6 +908,59 @@ export default function VideoEditor() {
     });
   }, [sealDiscrete]);
 
+  /** Duplicate any selected overlay layer with all its settings (Cmd/Ctrl+D). */
+  const duplicateLayer = useCallback(
+    (id: string) => {
+      const layer = layers.find((l) => l.id === id);
+      if (!layer) return;
+      if (layer.kind === 'banner' || layer.kind === 'zoom' || layer.kind === 'timemachine') {
+        setStatus('Banner, Zoom, and Time Machine are single-instance — nothing to duplicate.');
+        return;
+      }
+      const freshId = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      const clone = structuredClone(layer) as Extract<Layer, { el: unknown }>;
+      clone.id = freshId(clone.kind);
+      clone.z = nextZ(projectRef.current);
+      clone.el.id = freshId('el');
+      const nudge = (v: number) => Math.max(0.02, Math.min(0.95, v + 0.03));
+      if (clone.kind === 'dramatic') {
+        // Words never overlap in time — drop the copy into the first free gap.
+        const gap = findDramaticGap(dramaticSpans(projectRef.current.layers), timelineDuration, clone.el.duration);
+        if (!gap) {
+          setStatus('No free timeline space to duplicate this word.');
+          return;
+        }
+        clone.el.start = gap.start;
+        clone.el.duration = Math.min(clone.el.duration, gap.duration);
+      } else if (clone.kind === 'caption') {
+        clone.el.x = nudge(clone.el.x);
+        clone.el.y = nudge(clone.el.y);
+        if (clone.el.kind === 'boil') {
+          const len = clone.el.end - clone.el.start;
+          const s = Math.min(clone.el.start + 0.3, Math.max(0, timelineDuration - len));
+          clone.el.start = s;
+          clone.el.end = s + len;
+        } else {
+          const total = clone.el.typingDur + clone.el.holdDur + (clone.el.deleteEnabled ? clone.el.deleteDur : 0);
+          clone.el.start = Math.min(clone.el.start + 0.3, Math.max(0, timelineDuration - total));
+        }
+      } else {
+        // sketch / highlighter / sticker: offset in time + on-canvas so it's visible.
+        if ('x' in clone.el) {
+          clone.el.x = nudge(clone.el.x);
+          clone.el.y = nudge(clone.el.y);
+        }
+        clone.el.start = Math.min(clone.el.start + 0.3, Math.max(0, timelineDuration - 0.2));
+      }
+      sealDiscrete();
+      setLayers((ls) => [...ls, clone]);
+      clearZoomEdit();
+      setSelectedLayerId(clone.id);
+      setSelectedAttachmentId(null);
+    },
+    [layers, timelineDuration, sealDiscrete, clearZoomEdit],
+  );
+
   // ---- attachments ----
   const attachMid = useCallback((el: CaptionEl, att: Attachment): number => {
     const sw = staticWindowOf(el);
@@ -1161,7 +1219,7 @@ export default function VideoEditor() {
     [layers, selectZoomKf, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime],
   );
 
-  // ---- playback ----
+  // ---- playback (real play/pause toggle reflecting the compositor state) ----
   const play = useCallback(() => {
     setSelectedLayerId(null);
     setSelectedAttachmentId(null);
@@ -1170,16 +1228,63 @@ export default function VideoEditor() {
     setEditingZoomBoth(false);
     // Resume from the current playhead rather than restarting at 0.
     compRef.current?.playPreview(currentSec);
+    setIsPlaying(true);
   }, [currentSec]);
+
+  const pause = useCallback(() => {
+    compRef.current?.stop();
+    setIsPlaying(false);
+  }, []);
+
+  const togglePlay = useCallback(() => {
+    if (isPlaying) pause();
+    else play();
+  }, [isPlaying, pause, play]);
 
   const onScrub = useCallback(
     (sec: number) => {
       setCurrentSec(sec);
       if (editingRef.current) compRef.current?.editZoomAt(sec);
-      else compRef.current?.scrubTo(sec);
+      else {
+        compRef.current?.scrubTo(sec); // scrubbing stops playback
+        setIsPlaying(false);
+      }
     },
     [],
   );
+
+  // ---- keyboard: spacebar play/pause, Cmd/Ctrl+D duplicate, Escape exits full-screen ----
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (confirmDeleteId) return;
+      const t = e.target as HTMLElement | null;
+      const editable =
+        !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+      const mod = e.metaKey || e.ctrlKey;
+
+      // Spacebar toggles preview — but never while typing in a field.
+      if ((e.key === ' ' || e.code === 'Space') && !editable && !mod) {
+        if (!mediaKind) return;
+        e.preventDefault();
+        togglePlay();
+        return;
+      }
+      // Cmd/Ctrl+D duplicates the selected layer.
+      if (mod && (e.key === 'd' || e.key === 'D')) {
+        if (editable) return;
+        e.preventDefault();
+        if (selectedLayerId) duplicateLayer(selectedLayerId);
+        return;
+      }
+      // Escape leaves full-screen (crop-escape is owned by the other handler).
+      if (e.key === 'Escape' && fullscreen && !croppingId) {
+        e.preventDefault();
+        setFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [togglePlay, duplicateLayer, selectedLayerId, fullscreen, croppingId, confirmDeleteId, mediaKind]);
 
   // ---- canvas selection (single-layer transforms are owned by TransformBox) ----
   const normFromPointer = useCallback((clientX: number, clientY: number) => {
@@ -1244,6 +1349,7 @@ export default function VideoEditor() {
     setSelectedZoomKfId(null);
     setSelectedSpeedIdx(null);
     setEditingZoomBoth(false);
+    setIsPlaying(false);
     setDownloadUrl(null);
     setStage('recording');
     setProgress(0);
@@ -1460,8 +1566,7 @@ export default function VideoEditor() {
     [marquee, placeableBoxes],
   );
 
-  return (
-    <IpadFrame orientation="landscape" ariaLabel="Camera">
+  const editorBody = (
       <div className="ios-editor text-[var(--color-text-primary)]">
         {/* Top bar */}
         <header className="sticky top-0 z-40 px-5 pt-3">
@@ -1476,9 +1581,20 @@ export default function VideoEditor() {
               <span aria-hidden>🎥</span>
               <span>Camera</span>
             </div>
-            <a href="/video-classic/" className="justify-self-end text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)] font-mono hidden sm:block">
-              classic ↗
-            </a>
+            <div className="justify-self-end inline-flex items-center gap-3">
+              <button
+                onClick={() => setFullscreen((v) => !v)}
+                title={fullscreen ? 'Exit full screen (Esc)' : 'Full screen'}
+                aria-label={fullscreen ? 'Exit full screen' : 'Full screen'}
+                className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] px-2 py-1.5 rounded-lg hover:bg-[rgba(0,122,255,0.08)] transition-colors"
+              >
+                <span aria-hidden>{fullscreen ? '🡿' : '⛶'}</span>
+                <span className="hidden sm:inline">{fullscreen ? 'Exit' : 'Full screen'}</span>
+              </button>
+              <a href="/video-classic/" className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)] font-mono hidden sm:block">
+                classic ↗
+              </a>
+            </div>
           </div>
         </header>
 
@@ -1796,14 +1912,17 @@ export default function VideoEditor() {
                 )}
 
                 <div className="flex flex-wrap items-center gap-2 mt-3">
-                  <button onClick={play} disabled={!mediaKind || busy} className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
-                    ▶ Play preview
+                  <button onClick={togglePlay} disabled={!mediaKind || busy} title="Play / pause (Space)" className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
+                    {isPlaying ? '⏸ Pause' : '▶ Play'}
                   </button>
                   <button onClick={undo} disabled={!history.canUndo || busy} title="Undo (⌘Z / Ctrl+Z)" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
                     ↶ Undo
                   </button>
                   <button onClick={redo} disabled={!history.canRedo || busy} title="Redo (⇧⌘Z / Ctrl+Y)" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
                     ↷ Redo
+                  </button>
+                  <button onClick={() => selectedLayerId && duplicateLayer(selectedLayerId)} disabled={!selectedLayerId || busy} title="Duplicate selected (⌘D / Ctrl+D)" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
+                    ⧉ Duplicate
                   </button>
                   <button onClick={() => setAddOpen((v) => !v)} disabled={!mediaKind || busy} className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
                     + Add layer
@@ -2129,6 +2248,15 @@ export default function VideoEditor() {
             );
           })()}
       </div>
-    </IpadFrame>
+  );
+
+  // Full-screen breaks out of the iPad frame + dock entirely (identical editor,
+  // just more room). Otherwise the editor lives inside the landscape iPad frame.
+  return fullscreen ? (
+    <div className="fixed inset-0 z-[80] overflow-auto ios-wallpaper" role="group" aria-label="Camera (full screen)">
+      {editorBody}
+    </div>
+  ) : (
+    <IpadFrame orientation="landscape" ariaLabel="Camera">{editorBody}</IpadFrame>
   );
 }
