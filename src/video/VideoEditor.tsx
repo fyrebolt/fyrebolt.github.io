@@ -4,7 +4,9 @@ import IpadFrame from '../ios/IpadFrame';
 import { Compositor } from './project/Compositor';
 import type { ClipEl } from './project/Compositor';
 import ProjectTimeline from './project/ProjectTimeline';
+import type { ClipExtent } from './project/ClipLane';
 import ClipStrip from './project/ClipStrip';
+import { forgetWaveform } from './project/waveform';
 import ZoomRectEditor from './zoom/ZoomRectEditor';
 import TransformBox from './transform/TransformBox';
 import type { Transform } from './transform/TransformBox';
@@ -137,7 +139,16 @@ const GUIDES_OFF: GuideSettings = {
   border: false,
   object: false,
   cursor: false,
+  snapClips: false,
+  snapElements: false,
+  snapPlayhead: false,
 };
+
+const TIME_GUIDE_TOGGLES: { key: keyof GuideSettings; label: string }[] = [
+  { key: 'snapClips', label: 'Snap to clip edges' },
+  { key: 'snapElements', label: 'Snap to other elements' },
+  { key: 'snapPlayhead', label: 'Snap to playhead' },
+];
 
 type AddKind =
   | 'banner'
@@ -229,6 +240,8 @@ export default function VideoEditor() {
   const objectUrls = useRef<string[]>([]);
   /** Decoded clip media (video / image), keyed by clip srcId, kept out of the project. */
   const clipMedia = useRef<Map<string, ClipEl>>(new Map());
+  /** Original source blob per clip srcId (lossless — for waveform + JSON/autosave). */
+  const clipBlobs = useRef<Map<string, Blob>>(new Map());
   /** Hidden file input used to add another clip to the sequence. */
   const clipInput = useRef<HTMLInputElement>(null);
   /** Decoded sticker media (image / video), kept out of the project so layers stay plain data. */
@@ -275,13 +288,43 @@ export default function VideoEditor() {
     return [...overlays, ...bases];
   }, [project]);
 
+  // Output→source time-warp (video only). Drives the timeline length AND where
+  // each clip boundary lands on the OUTPUT axis (for the clip lane + snapping).
+  const warp = useMemo(() => (mediaKind === 'video' ? compileWarp(project, duration, true) : null), [project, mediaKind, duration]);
+
   // Timeline / output duration (seconds). For video this is the warped output
   // length (speed track + banner freeze can stretch or shrink it).
   const timelineDuration = useMemo(() => {
-    if (mediaKind === 'video') return Math.max(0.1, compileWarp(project, duration, true).totalOutput);
+    if (mediaKind === 'video' && warp) return Math.max(0.1, warp.totalOutput);
     const ends = layers.map((l) => layerSpan(l).end);
     return Math.max(3, duration, ...ends);
-  }, [project, mediaKind, duration, layers]);
+  }, [warp, mediaKind, duration, layers]);
+
+  // Base clips as OUTPUT-time extents (warped) for the timeline clip lane.
+  const clipExtents = useMemo<ClipExtent[]>(() => {
+    const out: ClipExtent[] = [];
+    let base = 0;
+    for (const c of clips) {
+      const len = clipLen(c);
+      const start = warp ? warp.outputAt(base) : base;
+      const end = warp ? warp.outputAt(base + len) : base + len;
+      out.push({ id: c.id, srcId: c.srcId, name: c.name, kind: c.kind, inSec: c.in, outSec: c.out, start, end });
+      base += len;
+    }
+    return out;
+  }, [clips, warp]);
+
+  // Unique clip-boundary times (OUTPUT seconds) for temporal snapping.
+  const clipEdges = useMemo(() => {
+    const set = new Set<number>();
+    for (const e of clipExtents) {
+      set.add(+e.start.toFixed(4));
+      set.add(+e.end.toFixed(4));
+    }
+    return [...set].sort((a, b) => a - b);
+  }, [clipExtents]);
+
+  const getClipBlob = useCallback((srcId: string) => clipBlobs.current.get(srcId), []);
 
   // Preload fonts up front so switching pools / drawing never falls back.
   useEffect(() => {
@@ -442,6 +485,7 @@ export default function VideoEditor() {
         video.addEventListener('loadedmetadata', () => {
           const srcId = clipSrcId();
           clipMedia.current.set(srcId, video);
+          clipBlobs.current.set(srcId, file);
           append(
             createClip({
               srcId,
@@ -458,6 +502,7 @@ export default function VideoEditor() {
         image.onload = () => {
           const srcId = clipSrcId();
           clipMedia.current.set(srcId, image);
+          clipBlobs.current.set(srcId, file);
           append(
             createClip(
               { srcId, kind: 'image', name, srcDuration: 0, w: image.naturalWidth, h: image.naturalHeight },
@@ -531,7 +576,11 @@ export default function VideoEditor() {
   const removeClip = useCallback(
     (id: string) => {
       sealDiscrete();
-      setClips((cs) => cs.filter((c) => c.id !== id));
+      setClips((cs) => {
+        const gone = cs.find((c) => c.id === id);
+        if (gone) forgetWaveform(gone.srcId);
+        return cs.filter((c) => c.id !== id);
+      });
       setSelectedClipId((cur) => (cur === id ? null : cur));
     },
     [sealDiscrete],
@@ -1671,6 +1720,17 @@ export default function VideoEditor() {
                                 <span>{g.label}</span>
                               </label>
                             ))}
+                            <div className="mt-1 pt-1 border-t border-[var(--color-glass-border)] text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] px-2 pb-0.5">Timeline snapping</div>
+                            {TIME_GUIDE_TOGGLES.map((g) => (
+                              <label key={g.key} className="flex items-center gap-2 px-2 py-1 hover:bg-[var(--color-glass-hover)] rounded-md cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={guideSettings[g.key]}
+                                  onChange={(e) => setGuideSettings((s) => ({ ...s, [g.key]: e.target.checked }))}
+                                />
+                                <span>{g.label}</span>
+                              </label>
+                            ))}
                           </div>
                         </div>
                       )}
@@ -1710,6 +1770,12 @@ export default function VideoEditor() {
                     selectedAttachmentId={selectedAttachmentId}
                     selectedZoomKfId={selectedZoomKfId}
                     selectedSpeedIdx={selectedSpeedIdx}
+                    clipExtents={clipExtents}
+                    clipEdges={clipEdges}
+                    selectedClipId={selectedClipId}
+                    getClipBlob={getClipBlob}
+                    onSelectClip={selectClip}
+                    guideSettings={effectiveGuides}
                     onScrub={onScrub}
                     onSelectLayer={selectLayer}
                     onEditCaption={updateCaptionEl}
