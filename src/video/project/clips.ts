@@ -18,6 +18,18 @@
 
 export type ClipKind = 'video' | 'image';
 
+/**
+ * One control point of a clip's volume-automation curve. `t` is CLIP-LOCAL
+ * seconds measured from the clip's in-point (0 .. clipLen), so the curve moves
+ * with the clip when clips are reordered and is independent of the base clock.
+ * `level` is a gain MULTIPLIER on the clip's original audio: 1 = 100% (original),
+ * 0 = silent, up to VOLUME_MAX for a boost.
+ */
+export interface VolumePoint {
+  t: number;
+  level: number;
+}
+
 export interface VideoClip {
   id: string;
   /** Registry key for the decoded media element (kept out of the project). */
@@ -35,12 +47,100 @@ export interface VideoClip {
   /** Native pixel dimensions — used for output sizing + aspect compositing. */
   w: number;
   h: number;
+  /** Volume-automation curve, ordered by `t`. Absent/empty == flat 100% (the
+   *  clip's original volume, unchanged), so existing clips/projects are never
+   *  affected until someone edits a curve. */
+  volume?: VolumePoint[];
+  /** Silence this clip's ORIGINAL audio entirely, regardless of the curve. The
+   *  curve is preserved so un-muting restores exactly what was there. */
+  muted?: boolean;
 }
 
 /** Smallest a clip may be trimmed to (seconds). */
 export const MIN_CLIP_LEN = 0.1;
 /** Soft length cap a fresh image clip can be stretched to on the trim handles. */
 export const IMAGE_CLIP_MAX = 60;
+
+/** Ceiling of the volume multiplier — allows boosting to 200% of original. */
+export const VOLUME_MAX = 2;
+
+/** Clamp a raw level into the editable range [0, VOLUME_MAX]. */
+export function clampLevel(level: number): number {
+  if (!isFinite(level)) return 1;
+  return Math.max(0, Math.min(VOLUME_MAX, level));
+}
+
+/** Curve points sorted by time (stable copy — never mutates the input). */
+export function sortedVolume(points: VolumePoint[]): VolumePoint[] {
+  return points.slice().sort((a, b) => a.t - b.t);
+}
+
+/**
+ * Volume MULTIPLIER at clip-local time `t` (seconds from the clip's in-point).
+ * No points → flat 1.0 (original volume). Linear interpolation between adjacent
+ * points; clamped to the first/last level outside the point range.
+ */
+export function sampleVolume(points: VolumePoint[] | undefined, t: number): number {
+  if (!points || points.length === 0) return 1;
+  if (points.length === 1) return clampLevel(points[0].level);
+  const pts = sortedVolume(points);
+  if (t <= pts[0].t) return clampLevel(pts[0].level);
+  const last = pts[pts.length - 1];
+  if (t >= last.t) return clampLevel(last.level);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    if (t >= a.t && t <= b.t) {
+      const span = b.t - a.t;
+      const f = span <= 1e-6 ? 0 : (t - a.t) / span;
+      return clampLevel(a.level + (b.level - a.level) * f);
+    }
+  }
+  return clampLevel(last.level);
+}
+
+export interface OscillationOpts {
+  /** Clip-local range to fill (seconds from the in-point). */
+  start: number;
+  end: number;
+  /** Oscillations per second. */
+  freq: number;
+  /** How far the level swings above/below `center`. */
+  depth: number;
+  /** Level the wave oscillates around (e.g. 1 = original volume). */
+  center: number;
+}
+
+/** Sample points generated per oscillation cycle (linear interp smooths these). */
+const OSC_SAMPLES_PER_CYCLE = 12;
+/** Hard cap on generated points so pathological freq × range can't explode. */
+const OSC_MAX_POINTS = 480;
+
+/**
+ * Return a fresh curve where the range [start, end] is replaced by a sine/tremolo
+ * wave (level = center + depth·sin) sampled densely enough that linear
+ * interpolation reads as smooth. Points OUTSIDE the range are preserved, so a
+ * partial-range generate only rewrites what it covers. The emitted points are
+ * ordinary curve points — draggable/deletable afterward like any other.
+ */
+export function applyOscillation(existing: VolumePoint[] | undefined, opts: OscillationOpts): VolumePoint[] {
+  const start = Math.max(0, Math.min(opts.start, opts.end));
+  const end = Math.max(opts.start, opts.end);
+  const span = end - start;
+  const freq = Math.max(0, opts.freq);
+  const kept = (existing ?? []).filter((p) => p.t < start - 1e-4 || p.t > end + 1e-4);
+  if (span <= 1e-4 || freq <= 0) return sortedVolume(kept);
+
+  const cycles = span * freq;
+  const n = Math.min(OSC_MAX_POINTS, Math.max(2, Math.ceil(cycles * OSC_SAMPLES_PER_CYCLE)));
+  const gen: VolumePoint[] = [];
+  for (let i = 0; i <= n; i++) {
+    const t = start + (span * i) / n;
+    const level = clampLevel(opts.center + opts.depth * Math.sin(2 * Math.PI * freq * (t - start)));
+    gen.push({ t, level });
+  }
+  return sortedVolume([...kept, ...gen]);
+}
 
 /** Effective on-timeline length of a clip (trimmed), in seconds. */
 export function clipLen(c: VideoClip): number {

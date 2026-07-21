@@ -47,7 +47,7 @@ import { elementEnd as stickerEnd } from '../sticker/types';
 import type { Project, CaptionLayer } from './types';
 import { bannerLayer, zoomLayer, timeMachineLayer, overlayLayers, layerSpan } from './types';
 import type { VideoClip, BaseHit } from './clips';
-import { baseDuration, resolveBase, hasVideoClip } from './clips';
+import { baseDuration, resolveBase, hasVideoClip, sampleVolume } from './clips';
 
 /** Seconds between pencil-on-paper grains while a sketch animates. */
 const PENCIL_INTERVAL = 0.06;
@@ -268,8 +268,12 @@ export class Compositor {
           if (Math.abs(v.currentTime - target) > 0.3) v.currentTime = Math.max(0, target);
         }
         if (audio && this.audioCtx) {
-          const mute = frozen || Math.abs(speed - 1) > 0.02;
-          audio.gain.gain.setTargetAtTime(mute ? 0 : 1, when, 0.01);
+          // Base = the clip's own automation curve at this clip-local instant
+          // (hit.local == seconds from the in-point). Pitch-shifted / paused audio
+          // is still silenced on a freeze or off-speed span, and mute wins outright.
+          const suppressed = frozen || Math.abs(speed - 1) > 0.02 || clip.muted === true;
+          const level = suppressed ? 0 : sampleVolume(clip.volume, hit.local);
+          audio.gain.gain.setTargetAtTime(level, when, 0.01);
         }
       } else {
         if (!v.paused) v.pause();
@@ -657,6 +661,10 @@ export class Compositor {
     this.recording = false;
     this.editing = false;
     this.ensureSfx();
+    // Route base-clip audio through the per-clip gain graph in preview too, so the
+    // volume-automation curve + mute are audible while previewing — exactly the
+    // same nodes the export drives, so preview and the exported file always match.
+    if (this.hasVideo()) this.ensureClipAudio();
     this.startPlayback(fromSec);
     this.loop();
   }
