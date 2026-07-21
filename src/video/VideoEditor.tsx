@@ -1247,6 +1247,19 @@ export default function VideoEditor() {
     setIsPlaying(true);
   }, [currentSec]);
 
+  /** Restart: jump the playhead to 0 and play from the top, whatever the current
+   *  position or play state (distinct from play(), which resumes from the cursor). */
+  const playFromStart = useCallback(() => {
+    setSelectedLayerId(null);
+    setSelectedAttachmentId(null);
+    setSelectedZoomKfId(null);
+    setSelectedSpeedIdx(null);
+    setEditingZoomBoth(false);
+    setCurrentSec(0);
+    compRef.current?.playPreview(0);
+    setIsPlaying(true);
+  }, []);
+
   const pause = useCallback(() => {
     compRef.current?.stop();
     setIsPlaying(false);
@@ -2125,6 +2138,9 @@ export default function VideoEditor() {
                 )}
 
                 <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <button onClick={playFromStart} disabled={!mediaKind || busy} title="Restart from beginning" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
+                    ⏮ Restart
+                  </button>
                   <button onClick={togglePlay} disabled={!mediaKind || busy} title="Play / pause (Space)" className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
                     {isPlaying ? '⏸ Pause' : '▶ Play'}
                   </button>
