@@ -39,7 +39,7 @@ import type { BoilFont } from '../captions/fonts';
 import type { CaptionEl } from '../captions/types';
 import { boilFontIndex, elementEnd as captionEnd, typewriterProgress } from '../captions/types';
 import { FULL_RECT, rectAt, sortedZooms } from '../zoom/types';
-import { sortedSpeeds } from '../timemachine/types';
+import { speedAt, SLOWMO_ENTER } from '../timemachine/types';
 import { elementEnd as sketchEnd } from '../sketch/types';
 import { elementEnd as highlightEnd } from '../highlight/types';
 import { elementEnd as dramaticEnd } from '../dramatic/types';
@@ -505,15 +505,13 @@ export class Compositor {
       }
     }
 
-    // time-machine (replay) whooshes — same edge-triggered pattern as zoom
+    // time-machine (replay) whoosh: fire on each slow-mo / freeze ONSET — when the
+    // free-form speed curve crosses down into slow motion between frames.
     const tm = timeMachineLayer(p);
-    if (sfxOn && tm) {
-      for (const kf of sortedSpeeds(tm.keyframes)) {
-        if (outputT >= kf.start && !this.firedWhoosh.has(kf.id)) {
-          this.firedWhoosh.add(kf.id);
-          if (kf.whoosh) this.sfx!.trigger('whoosh', when);
-        }
-      }
+    if (sfxOn && tm && tm.whoosh) {
+      const prevS = speedAt(this.prevT, tm.points);
+      const curS = speedAt(outputT, tm.points);
+      if (prevS > SLOWMO_ENTER && curS <= SLOWMO_ENTER) this.sfx!.trigger('whoosh', when);
     }
 
     for (const layer of overlayLayers(p)) {
@@ -693,8 +691,7 @@ export class Compositor {
     if (banner && start >= banner.freeze) this.firedEntrance = true;
     const zoom = zoomLayer(p);
     if (zoom) for (const kf of zoom.keyframes) if (start >= kf.start) this.firedWhoosh.add(kf.id);
-    const tm = timeMachineLayer(p);
-    if (tm) for (const kf of tm.keyframes) if (start >= kf.start) this.firedWhoosh.add(kf.id);
+    // Time Machine whoosh is onset-based (prevT vs outputT), so nothing to pre-seed.
 
     // Steer clips to the start frame (pauses non-active, plays the active one).
     this.driveClips(start, true);

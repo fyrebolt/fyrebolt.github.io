@@ -16,8 +16,7 @@ import type { Attachment, CaptionEl } from '../captions/types';
 import { elementEnd as captionEnd, staticWindowOf } from '../captions/types';
 import type { ZoomKeyframe } from '../zoom/types';
 import { sortedZooms } from '../zoom/types';
-import type { SpeedKeyframe } from '../timemachine/types';
-import { FREEZE_EPS, sortedSpeeds } from '../timemachine/types';
+import SpeedCurveRow from './SpeedCurveRow';
 import type { SketchElement } from '../sketch/types';
 import type { Highlighter } from '../highlight/types';
 import type { DramaticWord } from '../dramatic/types';
@@ -31,7 +30,6 @@ import type {
   Layer,
   SketchLayer,
   StickerLayer,
-  TimeMachineLayer,
   ZoomLayer,
 } from './types';
 import { dramaticSpans, layerSpan } from './types';
@@ -44,17 +42,6 @@ const PHASE_COLORS = { typing: '#6ee7b7', hold: '#93c5fd', del: '#fca5a5' };
 const ZOOM_TRANSITION = '#a78bfa';
 const ZOOM_HOLDING = 'rgba(167,139,250,0.28)';
 
-/** Transition-block colour for a Time Machine keyframe by its target speed. */
-function speedColor(speed: number): string {
-  if (speed <= FREEZE_EPS) return '#64748b'; // freeze — slate
-  if (speed < 0.98) return '#22d3ee'; // slow-mo — cyan
-  if (speed > 1.02) return '#fb923c'; // fast — orange
-  return '#94a3b8'; // normal — grey
-}
-function speedTag(speed: number): string {
-  if (speed <= FREEZE_EPS) return '⏸';
-  return `${Math.round(speed * 100) / 100}×`;
-}
 const BANNER_COLOR = '#f0883e';
 const SKETCH_COLOR = '#c4a7fb';
 const SKETCH_ANIM = 'rgba(196,167,251,0.45)';
@@ -80,7 +67,7 @@ interface Props {
   selectedLayerId: string | null;
   selectedAttachmentId: string | null;
   selectedZoomKfId: string | null;
-  selectedSpeedKfId: string | null;
+  selectedSpeedIdx: number | null;
   onScrub: (sec: number) => void;
   onSelectLayer: (id: string) => void;
   onEditCaption: (layerId: string, patch: Partial<CaptionEl>) => void;
@@ -89,8 +76,10 @@ interface Props {
   onEditBanner: (layerId: string, patch: Partial<BannerLayer>) => void;
   onSelectZoomKf: (layerId: string, kfId: string) => void;
   onEditZoomKf: (layerId: string, kfId: string, patch: Partial<ZoomKeyframe>) => void;
-  onSelectSpeedKf: (layerId: string, kfId: string) => void;
-  onEditSpeedKf: (layerId: string, kfId: string, patch: Partial<SpeedKeyframe>) => void;
+  onSelectSpeedPoint: (layerId: string, idx: number) => void;
+  onAddSpeedPoint: (layerId: string, t: number, speed: number) => void;
+  onMoveSpeedPoint: (layerId: string, idx: number, t: number, speed: number) => void;
+  onRemoveSpeedPoint: (layerId: string, idx: number) => void;
   onEditSketch: (layerId: string, patch: Partial<SketchElement>) => void;
   onEditHighlighter: (layerId: string, patch: Partial<Highlighter>) => void;
   onEditDramatic: (layerId: string, patch: Partial<DramaticWord>) => void;
@@ -126,13 +115,6 @@ interface ZoomDrag {
   startX: number;
   orig: ZoomKeyframe;
 }
-interface SpeedDrag {
-  layerId: string;
-  kfId: string;
-  mode: 'start' | 'dur';
-  startX: number;
-  orig: SpeedKeyframe;
-}
 /** Generic overlay-range drag (sketch / highlighter / dramatic / sticker). */
 interface RangeDrag {
   layerId: string;
@@ -155,7 +137,7 @@ export default function ProjectTimeline({
   selectedLayerId,
   selectedAttachmentId,
   selectedZoomKfId,
-  selectedSpeedKfId,
+  selectedSpeedIdx,
   onScrub,
   onSelectLayer,
   onEditCaption,
@@ -164,8 +146,10 @@ export default function ProjectTimeline({
   onEditBanner,
   onSelectZoomKf,
   onEditZoomKf,
-  onSelectSpeedKf,
-  onEditSpeedKf,
+  onSelectSpeedPoint,
+  onAddSpeedPoint,
+  onMoveSpeedPoint,
+  onRemoveSpeedPoint,
   onEditSketch,
   onEditHighlighter,
   onEditDramatic,
@@ -176,7 +160,6 @@ export default function ProjectTimeline({
   const attachDrag = useRef<AttachDrag | null>(null);
   const bannerDrag = useRef<BannerDrag | null>(null);
   const zoomDrag = useRef<ZoomDrag | null>(null);
-  const speedDrag = useRef<SpeedDrag | null>(null);
   const rangeDrag = useRef<RangeDrag | null>(null);
 
   const dur = Math.max(0.001, duration);
@@ -343,31 +326,6 @@ export default function ProjectTimeline({
     [dur, fracFromClientX, onEditZoomKf],
   );
 
-  // ---- time-machine row drag (mirrors zoom: move start / resize ramp) ----
-  const onSpeedDown = useCallback(
-    (e: ReactPointerEvent, layer: TimeMachineLayer, kf: SpeedKeyframe, mode: 'start' | 'dur') => {
-      e.stopPropagation();
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId);
-      } catch {
-        /* ignore */
-      }
-      onSelectSpeedKf(layer.id, kf.id);
-      speedDrag.current = { layerId: layer.id, kfId: kf.id, mode, startX: e.clientX, orig: kf };
-    },
-    [onSelectSpeedKf],
-  );
-  const onSpeedMove = useCallback(
-    (e: ReactPointerEvent) => {
-      const d = speedDrag.current;
-      if (!d || e.buttons === 0) return;
-      const delta = (fracFromClientX(e.clientX) - fracFromClientX(d.startX)) * dur;
-      if (d.mode === 'start') onEditSpeedKf(d.layerId, d.kfId, { start: clamp(0, dur, d.orig.start + delta) });
-      else onEditSpeedKf(d.layerId, d.kfId, { duration: clamp(0, dur - d.orig.start, d.orig.duration + delta) });
-    },
-    [dur, fracFromClientX, onEditSpeedKf],
-  );
-
   // ---- generic overlay-range drag (sketch / highlighter / dramatic) ----
   const onRangeDown = useCallback(
     (e: ReactPointerEvent, layer: SketchLayer | HighlighterLayer | DramaticLayer | StickerLayer, mode: 'move' | 'end') => {
@@ -447,7 +405,6 @@ export default function ProjectTimeline({
     attachDrag.current = null;
     bannerDrag.current = null;
     zoomDrag.current = null;
-    speedDrag.current = null;
     rangeDrag.current = null;
   }, []);
 
@@ -538,61 +495,20 @@ export default function ProjectTimeline({
           }
 
           if (layer.kind === 'timemachine') {
-            const sorted = sortedSpeeds(layer.keyframes);
             return (
-              <div key={layer.id} className="relative h-8 rounded-md bg-[var(--color-bg-elevated)] overflow-hidden">
-                <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-30" style={{ left: playLeft }} />
-                {sorted.length === 0 && (
-                  <button
-                    onClick={() => onSelectLayer(layer.id)}
-                    className="absolute inset-0 flex items-center justify-center text-[10px] text-[var(--color-text-muted)]"
-                  >
-                    Time Machine — add a speed change
-                  </button>
-                )}
-                {sorted.map((kf, ki) => {
-                  const end = kf.start + kf.duration;
-                  const nextStart = ki + 1 < sorted.length ? sorted[ki + 1].start : dur;
-                  const holdEnd = Math.max(end, nextStart);
-                  const startPct = clamp(0, 100, (kf.start / dur) * 100);
-                  const transPct = clamp(0, 100 - startPct, (Math.min(kf.duration, dur) / dur) * 100);
-                  const holdPct = clamp(0, 100, (Math.max(0, holdEnd - end) / dur) * 100);
-                  const kfSel = kf.id === selectedSpeedKfId;
-                  const color = speedColor(kf.speed);
-                  return (
-                    <div key={kf.id}>
-                      <div
-                        onPointerDown={(e) => {
-                          e.stopPropagation();
-                          onSelectSpeedKf(layer.id, kf.id);
-                        }}
-                        className="absolute top-2 bottom-2 z-[5] cursor-pointer"
-                        style={{ left: `${startPct + transPct}%`, width: `${holdPct}%`, background: color, opacity: 0.3 }}
-                        title={`Holding at ${speedTag(kf.speed)}`}
-                      />
-                      <div
-                        onPointerDown={(e) => onSpeedDown(e, layer, kf, 'start')}
-                        onPointerMove={onSpeedMove}
-                        onPointerUp={onUp}
-                        className={`absolute top-1 bottom-1 rounded-sm flex items-center px-1.5 overflow-hidden cursor-grab active:cursor-grabbing touch-none ${
-                          kfSel ? 'ring-2 ring-[var(--color-primary-green)] z-20' : 'z-10'
-                        }`}
-                        style={{ left: `${startPct}%`, width: `${Math.max(2, transPct)}%`, background: color }}
-                        title="Drag to move · drag the right edge for the ramp time"
-                      >
-                        <span className="text-[9px] font-bold text-black/70 pointer-events-none whitespace-nowrap">{speedTag(kf.speed)}</span>
-                        <div
-                          onPointerDown={(e) => onSpeedDown(e, layer, kf, 'dur')}
-                          onPointerMove={onSpeedMove}
-                          onPointerUp={onUp}
-                          className="absolute right-0 top-0 bottom-0 w-1.5 bg-black/40 hover:bg-black/70 cursor-ew-resize touch-none"
-                        />
-                      </div>
-                      <div className="absolute top-0 bottom-0 w-[2px] bg-white/80 pointer-events-none z-20" style={{ left: `${startPct}%` }} />
-                    </div>
-                  );
-                })}
-              </div>
+              <SpeedCurveRow
+                key={layer.id}
+                points={layer.points}
+                duration={dur}
+                currentSec={currentSec}
+                selected={selected}
+                selectedIdx={selectedSpeedIdx}
+                onSelectLayer={() => onSelectLayer(layer.id)}
+                onAddPoint={(t, speed) => onAddSpeedPoint(layer.id, t, speed)}
+                onMovePoint={(idx, t, speed) => onMoveSpeedPoint(layer.id, idx, t, speed)}
+                onRemovePoint={(idx) => onRemoveSpeedPoint(layer.id, idx)}
+                onSelectPoint={(idx) => onSelectSpeedPoint(layer.id, idx)}
+              />
             );
           }
 

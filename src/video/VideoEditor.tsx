@@ -19,8 +19,8 @@ import { createAttachment, staticWindowOf } from './captions/types';
 import type { Attachment, AttachmentType, Caption, CaptionEl, TypewriterCaption } from './captions/types';
 import { createZoom } from './zoom/types';
 import type { ZoomKeyframe, ZoomRect } from './zoom/types';
-import { createSpeed } from './timemachine/types';
-import type { SpeedKeyframe } from './timemachine/types';
+import { applySpeedRegion, clampSpeed, REGION_RAMP, REGION_HOLD, FREEZE_RAMP } from './timemachine/types';
+import type { SpeedPoint } from './timemachine/types';
 import type { SketchElement, SketchStroke } from './sketch/types';
 import type { Highlighter } from './highlight/types';
 import { createDramaticWord } from './dramatic/types';
@@ -168,11 +168,6 @@ const ADD_ITEMS: { kind: AddKind; label: string; icon: string }[] = [
   { kind: 'dramatic-reflection', label: 'Reflection word', icon: '🔃' },
 ];
 
-/** Frozen-hold length for the "+ Freeze" preset (output seconds). */
-const FREEZE_BLOCK_HOLD = 1.2;
-/** Near-instant ramp used by the freeze block's snap-to-0 and resume keyframes. */
-const FREEZE_SNAP_RAMP = 0.12;
-
 export default function VideoEditor() {
   // ---- media ----
   const [currentSec, setCurrentSec] = useState(0); // OUTPUT seconds
@@ -201,7 +196,7 @@ export default function VideoEditor() {
   /** Marquee rect (output-normalised) while drag-selecting, else null. */
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [selectedZoomKfId, setSelectedZoomKfId] = useState<string | null>(null);
-  const [selectedSpeedKfId, setSelectedSpeedKfId] = useState<string | null>(null);
+  const [selectedSpeedIdx, setSelectedSpeedIdx] = useState<number | null>(null);
   const [editingZoom, setEditingZoom] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
 
@@ -385,7 +380,7 @@ export default function VideoEditor() {
     editingRef.current = false;
     setEditingZoom(false);
     setSelectedZoomKfId(null);
-    setSelectedSpeedKfId(null);
+    setSelectedSpeedIdx(null);
     compRef.current?.exitEdit();
     setSelectedAttachmentId(null);
     setGroupIds((g) => g.filter((id) => s.layers.some((l) => l.id === id)));
@@ -635,7 +630,7 @@ export default function VideoEditor() {
         clearZoomEdit();
         setSelectedLayerId(layer.id);
         setSelectedAttachmentId(null);
-        setSelectedSpeedKfId(null);
+        setSelectedSpeedIdx(null);
         return;
       }
       if (kind === 'sketch') {
@@ -991,73 +986,98 @@ export default function VideoEditor() {
     [selectedLayerId, selectedZoomKfId, updateZoomKf],
   );
 
-  // ---- time-machine (speed) keyframes ----
-  const selectSpeedKf = useCallback(
-    (layerId: string, kfId: string) => {
+  // ---- time-machine (free-form speed curve) ----
+  const editTimeMachinePoints = useCallback((layerId: string, points: SpeedPoint[]) => {
+    setLayers((ls) => ls.map((l) => (l.id === layerId && l.kind === 'timemachine' ? { ...l, points } : l)));
+  }, []);
+
+  const selectSpeedPoint = useCallback(
+    (layerId: string, idx: number) => {
       const layer = layers.find((l) => l.id === layerId);
       if (!layer || layer.kind !== 'timemachine') return;
-      const kf = layer.keyframes.find((k) => k.id === kfId);
       clearZoomEdit();
       setSelectedLayerId(layerId);
       setSelectedAttachmentId(null);
-      setSelectedSpeedKfId(kfId);
-      if (kf) seekTo(Math.min(kf.start + kf.duration, timelineDuration));
+      setSelectedSpeedIdx(idx);
+      const p = layer.points[idx];
+      if (p) seekTo(Math.min(Math.max(0, p.t), timelineDuration));
     },
     [layers, clearZoomEdit, seekTo, timelineDuration],
   );
 
-  /** Placement for a newly-added speed keyframe: at the playhead, after the last one. */
-  const speedKfStart = useCallback((): number => {
-    if (!timeMachine) return 0;
-    const prevEnd = timeMachine.keyframes.reduce((m, k) => Math.max(m, k.start + k.duration), 0);
-    return Math.min(Math.max(0, timelineDuration - 0.3), Math.max(currentSec, prevEnd));
-  }, [timeMachine, timelineDuration, currentSec]);
+  /** Click the lane → append a free point, select it, seek to it. */
+  const addSpeedPoint = useCallback(
+    (layerId: string, t: number, speed: number) => {
+      const layer = layers.find((l) => l.id === layerId);
+      if (!layer || layer.kind !== 'timemachine') return;
+      sealDiscrete();
+      const next = [...layer.points, { t: Math.max(0, t), speed: clampSpeed(speed) }];
+      editTimeMachinePoints(layerId, next);
+      setSelectedLayerId(layerId);
+      setSelectedAttachmentId(null);
+      setSelectedSpeedIdx(next.length - 1);
+      seekTo(Math.min(Math.max(0, t), timelineDuration));
+    },
+    [layers, sealDiscrete, editTimeMachinePoints, seekTo, timelineDuration],
+  );
 
-  const addSpeedKeyframe = useCallback(
+  /** Drag a point (continuous — the history debounce coalesces the burst). */
+  const moveSpeedPoint = useCallback(
+    (layerId: string, idx: number, t: number, speed: number) => {
+      const layer = layers.find((l) => l.id === layerId);
+      if (!layer || layer.kind !== 'timemachine') return;
+      editTimeMachinePoints(layerId, layer.points.map((p, i) => (i === idx ? { t: Math.max(0, t), speed: clampSpeed(speed) } : p)));
+      setSelectedSpeedIdx(idx);
+    },
+    [layers, editTimeMachinePoints],
+  );
+
+  const removeSpeedPoint = useCallback(
+    (layerId: string, idx: number) => {
+      const layer = layers.find((l) => l.id === layerId);
+      if (!layer || layer.kind !== 'timemachine') return;
+      sealDiscrete();
+      editTimeMachinePoints(layerId, layer.points.filter((_, i) => i !== idx));
+      setSelectedSpeedIdx(null);
+    },
+    [layers, sealDiscrete, editTimeMachinePoints],
+  );
+
+  const setSpeedPointSpeed = useCallback(
+    (idx: number, speed: number) => {
+      if (!timeMachine) return;
+      editTimeMachinePoints(timeMachine.id, timeMachine.points.map((p, i) => (i === idx ? { ...p, speed: clampSpeed(speed) } : p)));
+    },
+    [timeMachine, editTimeMachinePoints],
+  );
+
+  /** Preset: drop a localised region (1× → held speed → 1×) at the playhead. */
+  const addSpeedRegion = useCallback(
     (speed: number) => {
       if (!timeMachine) return;
       sealDiscrete();
-      const start = speedKfStart();
-      const kf = createSpeed({ start, duration: 0.6, speed });
-      setLayers((ls) => ls.map((l) => (l.id === timeMachine.id && l.kind === 'timemachine' ? { ...l, keyframes: [...l.keyframes, kf] } : l)));
+      const start = Math.max(0, Math.min(currentSec, Math.max(0, timelineDuration - 0.3)));
+      const ramp = speed <= 0.02 ? FREEZE_RAMP : REGION_RAMP;
+      editTimeMachinePoints(timeMachine.id, applySpeedRegion(timeMachine.points, { start, speed, ramp, hold: REGION_HOLD }));
       setSelectedLayerId(timeMachine.id);
       setSelectedAttachmentId(null);
-      setSelectedSpeedKfId(kf.id);
-      seekTo(start + 0.6);
+      setSelectedSpeedIdx(null);
+      seekTo(Math.min(start + ramp + REGION_HOLD / 2, timelineDuration));
     },
-    [timeMachine, speedKfStart, seekTo, sealDiscrete],
+    [timeMachine, currentSec, timelineDuration, sealDiscrete, editTimeMachinePoints, seekTo],
   );
 
-  /** "+ Freeze": a snap to speed 0, then a resume to 1× a fixed hold later. */
-  const addFreezeBlock = useCallback(() => {
+  const clearSpeedCurve = useCallback(() => {
     if (!timeMachine) return;
     sealDiscrete();
-    const start = speedKfStart();
-    const freeze = createSpeed({ start, duration: FREEZE_SNAP_RAMP, speed: 0 });
-    const resume = createSpeed({ start: start + FREEZE_SNAP_RAMP + FREEZE_BLOCK_HOLD, duration: FREEZE_SNAP_RAMP, speed: 1 });
-    setLayers((ls) =>
-      ls.map((l) => (l.id === timeMachine.id && l.kind === 'timemachine' ? { ...l, keyframes: [...l.keyframes, freeze, resume] } : l)),
-    );
-    setSelectedLayerId(timeMachine.id);
-    setSelectedAttachmentId(null);
-    setSelectedSpeedKfId(freeze.id);
-    seekTo(start + FREEZE_SNAP_RAMP + FREEZE_BLOCK_HOLD / 2);
-  }, [timeMachine, speedKfStart, seekTo, sealDiscrete]);
+    editTimeMachinePoints(timeMachine.id, []);
+    setSelectedSpeedIdx(null);
+  }, [timeMachine, sealDiscrete, editTimeMachinePoints]);
 
-  const updateSpeedKf = useCallback((layerId: string, kfId: string, patch: Partial<SpeedKeyframe>) => {
-    setLayers((ls) =>
-      ls.map((l) => (l.id === layerId && l.kind === 'timemachine' ? { ...l, keyframes: l.keyframes.map((k) => (k.id === kfId ? { ...k, ...patch } : k)) } : l)),
-    );
-  }, []);
-
-  const removeSpeedKf = useCallback(
-    (layerId: string, kfId: string) => {
-      sealDiscrete();
-      setLayers((ls) => ls.map((l) => (l.id === layerId && l.kind === 'timemachine' ? { ...l, keyframes: l.keyframes.filter((k) => k.id !== kfId) } : l)));
-      setSelectedSpeedKfId((s) => (s === kfId ? null : s));
-    },
-    [sealDiscrete],
-  );
+  const updateTimeMachine = useCallback((layerId: string, patch: Partial<TimeMachineLayer>) => {
+    sealDiscrete();
+    setLayers((ls) => ls.map((l) => (l.id === layerId && l.kind === 'timemachine' ? { ...l, ...patch } : l)));
+  }, [sealDiscrete]);
 
   // ---- selecting a layer (list / timeline) ----
   const selectLayer = useCallback(
@@ -1077,12 +1097,10 @@ export default function VideoEditor() {
       }
       if (layer.kind === 'timemachine') {
         clearZoomEdit();
-        const first = [...layer.keyframes].sort((a, b) => a.start - b.start)[0];
-        setSelectedSpeedKfId(first?.id ?? null);
-        if (first) seekTo(Math.min(first.start + first.duration, timelineDuration));
+        setSelectedSpeedIdx(null);
         return;
       }
-      setSelectedSpeedKfId(null);
+      setSelectedSpeedIdx(null);
       clearZoomEdit();
       if (layer.kind === 'banner') seekTo(bannerPreviewTime(layer));
       else if (layer.kind === 'caption') seekTo(midOfCaption(layer.el));
@@ -1091,7 +1109,7 @@ export default function VideoEditor() {
       else if (layer.kind === 'dramatic') seekTo(layer.el.start + Math.min(0.5, layer.el.duration / 2));
       else if (layer.kind === 'sticker') seekTo(layer.el.start + Math.min(0.5, layer.el.hold / 2));
     },
-    [layers, selectZoomKf, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime, timelineDuration],
+    [layers, selectZoomKf, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime],
   );
 
   // ---- playback ----
@@ -1099,7 +1117,7 @@ export default function VideoEditor() {
     setSelectedLayerId(null);
     setSelectedAttachmentId(null);
     setSelectedZoomKfId(null);
-    setSelectedSpeedKfId(null);
+    setSelectedSpeedIdx(null);
     setEditingZoomBoth(false);
     // Resume from the current playhead rather than restarting at 0.
     compRef.current?.playPreview(currentSec);
@@ -1175,7 +1193,7 @@ export default function VideoEditor() {
     }
     setSelectedLayerId(null);
     setSelectedZoomKfId(null);
-    setSelectedSpeedKfId(null);
+    setSelectedSpeedIdx(null);
     setEditingZoomBoth(false);
     setDownloadUrl(null);
     setStage('recording');
@@ -1691,7 +1709,7 @@ export default function VideoEditor() {
                     selectedLayerId={selectedLayerId}
                     selectedAttachmentId={selectedAttachmentId}
                     selectedZoomKfId={selectedZoomKfId}
-                    selectedSpeedKfId={selectedSpeedKfId}
+                    selectedSpeedIdx={selectedSpeedIdx}
                     onScrub={onScrub}
                     onSelectLayer={selectLayer}
                     onEditCaption={updateCaptionEl}
@@ -1700,8 +1718,10 @@ export default function VideoEditor() {
                     onEditBanner={updateBanner}
                     onSelectZoomKf={selectZoomKf}
                     onEditZoomKf={updateZoomKf}
-                    onSelectSpeedKf={selectSpeedKf}
-                    onEditSpeedKf={updateSpeedKf}
+                    onSelectSpeedPoint={selectSpeedPoint}
+                    onAddSpeedPoint={addSpeedPoint}
+                    onMoveSpeedPoint={moveSpeedPoint}
+                    onRemoveSpeedPoint={removeSpeedPoint}
                     onEditSketch={updateSketchEl}
                     onEditHighlighter={updateHighlighterEl}
                     onEditDramatic={updateDramaticEl}
@@ -1872,13 +1892,12 @@ export default function VideoEditor() {
                   {selectedLayer.kind === 'timemachine' && (
                     <TimeMachinePanel
                       layer={selectedLayer as TimeMachineLayer}
-                      duration={timelineDuration}
-                      selectedKfId={selectedSpeedKfId}
-                      onAddKeyframe={addSpeedKeyframe}
-                      onAddFreeze={addFreezeBlock}
-                      onSelectKf={(kfId) => selectSpeedKf(selectedLayer.id, kfId)}
-                      onEditKf={(kfId, patch) => updateSpeedKf(selectedLayer.id, kfId, patch)}
-                      onRemoveKf={(kfId) => removeSpeedKf(selectedLayer.id, kfId)}
+                      selectedIdx={selectedSpeedIdx}
+                      onAddRegion={addSpeedRegion}
+                      onSetPointSpeed={setSpeedPointSpeed}
+                      onRemovePoint={(idx) => removeSpeedPoint(selectedLayer.id, idx)}
+                      onClear={clearSpeedCurve}
+                      onEditLayer={(patch) => updateTimeMachine(selectedLayer.id, patch)}
                       onRemoveLayer={() => setConfirmDeleteId(selectedLayer.id)}
                     />
                   )}

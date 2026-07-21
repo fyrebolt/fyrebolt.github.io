@@ -88,7 +88,7 @@ export function compileWarp(project: Project, clipDur: number, videoBase = true)
   // an image sequence's total output is just its concatenated length. This keeps
   // a single-image project's output length unchanged (a banner never stretches it).
   const tm = videoBase ? timeMachineLayer(project) : null;
-  const kfs = tm ? tm.keyframes : [];
+  const pts = tm ? tm.points : [];
   const spec = videoBase ? freezeSpecOf(bannerLayer(project)) : null;
   const dur = Math.max(0, clipDur);
 
@@ -122,10 +122,10 @@ export function compileWarp(project: Project, clipDur: number, videoBase = true)
       bannerPending = false;
       continue;
     }
-    const s = trackSpeedAt(o, kfs);
+    const s = trackSpeedAt(o, pts);
     if (s <= FREEZE_EPS) {
       // Frozen. If nothing ahead ever resumes, this is a permanent end-freeze.
-      if (maxSpeedFrom(o, kfs) <= FREEZE_EPS) break;
+      if (maxSpeedFrom(o, pts) <= FREEZE_EPS) break;
       o += DT;
       push(o, src, 0);
       continue;
