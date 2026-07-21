@@ -132,9 +132,13 @@ export function drawSource(
   src: Source,
   out: OutputSize,
   mode: FillMode,
+  /** Optional colour-grade filter fragment (e.g. "brightness(1.1) saturate(1.2)"),
+   *  composed with the fill mode's own filters. Empty == no grade. */
+  grade = '',
 ): void {
   const { w: sw, h: sh } = sourceDims(src);
   if (sw <= 0 || sh <= 0) return;
+  const g = grade ? grade + ' ' : '';
 
   if (mode === 'fit') {
     // Show the WHOLE clip: contain-fit (fits width or height as appropriate),
@@ -142,27 +146,36 @@ export function drawSource(
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, out.w, out.h);
     const contain = fitRect(out.w, out.h, sw, sh, 'contain');
+    ctx.save();
+    ctx.filter = grade || 'none';
     ctx.drawImage(src, contain.dx, contain.dy, contain.dw, contain.dh);
+    ctx.restore();
     return;
   }
 
   if (mode === 'blur') {
     const cover = fitRect(out.w, out.h, sw, sh, 'cover');
     ctx.save();
-    // Blurred, slightly enlarged + darkened background.
-    ctx.filter = `blur(${Math.round(out.w * 0.03)}px) brightness(0.6)`;
+    // Blurred, slightly enlarged + darkened background (grade composed in).
+    ctx.filter = `${g}blur(${Math.round(out.w * 0.03)}px) brightness(0.6)`;
     const bleed = out.w * 0.06;
     ctx.drawImage(src, cover.dx - bleed, cover.dy - bleed, cover.dw + bleed * 2, cover.dh + bleed * 2);
     ctx.restore();
 
     const contain = fitRect(out.w, out.h, sw, sh, 'contain');
+    ctx.save();
+    ctx.filter = grade || 'none';
     ctx.drawImage(src, contain.dx, contain.dy, contain.dw, contain.dh);
+    ctx.restore();
     return;
   }
 
   // crop-to-fill
   const cover = fitRect(out.w, out.h, sw, sh, 'cover');
+  ctx.save();
+  ctx.filter = grade || 'none';
   ctx.drawImage(src, cover.dx, cover.dy, cover.dw, cover.dh);
+  ctx.restore();
 }
 
 // ---- the banner ----
@@ -1115,6 +1128,8 @@ export function drawZoomed(
   src: Source,
   out: OutputSize,
   rect: ZoomRect,
+  /** Optional colour-grade filter fragment applied to the cropped frame. */
+  grade = '',
 ): void {
   const { w: srcW, h: srcH } = sourceDims(src);
   ctx.fillStyle = '#000';
@@ -1148,7 +1163,10 @@ export function drawZoomed(
   const ddy = dy + ((vy - sy) / sh) * dh;
   const ddw = (vw / sw) * dw;
   const ddh = (vh / sh) * dh;
+  ctx.save();
+  ctx.filter = grade || 'none';
   ctx.drawImage(src, vx, vy, vw, vh, ddx, ddy, ddw, ddh);
+  ctx.restore();
 }
 
 // ---- sticker (image / video overlay: cropped source drawn into a frame box) ----

@@ -61,6 +61,8 @@ import {
 import type { StickerElement } from './sticker/types';
 import type { VideoClip } from './project/clips';
 import { createClip, clipLen, baseDuration, splitClip, MIN_CLIP_LEN, IMAGE_CLIP_MAX } from './project/clips';
+import type { ColorGrade } from './project/grade';
+import { NEUTRAL_GRADE } from './project/grade';
 import { compileWarp } from './project/timeMap';
 import { Panel, Field, ChoiceGrid } from './project/ui';
 import { RATIO_LABELS, FILL_MODES, FRAME_SEC } from './project/constants';
@@ -74,6 +76,7 @@ import HighlighterPanel from './project/panels/HighlighterPanel';
 import DramaticPanel from './project/panels/DramaticPanel';
 import StickerPanel from './project/panels/StickerPanel';
 import ClipPanel from './project/panels/ClipPanel';
+import GradePanel from './project/panels/GradePanel';
 import StickerCropEditor from './sticker/StickerCropEditor';
 import { useHistory } from './project/useHistory';
 import type { HistoryApi } from './project/useHistory';
@@ -117,6 +120,7 @@ interface EditorSnapshot {
   sfxEnabled: boolean;
   sfxVolume: number;
   imageDuration: number;
+  globalGrade: ColorGrade;
   pen: Pen;
 }
 
@@ -206,6 +210,8 @@ export default function VideoEditor() {
   const [sfxEnabled, setSfxEnabled] = useState(false);
   const [sfxVolume, setSfxVolume] = useState(0.5);
   const [imageDuration, setImageDuration] = useState(6);
+  /** Global colour grade over the whole composited output (per-clip grades live on each clip). */
+  const [globalGrade, setGlobalGrade] = useState<ColorGrade>(NEUTRAL_GRADE);
 
   // Drawing-pad pen (shared tool state for sketch layers).
   const [pen, setPen] = useState<Pen>({ color: '#ff4d4d', width: 0.02, smoothness: 0.8 });
@@ -251,7 +257,7 @@ export default function VideoEditor() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const compRef = useRef<Compositor | null>(null);
-  const projectRef = useRef<Project>({ clips: [], layers: [], ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration });
+  const projectRef = useRef<Project>({ clips: [], layers: [], ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration, grade: NEUTRAL_GRADE });
   const objectUrls = useRef<string[]>([]);
   /** Decoded clip media (video / image), keyed by clip srcId, kept out of the project. */
   const clipMedia = useRef<Map<string, ClipEl>>(new Map());
@@ -279,8 +285,8 @@ export default function VideoEditor() {
   const editingRef = useRef(false);
 
   const project: Project = useMemo(
-    () => ({ clips, layers, ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration }),
-    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration],
+    () => ({ clips, layers, ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration, grade: globalGrade }),
+    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade],
   );
 
   // ---- media facts DERIVED from the clip sequence ----
@@ -424,8 +430,8 @@ export default function VideoEditor() {
 
   // ---- undo / redo engine (whole-project snapshots) ----
   const snapshot: EditorSnapshot = useMemo(
-    () => ({ clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, pen }),
-    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, pen],
+    () => ({ clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, pen }),
+    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, pen],
   );
   const restoreSnapshot = useCallback((s: EditorSnapshot) => {
     setClips(s.clips);
@@ -437,6 +443,7 @@ export default function VideoEditor() {
     setSfxEnabled(s.sfxEnabled);
     setSfxVolume(s.sfxVolume);
     setImageDuration(s.imageDuration);
+    setGlobalGrade(s.globalGrade);
     setPen(s.pen);
     // Reset transient editing state and clamp selection to layers that survive.
     editingRef.current = false;
@@ -460,6 +467,7 @@ export default function VideoEditor() {
       a.sfxEnabled === b.sfxEnabled &&
       a.sfxVolume === b.sfxVolume &&
       a.imageDuration === b.imageDuration &&
+      a.globalGrade === b.globalGrade &&
       a.pen === b.pen,
     [],
   );
@@ -1661,8 +1669,9 @@ export default function VideoEditor() {
       sfxEnabled,
       sfxVolume,
       imageDuration,
+      grade: globalGrade,
     }),
-    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration],
+    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade],
   );
 
   const blobForSrc = useCallback((srcId: string) => clipBlobs.current.get(srcId) ?? stickerBlobs.current.get(srcId), []);
@@ -1734,6 +1743,7 @@ export default function VideoEditor() {
     setSfxEnabled(s.sfxEnabled);
     setSfxVolume(s.sfxVolume);
     setImageDuration(s.imageDuration);
+    setGlobalGrade(s.grade ?? NEUTRAL_GRADE);
     setSelectedLayerId(null);
     setSelectedClipId(null);
     setSelectedAttachmentId(null);
@@ -2595,6 +2605,37 @@ export default function VideoEditor() {
                   </Panel>
                 );
               })()}
+
+              {/* Selected base clip: per-clip colour grade (video or image) */}
+              {(() => {
+                const sc = clips.find((c) => c.id === selectedClipId);
+                if (!sc) return null;
+                return (
+                  <Panel title="Clip colour">
+                    <GradePanel
+                      key={sc.id}
+                      grade={sc.grade ?? NEUTRAL_GRADE}
+                      onChange={(g, discrete) => editClip(sc.id, { grade: g }, discrete)}
+                    />
+                  </Panel>
+                );
+              })()}
+
+              {/* Project-wide colour grade over the whole composited output */}
+              {mediaKind && (
+                <Panel title="Colour grade (global)">
+                  <p className="text-[11px] text-[var(--color-text-muted)] mb-1">
+                    Graded over the whole output (every clip + overlay), on top of any per-clip grade.
+                  </p>
+                  <GradePanel
+                    grade={globalGrade}
+                    onChange={(g, discrete) => {
+                      if (discrete) sealDiscrete();
+                      setGlobalGrade(g);
+                    }}
+                  />
+                </Panel>
+              )}
 
               {/* Project autosave + JSON backup */}
               <Panel title="Project">

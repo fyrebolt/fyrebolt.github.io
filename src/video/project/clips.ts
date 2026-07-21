@@ -16,6 +16,8 @@
 // (keyed by srcId), mirroring how stickers keep their media out of the plain
 // project data. VideoClip therefore carries only serialisable fields.
 
+import type { ColorGrade } from './grade';
+
 export type ClipKind = 'video' | 'image';
 
 /**
@@ -54,6 +56,9 @@ export interface VideoClip {
   /** Silence this clip's ORIGINAL audio entirely, regardless of the curve. The
    *  curve is preserved so un-muting restores exactly what was there. */
   muted?: boolean;
+  /** Per-clip colour grade (brightness/contrast/saturation), applied to this
+   *  clip's base frame in both preview and export. Absent == neutral. */
+  grade?: ColorGrade;
 }
 
 /** Smallest a clip may be trimmed to (seconds). */

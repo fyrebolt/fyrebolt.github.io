@@ -48,6 +48,7 @@ import type { Project, CaptionLayer } from './types';
 import { bannerLayer, zoomLayer, timeMachineLayer, overlayLayers, layerSpan } from './types';
 import type { VideoClip, BaseHit } from './clips';
 import { baseDuration, resolveBase, hasVideoClip, sampleVolume, clipLen } from './clips';
+import { gradeFilter, isNeutralGrade } from './grade';
 
 /** Seconds between pencil-on-paper grains while a sketch animates. */
 const PENCIL_INTERVAL = 0.06;
@@ -430,12 +431,44 @@ export class Compositor {
     if (!hit) return;
     const src = this.elOf(hit.clip);
     if (!src) return;
+    // Per-clip colour grade applies to this clip's base frame only.
+    const grade = gradeFilter(hit.clip.grade);
     const zoom = zoomLayer(p);
     if (zoom && zoom.keyframes.length > 0) {
-      drawZoomed(this.ctx, src, this.out, rectAt(outputT, zoom.keyframes));
+      drawZoomed(this.ctx, src, this.out, rectAt(outputT, zoom.keyframes), grade);
     } else {
-      drawSource(this.ctx, src, this.out, p.fillMode);
+      drawSource(this.ctx, src, this.out, p.fillMode, grade);
     }
+  }
+
+  /** Lazily-sized scratch canvas for the global-grade final pass. */
+  private gradeScratch: HTMLCanvasElement | null = null;
+
+  /**
+   * Apply the project's GLOBAL colour grade over the finished frame (base +
+   * every overlay): copy the canvas to a scratch, then blit it back through the
+   * grade filter. Runs on the same canvas the recorder captures, so preview and
+   * export match. No-op (and no allocation cost) when the grade is neutral.
+   */
+  private applyGlobalGrade(p: Project): void {
+    if (isNeutralGrade(p.grade)) return;
+    const w = this.out.w;
+    const h = this.out.h;
+    if (!this.gradeScratch) this.gradeScratch = document.createElement('canvas');
+    const s = this.gradeScratch;
+    if (s.width !== w || s.height !== h) {
+      s.width = w;
+      s.height = h;
+    }
+    const sctx = s.getContext('2d');
+    if (!sctx) return;
+    sctx.clearRect(0, 0, w, h);
+    sctx.drawImage(this.canvas, 0, 0);
+    this.ctx.save();
+    this.ctx.filter = gradeFilter(p.grade) || 'none';
+    this.ctx.clearRect(0, 0, w, h);
+    this.ctx.drawImage(s, 0, 0);
+    this.ctx.restore();
   }
 
   private fontFor(el: CaptionEl, outputT: number): BoilFont {
@@ -616,6 +649,9 @@ export class Compositor {
         );
       }
     }
+
+    // Global colour grade over the whole composite (base + overlays), last.
+    this.applyGlobalGrade(p);
 
     this.prevT = outputT;
   }
