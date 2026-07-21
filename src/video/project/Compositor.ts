@@ -429,7 +429,7 @@ export class Compositor {
       drawAttachmentsLayer(this.ctx, this.out, el, font, outputT, norm, 'below');
       drawCaption(this.ctx, this.out, el, font, norm, 1);
       drawAttachmentsLayer(this.ctx, this.out, el, font, outputT, norm, 'above');
-      if (sfxOn && el.boil !== 'off') {
+      if (sfxOn && el.sfx !== false && el.boil !== 'off') {
         const prev = this.lastFontIdx.get(el.id);
         if (prev === undefined) this.lastFontIdx.set(el.id, fi);
         else if (fi !== prev) {
@@ -448,7 +448,7 @@ export class Compositor {
       drawAttachmentsLayer(this.ctx, this.out, el, font, outputT, false, 'below');
       drawTypewriter(this.ctx, this.out, el, font, prog);
       drawAttachmentsLayer(this.ctx, this.out, el, font, outputT, false, 'above');
-      if (sfxOn) {
+      if (sfxOn && el.sfx !== false) {
         if (prog.selectAll) {
           if (el.deleteEnabled && el.deleteStyle === 'selectAll' && !this.deleteCueFired.has(el.id)) {
             this.deleteCueFired.add(el.id);
@@ -488,6 +488,7 @@ export class Compositor {
           (l) =>
             l.kind === 'caption' &&
             l.el.kind === 'boil' &&
+            l.el.sfx !== false &&
             l.el.boil !== 'off' &&
             outputT >= l.el.start &&
             outputT < captionEnd(l.el),
