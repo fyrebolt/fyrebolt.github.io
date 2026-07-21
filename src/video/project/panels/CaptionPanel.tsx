@@ -200,6 +200,11 @@ export default function CaptionPanel({
         </>
       )}
 
+      <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+        <input type="checkbox" checked={el.sfx !== false} onChange={(e) => onEdit({ sfx: e.target.checked })} />
+        {el.kind === 'boil' ? 'Riffle sound as it boils' : 'Key click sound while typing'} <span className="text-[var(--color-text-muted)]">(needs master SFX on)</span>
+      </label>
+
       <div className="grid grid-cols-2 gap-3">
         <Field label="Color">
           <input type="color" value={el.color} onChange={(e) => onEdit({ color: e.target.value })} className="w-full h-9 rounded-md bg-transparent border border-[var(--color-glass-border)] p-0.5" />

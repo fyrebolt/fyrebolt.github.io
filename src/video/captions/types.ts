@@ -61,6 +61,9 @@ interface BaseElement extends CaptionTextStyle {
   start: number;
   /** Word highlight/underline attachments (empty by default). */
   attachments: Attachment[];
+  /** Per-instance sound toggle (boil riffle / typewriter keys). Master SFX is a
+   *  bus on top of this. Absent == enabled, so old projects keep their sound. */
+  sfx?: boolean;
 }
 
 /** Font-boil caption (the original element type). */
@@ -205,6 +208,7 @@ export function createCaption(overrides: Partial<Caption> = {}): Caption {
     boil: 'intro',
     normalize: true,
     attachments: [],
+    sfx: true,
     ...overrides,
   };
 }
@@ -229,6 +233,7 @@ export function createTypewriter(overrides: Partial<TypewriterCaption> = {}): Ty
     deleteStyle: 'char',
     deleteDur: 0.8,
     attachments: [],
+    sfx: true,
     ...overrides,
   };
 }
