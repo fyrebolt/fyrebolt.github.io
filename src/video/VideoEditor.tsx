@@ -71,6 +71,7 @@ import type { Pen } from './project/panels/SketchPanel';
 import HighlighterPanel from './project/panels/HighlighterPanel';
 import DramaticPanel from './project/panels/DramaticPanel';
 import StickerPanel from './project/panels/StickerPanel';
+import ClipPanel from './project/panels/ClipPanel';
 import StickerCropEditor from './sticker/StickerCropEditor';
 import { useHistory } from './project/useHistory';
 import type { HistoryApi } from './project/useHistory';
@@ -555,6 +556,15 @@ export default function VideoEditor() {
       }),
     );
   }, []);
+
+  /** Patch a clip (volume curve / mute). `discrete` seals it as its own undo entry. */
+  const editClip = useCallback(
+    (id: string, patch: Partial<VideoClip>, discrete = false) => {
+      if (discrete) sealDiscrete();
+      setClips((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+    },
+    [sealDiscrete],
+  );
 
   const addClipClick = useCallback(() => clipInput.current?.click(), []);
 
@@ -1912,6 +1922,17 @@ export default function VideoEditor() {
                   )}
                 </Panel>
               )}
+
+              {/* Selected base clip: original-audio volume automation + mute */}
+              {(() => {
+                const sc = clips.find((c) => c.id === selectedClipId);
+                if (!sc || sc.kind !== 'video') return null;
+                return (
+                  <Panel title="Clip audio">
+                    <ClipPanel key={sc.id} clip={sc} onEdit={(patch, discrete) => editClip(sc.id, patch, discrete)} />
+                  </Panel>
+                );
+              })()}
 
               {/* Project output settings */}
               <Panel title="Output">
