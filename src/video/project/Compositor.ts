@@ -89,6 +89,14 @@ export class Compositor {
   /** Last resolved OUTPUT time — what a static redraw / hit-test uses while paused. */
   private pausedT = 0;
 
+  // Drag-scrub seek coalescing. HTML5 <video> seeking has real latency, so during
+  // a continuous scrub we never issue a new seek while one is still in flight:
+  // `scrubNext` holds only the LATEST requested frame and is applied when the
+  // pending seek resolves. This bounds the work to one seek at a time and always
+  // lands on the newest position rather than replaying a backlog.
+  private scrubSeeking = false;
+  private scrubNext: { sec: number; video: HTMLVideoElement; currentTime: number } | null = null;
+
   // cached compiled time-warp (rebuilt when the project ref or base duration changes)
   private warpCache: TimeWarp | null = null;
   private warpProject: Project | null = null;
@@ -741,15 +749,44 @@ export class Compositor {
     this.pauseClipVideos();
     if (activeVideo instanceof HTMLVideoElement && hit) {
       const cap = Math.max(0, hit.clip.srcDuration - 0.03);
-      const draw = () => {
-        this.drawFrameAt(sec, false);
-        activeVideo.removeEventListener('seeked', draw);
-      };
-      activeVideo.addEventListener('seeked', draw);
-      activeVideo.currentTime = Math.max(0, Math.min(hit.sourceT, cap));
+      // Record the latest target; only kick a seek if none is pending (otherwise
+      // the in-flight seek's `seeked` handler will chase this newest value).
+      this.scrubNext = { sec, video: activeVideo, currentTime: Math.max(0, Math.min(hit.sourceT, cap)) };
+      if (!this.scrubSeeking) this.applyScrubSeek();
     } else {
+      // Image / gap: nothing to seek — draw straight away and drop any pending seek.
+      this.scrubNext = null;
       this.drawFrameAt(sec, false);
     }
+  }
+
+  /** Apply the latest pending scrub seek, chaining to any newer one on completion. */
+  private applyScrubSeek(): void {
+    const next = this.scrubNext;
+    if (!next) return;
+    this.scrubNext = null;
+    // If the element is already at the target frame, no `seeked` fires — draw now.
+    if (Math.abs(next.video.currentTime - next.currentTime) < 1e-3) {
+      this.scrubSeeking = false;
+      this.drawFrameAt(next.sec, false);
+      if (this.scrubNext) this.applyScrubSeek();
+      return;
+    }
+    this.scrubSeeking = true;
+    const onSeeked = (): void => {
+      next.video.removeEventListener('seeked', onSeeked);
+      this.scrubSeeking = false;
+      // A play/edit may have superseded the scrub while we were seeking; if so,
+      // don't paint the stale frame — just let the newer mode own the canvas.
+      if (this.playing || this.editing) {
+        this.scrubNext = null;
+        return;
+      }
+      this.drawFrameAt(next.sec, false);
+      if (this.scrubNext) this.applyScrubSeek(); // chase the newest position
+    };
+    next.video.addEventListener('seeked', onSeeked);
+    next.video.currentTime = next.currentTime;
   }
 
   // ---- zoom-rect edit view (always the full, un-zoomed source frame) ----
