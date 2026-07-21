@@ -45,6 +45,7 @@ import type { StickerElement, StickerSeed } from '../sticker/types';
 import { createSticker, elementEnd as stickerEnd } from '../sticker/types';
 import type { VideoClip } from './clips';
 import { baseDuration } from './clips';
+import type { ColorGrade } from './grade';
 
 export interface LayerBase {
   id: string;
@@ -146,6 +147,10 @@ export interface Project {
   sfxVolume: number;
   /** For image sources: fixed total output length (seconds). Ignored for video. */
   imageDuration?: number;
+  /** Global colour grade over the WHOLE composited output (base + overlays),
+   *  applied as a final pass. Absent == neutral. Composes on top of any per-clip
+   *  grade. */
+  grade?: ColorGrade;
 }
 
 // ---- classification helpers ----

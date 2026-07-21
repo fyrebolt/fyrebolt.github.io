@@ -17,6 +17,7 @@ import type { FillMode, RatioKey } from '../types';
 import type { BoilPoolId } from '../captions/fonts';
 import type { Layer } from './types';
 import type { VideoClip } from './clips';
+import type { ColorGrade } from './grade';
 
 /** Plain, JSON-serialisable project state (no media, no decoded elements). */
 export interface PersistSnapshot {
@@ -30,6 +31,8 @@ export interface PersistSnapshot {
   sfxEnabled: boolean;
   sfxVolume: number;
   imageDuration: number;
+  /** Global colour grade (optional — absent in projects saved before grading). */
+  grade?: ColorGrade;
 }
 
 /** One original source blob, kept verbatim (lossless). */
