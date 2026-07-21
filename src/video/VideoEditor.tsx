@@ -63,7 +63,7 @@ import type { VideoClip } from './project/clips';
 import { createClip, clipLen, baseDuration, splitClip, MIN_CLIP_LEN, IMAGE_CLIP_MAX } from './project/clips';
 import { compileWarp } from './project/timeMap';
 import { Panel, Field, ChoiceGrid } from './project/ui';
-import { RATIO_LABELS, FILL_MODES } from './project/constants';
+import { RATIO_LABELS, FILL_MODES, FRAME_SEC } from './project/constants';
 import CaptionPanel from './project/panels/CaptionPanel';
 import BannerPanel from './project/panels/BannerPanel';
 import ZoomPanel from './project/panels/ZoomPanel';
@@ -535,12 +535,25 @@ export default function VideoEditor() {
     [imageDuration, sealDiscrete, clipSrcId],
   );
 
+  // ---- J/K/L shuttle transport state (declared early so play/pause/seek can
+  //      halt it; the transport logic itself lives after the playback block) ----
+  const shuttleRAF = useRef<number | null>(null);
+  const transportRate = useRef(0); // 0 paused; >0 fwd; <0 back; |rate| = speed
+  const stopShuttleLoop = useCallback(() => {
+    if (shuttleRAF.current !== null) {
+      cancelAnimationFrame(shuttleRAF.current);
+      shuttleRAF.current = null;
+    }
+    transportRate.current = 0;
+  }, []);
+
   // ---- seeking ----
   const seekTo = useCallback((sec: number) => {
+    stopShuttleLoop();
     compRef.current?.scrubTo(sec); // scrubbing stops the preview loop
     setCurrentSec(sec);
     setIsPlaying(false);
-  }, []);
+  }, [stopShuttleLoop]);
 
   // Re-sync the compositor whenever a clip is added/removed: resize the canvas to
   // the first clip + paint. On the very first clip, land on the opening frame.
@@ -1267,6 +1280,8 @@ export default function VideoEditor() {
 
   // ---- playback (real play/pause toggle reflecting the compositor state) ----
   const play = useCallback(() => {
+    stopShuttleLoop();
+    transportRate.current = 1; // real forward is the 1x transport step
     setSelectedLayerId(null);
     setSelectedAttachmentId(null);
     setSelectedZoomKfId(null);
@@ -1275,7 +1290,7 @@ export default function VideoEditor() {
     // Resume from the current playhead rather than restarting at 0.
     compRef.current?.playPreview(currentSec);
     setIsPlaying(true);
-  }, [currentSec]);
+  }, [currentSec, stopShuttleLoop]);
 
   /** Restart: jump the playhead to 0 and play from the top, whatever the current
    *  position or play state (distinct from play(), which resumes from the cursor). */
@@ -1285,31 +1300,155 @@ export default function VideoEditor() {
     setSelectedZoomKfId(null);
     setSelectedSpeedIdx(null);
     setEditingZoomBoth(false);
+    stopShuttleLoop();
+    transportRate.current = 1;
     setCurrentSec(0);
     compRef.current?.playPreview(0);
     setIsPlaying(true);
-  }, []);
+  }, [stopShuttleLoop]);
 
   const pause = useCallback(() => {
+    stopShuttleLoop();
     compRef.current?.stop();
     setIsPlaying(false);
-  }, []);
+  }, [stopShuttleLoop]);
 
   const togglePlay = useCallback(() => {
     if (isPlaying) pause();
     else play();
   }, [isPlaying, pause, play]);
 
+  // ---- J/K/L shuttle transport + arrow frame-step / nudge ----
+  //
+  // L = play forward, J = play backward, K = pause; repeated J/L accelerate
+  // through 1x → 2x → 4x (NLE convention). Forward 1x reuses the real preview
+  // (so audio plays); every other rate — accelerated forward or ANY backward —
+  // is driven by a scrub-based shuttle loop (muted; reverse audio isn't
+  // meaningful), advancing the playhead by rate·dt and seeking each frame.
+  // (shuttleRAF / transportRate / stopShuttleLoop are declared up by seekTo.)
+  const durationRef = useRef(timelineDuration);
+  durationRef.current = timelineDuration;
+
+  /** Halt every transport (real preview + shuttle) and settle paused. */
+  const haltTransport = useCallback(() => {
+    stopShuttleLoop();
+    compRef.current?.stop();
+    setIsPlaying(false);
+  }, [stopShuttleLoop]);
+
+  const runShuttle = useCallback((rate: number) => {
+    stopShuttleLoop();
+    compRef.current?.stop(); // take over from any real preview
+    transportRate.current = rate;
+    setIsPlaying(true);
+    let last = performance.now();
+    const tick = () => {
+      const now = performance.now();
+      const dt = Math.min(0.1, (now - last) / 1000); // clamp long frames
+      last = now;
+      const cur = compRef.current?.currentTimeSec() ?? 0;
+      const total = Math.max(0.001, durationRef.current);
+      let next = cur + transportRate.current * dt;
+      let hitEnd = false;
+      if (next <= 0) { next = 0; hitEnd = transportRate.current < 0; }
+      if (next >= total) { next = total; hitEnd = transportRate.current > 0; }
+      setCurrentSec(next);
+      compRef.current?.scrubTo(next);
+      if (hitEnd) { // ran off the start / end — settle paused there
+        transportRate.current = 0;
+        shuttleRAF.current = null;
+        setIsPlaying(false);
+        return;
+      }
+      shuttleRAF.current = requestAnimationFrame(tick);
+    };
+    shuttleRAF.current = requestAnimationFrame(tick);
+  }, [stopShuttleLoop]);
+
+  /** L: start / accelerate forward. First forward step is real 1x playback. */
+  const shuttleForward = useCallback(() => {
+    setSelectedLayerId(null);
+    setSelectedAttachmentId(null);
+    const r = transportRate.current;
+    if (r <= 0) {
+      // From paused or reverse → real 1x forward (with audio).
+      stopShuttleLoop();
+      transportRate.current = 1;
+      play();
+    } else {
+      // Already forward → 1x(real) → 2x → 4x via the shuttle.
+      runShuttle(Math.min(4, r * 2));
+    }
+  }, [play, runShuttle, stopShuttleLoop]);
+
+  /** J: start / accelerate backward (always shuttle; no reverse audio). */
+  const shuttleBackward = useCallback(() => {
+    setSelectedLayerId(null);
+    setSelectedAttachmentId(null);
+    const r = transportRate.current;
+    runShuttle(r >= 0 ? -1 : Math.max(-4, r * 2));
+  }, [runShuttle]);
+
+  /** Step the playhead by exactly `dir` editing frames (halts any transport). */
+  const stepFrame = useCallback(
+    (dir: number) => {
+      haltTransport();
+      const cur = compRef.current?.currentTimeSec() ?? currentSec;
+      const next = Math.max(0, Math.min(timelineDuration, cur + dir * FRAME_SEC));
+      seekTo(next);
+    },
+    [haltTransport, currentSec, timelineDuration, seekTo],
+  );
+
+  /**
+   * Nudge the selected placeable overlay's on-canvas position (normalised).
+   * Applies the delta inside a functional setLayers updater — NOT from a captured
+   * `el.x/el.y` — so a fast burst of key-repeat presses accumulates on the latest
+   * state instead of collapsing to a single step. Coalesces into one undo entry.
+   */
+  const nudgeSelected = useCallback(
+    (dx: number, dy: number) => {
+      const id = selectedLayerId;
+      if (!id) return;
+      const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+      setLayers((ls) =>
+        ls.map((l): Layer => {
+          if (l.id !== id) return l;
+          // Narrow per kind (separate returns) so each el spread keeps its type.
+          switch (l.kind) {
+            case 'caption':
+              return { ...l, el: { ...l.el, x: clamp01(l.el.x + dx), y: clamp01(l.el.y + dy) } };
+            case 'sketch':
+              return { ...l, el: { ...l.el, x: clamp01(l.el.x + dx), y: clamp01(l.el.y + dy) } };
+            case 'highlighter':
+              return { ...l, el: { ...l.el, x: clamp01(l.el.x + dx), y: clamp01(l.el.y + dy) } };
+            case 'dramatic':
+              return { ...l, el: { ...l.el, x: clamp01(l.el.x + dx), y: clamp01(l.el.y + dy) } };
+            case 'sticker':
+              return { ...l, el: { ...l.el, x: clamp01(l.el.x + dx), y: clamp01(l.el.y + dy) } };
+            default:
+              return l;
+          }
+        }),
+      );
+    },
+    [selectedLayerId],
+  );
+
+  // Tear down the shuttle loop on unmount.
+  useEffect(() => () => stopShuttleLoop(), [stopShuttleLoop]);
+
   const onScrub = useCallback(
     (sec: number) => {
       setCurrentSec(sec);
+      stopShuttleLoop();
       if (editingRef.current) compRef.current?.editZoomAt(sec);
       else {
         compRef.current?.scrubTo(sec); // scrubbing stops playback
         setIsPlaying(false);
       }
     },
-    [],
+    [stopShuttleLoop],
   );
 
   // ---- keyboard: spacebar play/pause, Cmd/Ctrl+D duplicate, Escape exits full-screen ----
@@ -1342,6 +1481,48 @@ export default function VideoEditor() {
         splitAtPlayhead();
         return;
       }
+      // Arrows: selection-aware. A placeable element selected → nudge its
+      // on-canvas position (Shift = bigger jump); otherwise Left/Right frame-step
+      // the playhead by one editing frame (Up/Down ignored — the playhead is 1-D).
+      if (
+        (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+        !editable &&
+        !mod
+      ) {
+        if (!mediaKind) return;
+        if (isPlaceable(selectedLayer)) {
+          e.preventDefault();
+          const s = e.shiftKey ? 0.02 : 0.004; // normalised nudge step
+          if (e.key === 'ArrowLeft') nudgeSelected(-s, 0);
+          else if (e.key === 'ArrowRight') nudgeSelected(s, 0);
+          else if (e.key === 'ArrowUp') nudgeSelected(0, -s);
+          else nudgeSelected(0, s);
+          return;
+        }
+        if (e.key === 'ArrowLeft') { e.preventDefault(); stepFrame(-1); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); stepFrame(1); }
+        return;
+      }
+      // J / K / L shuttle transport (guard auto-repeat so held J/L don't
+      // race through the speed steps; K is idempotent).
+      if ((e.key === 'j' || e.key === 'J') && !editable && !mod) {
+        if (!mediaKind || e.repeat) return;
+        e.preventDefault();
+        shuttleBackward();
+        return;
+      }
+      if ((e.key === 'k' || e.key === 'K') && !editable && !mod) {
+        if (!mediaKind) return;
+        e.preventDefault();
+        haltTransport();
+        return;
+      }
+      if ((e.key === 'l' || e.key === 'L') && !editable && !mod) {
+        if (!mediaKind || e.repeat) return;
+        e.preventDefault();
+        shuttleForward();
+        return;
+      }
       // Escape leaves full-screen (crop-escape is owned by the other handler).
       if (e.key === 'Escape' && fullscreen && !croppingId) {
         e.preventDefault();
@@ -1350,7 +1531,10 @@ export default function VideoEditor() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [togglePlay, duplicateLayer, selectedLayerId, fullscreen, croppingId, confirmDeleteId, mediaKind, splitAtPlayhead]);
+  }, [
+    togglePlay, duplicateLayer, selectedLayerId, fullscreen, croppingId, confirmDeleteId, mediaKind,
+    splitAtPlayhead, selectedLayer, nudgeSelected, stepFrame, shuttleBackward, shuttleForward, haltTransport,
+  ]);
 
   // ---- canvas selection (single-layer transforms are owned by TransformBox) ----
   const normFromPointer = useCallback((clientX: number, clientY: number) => {
