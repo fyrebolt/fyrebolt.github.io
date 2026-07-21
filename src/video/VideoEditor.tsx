@@ -77,6 +77,17 @@ import ClipPanel from './project/panels/ClipPanel';
 import StickerCropEditor from './sticker/StickerCropEditor';
 import { useHistory } from './project/useHistory';
 import type { HistoryApi } from './project/useHistory';
+import type { PersistSnapshot, MediaEntry, LoadedProject } from './project/persist';
+import {
+  saveSnapshot,
+  saveMedia,
+  pruneMedia,
+  loadProject,
+  clearProject,
+  referencedSrcIds,
+  exportProjectJSON,
+  importProjectJSON,
+} from './project/persist';
 
 /** First non-overlapping gap of ≥0.6s among dramatic layers, else null. */
 function findDramaticGap(spans: Span[], total: number, want: number): { start: number; duration: number } | null {
@@ -250,6 +261,10 @@ export default function VideoEditor() {
   const clipInput = useRef<HTMLInputElement>(null);
   /** Decoded sticker media (image / video), kept out of the project so layers stay plain data. */
   const stickerMedia = useRef<Map<string, HTMLImageElement | HTMLVideoElement>>(new Map());
+  /** Original sticker source blobs per srcId (lossless — for JSON/autosave). */
+  const stickerBlobs = useRef<Map<string, Blob>>(new Map());
+  /** Hidden file input for loading a project JSON. */
+  const projectInput = useRef<HTMLInputElement>(null);
   /** Hidden file inputs used to pick sticker media on demand. */
   const stickerImageInput = useRef<HTMLInputElement>(null);
   const stickerVideoInput = useRef<HTMLInputElement>(null);
@@ -792,6 +807,7 @@ export default function VideoEditor() {
       const url = URL.createObjectURL(file);
       objectUrls.current.push(url);
       const srcId = `stkmedia-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      stickerBlobs.current.set(srcId, file);
       if (source === 'image') {
         const img = new Image();
         img.onload = () => {
@@ -1389,6 +1405,190 @@ export default function VideoEditor() {
     }
   }, [mediaKind]);
 
+  // ---- project persistence (lossless local autosave + JSON save/load) ----
+  const hydratedRef = useRef(false);
+  /** srcIds whose original blob is already persisted to IndexedDB (skip re-writes). */
+  const persistedRef = useRef<Set<string>>(new Set());
+
+  const currentSnapshot = useCallback(
+    (): PersistSnapshot => ({
+      version: 1,
+      clips,
+      layers,
+      ratio,
+      fillMode,
+      boilPool,
+      normalize,
+      sfxEnabled,
+      sfxVolume,
+      imageDuration,
+    }),
+    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration],
+  );
+
+  const blobForSrc = useCallback((srcId: string) => clipBlobs.current.get(srcId) ?? stickerBlobs.current.get(srcId), []);
+
+  /** Every referenced source as a MediaEntry (original blob, verbatim). */
+  const collectMedia = useCallback((snapshot: PersistSnapshot): MediaEntry[] => {
+    const out: MediaEntry[] = [];
+    for (const srcId of referencedSrcIds(snapshot)) {
+      const blob = blobForSrc(srcId);
+      if (!blob) continue;
+      const clip = snapshot.clips.find((c) => c.srcId === srcId);
+      out.push({ srcId, name: clip?.name ?? 'sticker', type: blob.type || 'application/octet-stream', blob });
+    }
+    return out;
+  }, [blobForSrc]);
+
+  /** Rebuild the decoded <video>/<img> elements from stored blobs, then set state. */
+  const applyLoadedProject = useCallback(async (loaded: LoadedProject) => {
+    const bySrc = new Map(loaded.media.map((m) => [m.srcId, m]));
+    const decodeVideo = (url: string, sticker: boolean) => {
+      const v = document.createElement('video');
+      v.src = url;
+      v.playsInline = true;
+      v.preload = 'auto';
+      if (sticker) {
+        v.muted = true;
+        v.loop = true;
+      } else {
+        v.crossOrigin = 'anonymous';
+      }
+      return new Promise<HTMLVideoElement>((res) => {
+        v.addEventListener('loadedmetadata', () => res(v), { once: true });
+        v.addEventListener('error', () => res(v), { once: true });
+      });
+    };
+    const decodeImage = (url: string) =>
+      new Promise<HTMLImageElement>((res) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = () => res(img);
+        img.src = url;
+      });
+
+    for (const clip of loaded.snapshot.clips) {
+      const m = bySrc.get(clip.srcId);
+      if (!m) continue;
+      clipBlobs.current.set(clip.srcId, m.blob);
+      const url = URL.createObjectURL(m.blob);
+      objectUrls.current.push(url);
+      clipMedia.current.set(clip.srcId, clip.kind === 'video' ? await decodeVideo(url, false) : await decodeImage(url));
+    }
+    for (const layer of loaded.snapshot.layers) {
+      if (layer.kind !== 'sticker') continue;
+      const m = bySrc.get(layer.el.srcId);
+      if (!m) continue;
+      stickerBlobs.current.set(layer.el.srcId, m.blob);
+      const url = URL.createObjectURL(m.blob);
+      objectUrls.current.push(url);
+      stickerMedia.current.set(layer.el.srcId, layer.el.source === 'video' ? await decodeVideo(url, true) : await decodeImage(url));
+    }
+
+    const s = loaded.snapshot;
+    setClips(s.clips);
+    setLayers(s.layers);
+    setRatio(s.ratio);
+    setFillMode(s.fillMode);
+    setBoilPool(s.boilPool);
+    setNormalize(s.normalize);
+    setSfxEnabled(s.sfxEnabled);
+    setSfxVolume(s.sfxVolume);
+    setImageDuration(s.imageDuration);
+    setSelectedLayerId(null);
+    setSelectedClipId(null);
+    setSelectedAttachmentId(null);
+  }, []);
+
+  // Restore an autosaved project once, on mount ("refresh doesn't lose work").
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const loaded = await loadProject();
+        if (!cancelled && loaded) {
+          await applyLoadedProject(loaded);
+          persistedRef.current = referencedSrcIds(loaded.snapshot);
+          setStatus('Restored your last project from this browser. (Save a JSON copy to back it up.)');
+        }
+      } catch {
+        /* IndexedDB unavailable (e.g. private mode) — start fresh. */
+      } finally {
+        hydratedRef.current = true;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyLoadedProject]);
+
+  // Debounced autosave: write the snapshot on every edit + newly-seen media once.
+  useEffect(() => {
+    if (!hydratedRef.current || clips.length === 0) return;
+    const snapshot = currentSnapshot();
+    const id = window.setTimeout(() => {
+      void (async () => {
+        try {
+          await saveSnapshot(snapshot);
+          const ids = referencedSrcIds(snapshot);
+          for (const srcId of ids) {
+            if (persistedRef.current.has(srcId)) continue;
+            const blob = blobForSrc(srcId);
+            if (!blob) continue;
+            const clip = snapshot.clips.find((c) => c.srcId === srcId);
+            await saveMedia({ srcId, name: clip?.name ?? 'sticker', type: blob.type || 'application/octet-stream', blob });
+            persistedRef.current.add(srcId);
+          }
+          await pruneMedia(ids);
+          for (const srcId of [...persistedRef.current]) if (!ids.has(srcId)) persistedRef.current.delete(srcId);
+        } catch {
+          /* ignore autosave failures (storage full / unavailable) */
+        }
+      })();
+    }, 800);
+    return () => window.clearTimeout(id);
+  }, [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, currentSnapshot, blobForSrc]);
+
+  const saveProjectFile = useCallback(async () => {
+    const snapshot = currentSnapshot();
+    try {
+      const blob = await exportProjectJSON(snapshot, collectMedia(snapshot));
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'project.fyrebolt.json';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setStatus('Saved a project JSON (media embedded losslessly).');
+    } catch {
+      setStatus('Could not save the project file.');
+    }
+  }, [currentSnapshot, collectMedia]);
+
+  const loadProjectFile = useCallback(
+    async (file: File) => {
+      try {
+        const loaded = await importProjectJSON(file);
+        await applyLoadedProject(loaded);
+        persistedRef.current = new Set(); // force the loaded media to re-persist to IDB
+        setStatus('Project loaded from file.');
+      } catch {
+        setStatus('That file is not a valid Fyrebolt project.');
+      }
+    },
+    [applyLoadedProject],
+  );
+
+  const clearAutosave = useCallback(async () => {
+    try {
+      await clearProject();
+      persistedRef.current = new Set();
+      setStatus('Cleared the autosaved project from this browser.');
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const out = srcDims.w > 0 ? outputSizeFor(ratio, srcDims.w, srcDims.h) : { w: 1080, h: 1920 };
   const selectedZoomRect =
     editingZoom && selectedLayer?.kind === 'zoom' ? selectedLayer.keyframes.find((k) => k.id === selectedZoomKfId)?.rect ?? null : null;
@@ -1657,6 +1857,19 @@ export default function VideoEditor() {
                 onChange={(e) => {
                   const f = e.target.files?.[0];
                   if (f) onStickerFile(f, 'video');
+                  e.target.value = '';
+                }}
+              />
+
+              {/* Hidden input for loading a saved project JSON. */}
+              <input
+                ref={projectInput}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void loadProjectFile(f);
                   e.target.value = '';
                 }}
               />
@@ -2137,6 +2350,35 @@ export default function VideoEditor() {
                   </Panel>
                 );
               })()}
+
+              {/* Project autosave + JSON backup */}
+              <Panel title="Project">
+                <p className="text-[11px] text-[var(--color-text-muted)] mb-2">
+                  Your work autosaves in this browser (media included, lossless) — a refresh or crash restores it. Save a JSON to back up or move a project between browsers.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={saveProjectFile}
+                    disabled={!mediaKind || busy}
+                    className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium"
+                  >
+                    ↓ Save project
+                  </button>
+                  <button
+                    onClick={() => projectInput.current?.click()}
+                    disabled={busy}
+                    className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium"
+                  >
+                    ↑ Load project
+                  </button>
+                </div>
+                <button
+                  onClick={clearAutosave}
+                  className="mt-2 w-full px-3 py-2 rounded-md border border-[var(--color-glass-border)] text-[var(--color-text-secondary)] text-xs font-medium hover:bg-[var(--color-glass-hover)]"
+                >
+                  Clear autosave
+                </button>
+              </Panel>
 
               {/* Project output settings */}
               <Panel title="Output">
