@@ -33,7 +33,7 @@ import type { BannerPosition, BannerStyle, FillMode, RatioKey } from '../types';
 import type { CaptionEl } from '../captions/types';
 import { createCaption, createTypewriter, elementEnd as captionEnd } from '../captions/types';
 import type { ZoomKeyframe } from '../zoom/types';
-import type { SpeedKeyframe } from '../timemachine/types';
+import type { SpeedPoint } from '../timemachine/types';
 import type { BoilPoolId } from '../captions/fonts';
 import type { SketchElement } from '../sketch/types';
 import { createSketch, elementEnd as sketchEnd } from '../sketch/types';
@@ -81,10 +81,13 @@ export interface ZoomLayer extends LayerBase {
   keyframes: ZoomKeyframe[];
 }
 
-/** The single sequential playback-speed track. Warps the clock, draws nothing. */
+/** The single playback-speed curve. Warps the clock, draws nothing. */
 export interface TimeMachineLayer extends LayerBase {
   kind: 'timemachine';
-  keyframes: SpeedKeyframe[];
+  /** Free-form speed curve (OUTPUT seconds → speed). Empty == flat 1×. */
+  points: SpeedPoint[];
+  /** Play a whoosh at each slow-mo / replay onset. Per-instance SFX toggle. */
+  whoosh: boolean;
 }
 
 /** One projected freehand sketch (drawing + placement + replay timing). */
@@ -204,7 +207,7 @@ export function layerSpan(layer: Layer): Span {
       return { start: 0, end };
     }
     case 'timemachine': {
-      const end = layer.keyframes.reduce((m, k) => Math.max(m, k.start + k.duration), 0);
+      const end = layer.points.reduce((m, p) => Math.max(m, p.t), 0);
       return { start: 0, end };
     }
     case 'sketch':
@@ -294,7 +297,8 @@ export function createTimeMachineLayer(z: number, overrides: Partial<TimeMachine
     id: id('tm'),
     z,
     name: 'Time Machine',
-    keyframes: [],
+    points: [],
+    whoosh: false,
     ...overrides,
   };
 }

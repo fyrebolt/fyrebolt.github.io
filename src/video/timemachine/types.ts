@@ -1,94 +1,138 @@
-// ===== Time Machine speed-keyframe model + interpolation =====
+// ===== Time Machine free-form speed curve =====
 //
-// Modelled on the Zoom keyframe track (src/video/zoom/types.ts): a SINGLE
-// sequential track where only one playback speed is active at a time. Each
-// keyframe animates from the current speed to its `speed` over a `duration`
-// ramp (0 = an instant change), then HOLDS that speed until the next keyframe's
-// start. Before the first keyframe (or with none) playback is NORMAL_SPEED.
+// A FREE-FORM playback-speed curve, modelled exactly on the clip volume-
+// automation curve (src/video/project/clips.ts: VolumePoint / sampleVolume /
+// applyOscillation). The track is an ordered list of {t, speed} control points:
+//   - click the timeline lane      → add a point
+//   - drag a point                 → move it (x = OUTPUT time, y = speed)
+//   - select + Delete              → remove it
+// Speed interpolates LINEARLY between adjacent points and holds flat outside the
+// point range, so NO points == a flat 1× (normal speed, unchanged) and existing
+// projects are never affected until someone edits a curve.
 //
 //   speed 1   = real time
 //   speed 0.5 = slow-motion (a "replay")   speed 2 = fast-forward
 //   speed 0   = a freeze (hold the current frame) — the generalisation of the
-//               Entrance Banner's pause. A freeze that "lasts N seconds" is just
-//               a speed-0 keyframe followed by a resume keyframe N seconds later.
+//               Entrance Banner's pause. Unlike the clip's `muted` flag (an all-
+//               or-nothing OVERRIDE of a curve you want to preserve), a freeze is
+//               a LOCAL span the curve expresses natively: a flat run of 0-speed
+//               points. So there is no separate "freeze" toggle — the "+ Freeze"
+//               preset just writes ordinary 0-speed points (draggable/deletable
+//               afterward like any other), exactly as the tremolo generator does
+//               for the volume curve.
 //
-// The track is authored in OUTPUT seconds (like zoom). project/timeMap.ts
-// integrates it into the output→source time-warp that drives preview + export.
-
-import { smoothstep } from '../zoom/types';
+// The curve is authored in OUTPUT seconds (like the old keyframe track and like
+// every other timeline row). project/timeMap.ts integrates speed over output
+// time into the output→source time-warp that drives preview + export.
 
 /** Playback speed when no Time Machine effect is active. */
 export const NORMAL_SPEED = 1;
 /** Fastest fast-forward the UI allows. */
 export const MAX_SPEED = 4;
-/** At or below this the segment is treated as a freeze (video paused). */
+/** At or below this the curve is treated as a freeze (video paused). */
 export const FREEZE_EPS = 0.02;
 
-export interface SpeedKeyframe {
-  id: string;
-  /** Time the ramp to this keyframe's speed begins (OUTPUT seconds). */
-  start: number;
-  /** Ramp duration (seconds). 0 = instant speed change. */
-  duration: number;
-  /** Target playback speed held until the next keyframe (0 = freeze). */
+/**
+ * One control point of the speed curve. `t` is OUTPUT seconds; `speed` is the
+ * playback multiplier (0 = freeze, 1 = real time, up to MAX_SPEED).
+ */
+export interface SpeedPoint {
+  t: number;
   speed: number;
-  /** Play a whoosh when this transition starts (a "replay" cue). */
-  whoosh: boolean;
 }
 
-export function sortedSpeeds(kfs: SpeedKeyframe[]): SpeedKeyframe[] {
-  return [...kfs].sort((a, b) => a.start - b.start);
+/** Clamp a raw speed into the editable range [0, MAX_SPEED]. */
+export function clampSpeed(speed: number): number {
+  if (!isFinite(speed)) return NORMAL_SPEED;
+  return Math.max(0, Math.min(MAX_SPEED, speed));
 }
 
-function lerp(a: number, b: number, p: number): number {
-  return a + (b - a) * p;
+/** Curve points sorted by time (stable copy — never mutates the input). */
+export function sortedSpeeds(points: SpeedPoint[]): SpeedPoint[] {
+  return points.slice().sort((a, b) => a.t - b.t);
 }
 
 /**
- * The playback speed at OUTPUT time `t`. Handles a keyframe whose start
- * interrupts a still-running ramp by carrying the current interpolated speed
- * forward as the next keyframe's "from" state — identical structure to
- * zoom/types.ts `rectAt`, but for a scalar.
+ * Playback speed at OUTPUT time `t`. No points → flat NORMAL_SPEED. Linear
+ * interpolation between adjacent points; clamped to the first/last speed outside
+ * the point range. Mirrors clips.sampleVolume.
  */
-export function speedAt(t: number, kfs: SpeedKeyframe[]): number {
-  const s = sortedSpeeds(kfs);
-  if (s.length === 0 || t < s[0].start) return NORMAL_SPEED;
-  let from = NORMAL_SPEED;
-  for (let i = 0; i < s.length; i++) {
-    const kf = s[i];
-    const end = kf.start + Math.max(0.0001, kf.duration);
-    const nextStart = i + 1 < s.length ? s[i + 1].start : Infinity;
-    if (t < nextStart) {
-      if (t >= end) return kf.speed; // holding
-      return lerp(from, kf.speed, smoothstep((t - kf.start) / (end - kf.start)));
+export function speedAt(t: number, points: SpeedPoint[] | undefined): number {
+  if (!points || points.length === 0) return NORMAL_SPEED;
+  if (points.length === 1) return clampSpeed(points[0].speed);
+  const pts = sortedSpeeds(points);
+  if (t <= pts[0].t) return clampSpeed(pts[0].speed);
+  const last = pts[pts.length - 1];
+  if (t >= last.t) return clampSpeed(last.speed);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    if (t >= a.t && t <= b.t) {
+      const span = b.t - a.t;
+      const f = span <= 1e-6 ? 0 : (t - a.t) / span;
+      return clampSpeed(a.speed + (b.speed - a.speed) * f);
     }
-    from = nextStart >= end ? kf.speed : lerp(from, kf.speed, smoothstep((nextStart - kf.start) / (end - kf.start)));
   }
-  return from;
+  return clampSpeed(last.speed);
 }
 
 /**
- * The highest speed the clip could still reach at or after OUTPUT time `t` — the
- * current speed plus the target of every keyframe not yet fully in the past (its
- * ramp still landing). Used to tell a temporary freeze (a resume is coming) from
- * a permanent end-freeze. A keyframe counts while `t` is before its ramp END, so
- * the speed ramping *up* out of a freeze is still seen once its start is behind.
+ * The highest speed the curve still reaches at or after OUTPUT time `t` — the
+ * current speed, every point at/after `t`, and the flat tail (held at the last
+ * point). Used by the warp to tell a temporary freeze (a resume is coming) from
+ * a permanent end-freeze. Mirrors the old maxSpeedFrom, curve-shaped.
  */
-export function maxSpeedFrom(t: number, kfs: SpeedKeyframe[]): number {
-  let m = speedAt(t, kfs);
-  for (const kf of kfs) if (kf.start + Math.max(0.0001, kf.duration) >= t) m = Math.max(m, kf.speed);
+export function maxSpeedFrom(t: number, points: SpeedPoint[] | undefined): number {
+  const s = points ? sortedSpeeds(points) : [];
+  if (s.length === 0) return NORMAL_SPEED;
+  let m = speedAt(t, s);
+  for (const p of s) if (p.t + 1e-9 >= t) m = Math.max(m, clampSpeed(p.speed));
+  // Beyond the last point the curve holds flat at its speed.
+  m = Math.max(m, clampSpeed(s[s.length - 1].speed));
   return m;
 }
 
-let counter = 0;
-export function createSpeed(overrides: Partial<SpeedKeyframe> = {}): SpeedKeyframe {
-  counter += 1;
-  return {
-    id: `tm${Date.now().toString(36)}${counter}`,
-    start: 0,
-    duration: 0.6,
-    speed: 0.5,
-    whoosh: false,
-    ...overrides,
-  };
+export interface SpeedRegionOpts {
+  /** Output time the region begins (its leading 1× boundary). */
+  start: number;
+  /** Held speed through the middle of the region (0 = freeze). */
+  speed: number;
+  /** Ramp time into and out of the held speed (seconds). */
+  ramp: number;
+  /** How long the held speed lasts (seconds). */
+  hold: number;
 }
+
+/** Ramp/hold defaults for the panel presets (output seconds). */
+export const REGION_RAMP = 0.25;
+export const REGION_HOLD = 1.2;
+/** Freeze snaps in quickly rather than easing, matching the old feel. */
+export const FREEZE_RAMP = 0.12;
+
+/**
+ * Return a fresh curve with a LOCALISED speed region dropped at `start`: a 1×
+ * boundary, a ramp to `speed`, a flat hold, then a ramp back to 1×. Points that
+ * fall inside the region's span are replaced (like applyOscillation), so the
+ * region cleanly overrides whatever was there. The emitted points are ordinary
+ * curve points — draggable/deletable afterward. This is what the "+ Slow-mo /
+ * + Speed up / + Freeze / + Back to 1×" presets write.
+ */
+export function applySpeedRegion(existing: SpeedPoint[] | undefined, opts: SpeedRegionOpts): SpeedPoint[] {
+  const ramp = Math.max(0, opts.ramp);
+  const hold = Math.max(0, opts.hold);
+  const start = Math.max(0, opts.start);
+  const speed = clampSpeed(opts.speed);
+  const end = start + ramp + hold + ramp;
+  const kept = (existing ?? []).filter((p) => p.t < start - 1e-4 || p.t > end + 1e-4);
+  const gen: SpeedPoint[] = [
+    { t: start, speed: NORMAL_SPEED },
+    { t: start + ramp, speed },
+    { t: start + ramp + hold, speed },
+    { t: end, speed: NORMAL_SPEED },
+  ];
+  return sortedSpeeds([...kept, ...gen]);
+}
+
+// Speed threshold below which entering counts as a "replay" onset (fires the
+// optional whoosh). Freeze (0) is a subset, so a freeze whooshes too.
+export const SLOWMO_ENTER = 0.9;
