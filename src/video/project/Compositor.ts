@@ -47,7 +47,7 @@ import { elementEnd as stickerEnd } from '../sticker/types';
 import type { Project, CaptionLayer } from './types';
 import { bannerLayer, zoomLayer, timeMachineLayer, overlayLayers, layerSpan } from './types';
 import type { VideoClip, BaseHit } from './clips';
-import { baseDuration, resolveBase, hasVideoClip, sampleVolume } from './clips';
+import { baseDuration, resolveBase, hasVideoClip, sampleVolume, clipLen } from './clips';
 
 /** Seconds between pencil-on-paper grains while a sketch animates. */
 const PENCIL_INTERVAL = 0.06;
@@ -409,6 +409,17 @@ export class Compositor {
   /** The current OUTPUT time as last resolved. */
   currentTimeSec(): number {
     return this.pausedT;
+  }
+
+  /**
+   * The clip showing at OUTPUT time `outputT` plus the clip-local offset into it
+   * (seconds from its in-point) — what the razor tool splits at. Resolves through
+   * the same warp the frame uses, so the cut lands exactly on the visible frame.
+   */
+  splitHitAt(outputT: number): { clipId: string; index: number; local: number; len: number } | null {
+    const hit = this.hitAt(outputT);
+    if (!hit) return null;
+    return { clipId: hit.clip.id, index: hit.index, local: hit.local, len: clipLen(hit.clip) };
   }
 
   // ---- drawing ----
