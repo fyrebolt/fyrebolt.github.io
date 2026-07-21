@@ -207,6 +207,69 @@ export default function ProjectTimeline({
     return (clientX - rect.left) / rect.width;
   }, []);
 
+  // ---- press-drag playhead scrub (ruler + empty row / clip-lane areas) ----
+  // Element bodies/handles stopPropagation on pointer-down, so this only fires on
+  // bare scrub surface. Raw pointermoves are coalesced to one scrubTo per frame
+  // (the Compositor further coalesces the actual <video> seek), so a fast drag
+  // lands on the newest frame instead of lagging behind a backlog of seeks.
+  const scrubbing = useRef(false);
+  const scrubRAF = useRef<number | null>(null);
+  const scrubPending = useRef<number | null>(null);
+
+  const flushScrub = useCallback(() => {
+    scrubRAF.current = null;
+    if (scrubPending.current !== null) {
+      onScrub(scrubPending.current);
+      scrubPending.current = null;
+    }
+  }, [onScrub]);
+
+  const onScrubDown = useCallback(
+    (e: ReactPointerEvent) => {
+      if (e.button !== 0) return; // primary button only
+      scrubbing.current = true;
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      onScrub(secFromClientX(e.clientX));
+    },
+    [onScrub, secFromClientX],
+  );
+  const onScrubMove = useCallback(
+    (e: ReactPointerEvent) => {
+      if (!scrubbing.current || e.buttons === 0) return;
+      scrubPending.current = secFromClientX(e.clientX);
+      if (scrubRAF.current === null) scrubRAF.current = requestAnimationFrame(flushScrub);
+    },
+    [secFromClientX, flushScrub],
+  );
+  const onScrubUp = useCallback(
+    (e: ReactPointerEvent) => {
+      if (!scrubbing.current) return;
+      scrubbing.current = false;
+      if (scrubRAF.current !== null) {
+        cancelAnimationFrame(scrubRAF.current);
+        scrubRAF.current = null;
+      }
+      if (scrubPending.current !== null) {
+        onScrub(scrubPending.current); // land on the final position
+        scrubPending.current = null;
+      }
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+    },
+    [onScrub],
+  );
+
+  useEffect(() => () => {
+    if (scrubRAF.current !== null) cancelAnimationFrame(scrubRAF.current);
+  }, []);
+
   // ---- temporal snapping (time-domain twin of the spatial guide locks) ----
   const snapT = useCallback(
     (value: number, exceptLayerId: string | null): number => {
@@ -497,11 +560,17 @@ export default function ProjectTimeline({
 
       {/* horizontally scrollable timeline body; inner width scales with zoom */}
       <div ref={scrollRef} className="overflow-x-auto overflow-y-hidden">
-        <div style={contentStyle} className="relative">
-          {/* Scrub ruler */}
+        <div
+          style={contentStyle}
+          className="relative"
+          onPointerDown={onScrubDown}
+          onPointerMove={onScrubMove}
+          onPointerUp={onScrubUp}
+          onPointerCancel={onScrubUp}
+        >
+          {/* Scrub ruler (press-drag to scrub is handled by the container) */}
           <div
             ref={trackRef}
-            onPointerDown={(e) => onScrub(secFromClientX(e.clientX))}
             className="relative h-6 rounded-md bg-[var(--color-bg-elevated)] cursor-pointer touch-none mb-1.5"
           >
             <div className="absolute inset-y-0 left-0 rounded-l-md bg-[rgba(116,185,255,0.18)]" style={{ width: playLeft }} />

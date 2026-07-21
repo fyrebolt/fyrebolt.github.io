@@ -73,7 +73,9 @@ export default function SpeedCurveRow({
 
   const onLaneDown = useCallback(
     (e: ReactPointerEvent) => {
-      // Clicking empty lane adds a point (and selects the layer).
+      // Clicking empty lane adds a point (and selects the layer). Stop it from
+      // bubbling to the timeline's press-drag scrub — this row is a full editor.
+      e.stopPropagation();
       onSelectLayer();
       const p = toData(e.clientX, e.clientY);
       onAddPoint(p.t, p.speed);
