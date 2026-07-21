@@ -29,6 +29,13 @@ export interface GuideSettings {
   object: boolean;
   /** Snap the box centre to the pointer position. */
   cursor: boolean;
+  // ---- temporal (timeline) snapping — the time-domain twin of the spatial locks ----
+  /** Snap a dragged element's start/end to clip boundaries. */
+  snapClips: boolean;
+  /** Snap a dragged element's start/end to other elements' start/end. */
+  snapElements: boolean;
+  /** Snap a dragged element's start/end to the playhead. */
+  snapPlayhead: boolean;
 }
 
 export const DEFAULT_GUIDES: GuideSettings = {
@@ -39,6 +46,9 @@ export const DEFAULT_GUIDES: GuideSettings = {
   border: true,
   object: true,
   cursor: false,
+  snapClips: true,
+  snapElements: true,
+  snapPlayhead: true,
 };
 
 /** A single alignment line to draw while a snap is active. */
@@ -283,4 +293,45 @@ export function snapUniformScale(
   for (const l of ly) if (l.kind !== 'center' && l.kind !== 'cursor') consider(l.tgt, dirY, anchor.y, 'y', l.kind);
 
   return { scale: best, guides };
+}
+
+// ===== Temporal (timeline) snapping — the time-domain twin of the spatial locks =====
+//
+// While an element's start/end/body is dragged on the timeline, its edge can lock
+// to nearby anchors in TIME (seconds) the same way a box edge locks in space: clip
+// boundaries, other elements' start/end, and the playhead. Which anchors are live
+// is governed by the same GuideSettings surfaced in the gear popover.
+
+export type TimeSnapKind = 'clip' | 'element' | 'playhead';
+
+export interface TimeSnapTarget {
+  /** Anchor time in OUTPUT seconds. */
+  t: number;
+  kind: TimeSnapKind;
+}
+
+/**
+ * Snap time `t` to the nearest live target within `threshold` seconds. Returns the
+ * (possibly unchanged) time plus the target it locked to (for drawing a guide),
+ * or null when nothing was close enough. `settings` gates each target kind.
+ */
+export function snapTime(
+  t: number,
+  targets: TimeSnapTarget[],
+  threshold: number,
+  settings: Pick<GuideSettings, 'snapClips' | 'snapElements' | 'snapPlayhead'>,
+): { t: number; hit: TimeSnapTarget | null } {
+  let best: TimeSnapTarget | null = null;
+  let bestD = threshold;
+  for (const tg of targets) {
+    if (tg.kind === 'clip' && !settings.snapClips) continue;
+    if (tg.kind === 'element' && !settings.snapElements) continue;
+    if (tg.kind === 'playhead' && !settings.snapPlayhead) continue;
+    const d = Math.abs(t - tg.t);
+    if (d < bestD) {
+      bestD = d;
+      best = tg;
+    }
+  }
+  return best ? { t: best.t, hit: best } : { t, hit: null };
 }
