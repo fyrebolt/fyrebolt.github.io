@@ -10,13 +10,17 @@
 //   - zoom:                  the single keyframe track (transition + holding
 //                            segments), each keyframe selectable/draggable.
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { Attachment, CaptionEl } from '../captions/types';
 import { elementEnd as captionEnd, staticWindowOf } from '../captions/types';
 import type { ZoomKeyframe } from '../zoom/types';
 import { sortedZooms } from '../zoom/types';
+import type { GuideSettings, TimeSnapTarget } from '../transform/snapEngine';
+import { snapTime } from '../transform/snapEngine';
 import SpeedCurveRow from './SpeedCurveRow';
+import ClipLane from './ClipLane';
+import type { ClipExtent } from './ClipLane';
 import type { SketchElement } from '../sketch/types';
 import type { Highlighter } from '../highlight/types';
 import type { DramaticWord } from '../dramatic/types';
@@ -68,6 +72,15 @@ interface Props {
   selectedAttachmentId: string | null;
   selectedZoomKfId: string | null;
   selectedSpeedIdx: number | null;
+  /** Base clips as OUTPUT-time extents, shown as a lane with waveforms. */
+  clipExtents: ClipExtent[];
+  /** Clip-boundary times (OUTPUT seconds) for temporal snapping. */
+  clipEdges: number[];
+  selectedClipId: string | null;
+  getClipBlob: (srcId: string) => Blob | undefined;
+  onSelectClip: (id: string) => void;
+  /** Guide/snap settings (temporal toggles live here too). */
+  guideSettings: GuideSettings;
   onScrub: (sec: number) => void;
   onSelectLayer: (id: string) => void;
   onEditCaption: (layerId: string, patch: Partial<CaptionEl>) => void;
@@ -124,6 +137,8 @@ interface RangeDrag {
   origStart: number;
   /** The resizable trailing span (sketch: freezeDur, else: duration). */
   origTrail: number;
+  /** Fixed span before the trailing edge (sketch: animationDur, else 0). */
+  head: number;
   /** Movement bounds in seconds (dramatic clamps to neighbours; others [0, dur]). */
   minStart: number;
   maxStart: number;
@@ -138,6 +153,12 @@ export default function ProjectTimeline({
   selectedAttachmentId,
   selectedZoomKfId,
   selectedSpeedIdx,
+  clipExtents,
+  clipEdges,
+  selectedClipId,
+  getClipBlob,
+  onSelectClip,
+  guideSettings,
   onScrub,
   onSelectLayer,
   onEditCaption,
@@ -156,11 +177,17 @@ export default function ProjectTimeline({
   onEditSticker,
 }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const capDrag = useRef<CaptionDrag | null>(null);
   const attachDrag = useRef<AttachDrag | null>(null);
   const bannerDrag = useRef<BannerDrag | null>(null);
   const zoomDrag = useRef<ZoomDrag | null>(null);
   const rangeDrag = useRef<RangeDrag | null>(null);
+
+  // Horizontal zoom is transient VIEW state (not project data): 1 = fit-to-width,
+  // higher = more pixels/second with the lane scrolling horizontally.
+  const [zoom, setZoom] = useState(1);
+  const [snapGuide, setSnapGuide] = useState<number | null>(null);
 
   const dur = Math.max(0.001, duration);
 
@@ -179,6 +206,39 @@ export default function ProjectTimeline({
     const rect = el.getBoundingClientRect();
     return (clientX - rect.left) / rect.width;
   }, []);
+
+  // ---- temporal snapping (time-domain twin of the spatial guide locks) ----
+  const snapT = useCallback(
+    (value: number, exceptLayerId: string | null): number => {
+      const el = trackRef.current;
+      if (!el) return value;
+      const w = el.getBoundingClientRect().width || 1;
+      const threshold = (7 / w) * dur; // ~7px pull, expressed in seconds
+      const targets: TimeSnapTarget[] = [];
+      for (const e of clipEdges) targets.push({ t: e, kind: 'clip' });
+      for (const l of layers) {
+        if (l.id === exceptLayerId) continue;
+        const s = layerSpan(l);
+        targets.push({ t: s.start, kind: 'element' }, { t: s.end, kind: 'element' });
+      }
+      targets.push({ t: currentSec, kind: 'playhead' });
+      const r = snapTime(value, targets, threshold, guideSettings);
+      setSnapGuide(r.hit ? r.t : null);
+      return r.t;
+    },
+    [dur, clipEdges, layers, currentSec, guideSettings],
+  );
+
+  // Keep the playhead in view as it moves or the zoom changes.
+  useEffect(() => {
+    const wrap = scrollRef.current;
+    if (!wrap || zoom <= 1) return;
+    const contentW = wrap.scrollWidth;
+    const x = (Math.min(dur, Math.max(0, currentSec)) / dur) * contentW;
+    const margin = 24;
+    if (x < wrap.scrollLeft + margin) wrap.scrollLeft = Math.max(0, x - margin);
+    else if (x > wrap.scrollLeft + wrap.clientWidth - margin) wrap.scrollLeft = x - wrap.clientWidth + margin;
+  }, [currentSec, zoom, dur]);
 
   const pct = (sec: number) => `${Math.min(100, Math.max(0, (sec / dur) * 100))}%`;
   const playLeft = pct(currentSec);
@@ -204,11 +264,11 @@ export default function ProjectTimeline({
       const delta = (fracFromClientX(e.clientX) - fracFromClientX(d.startX)) * dur;
       const o = d.orig;
       if (o.kind === 'boil') {
-        if (d.mode === 'start') onEditCaption(d.layerId, { start: clamp(0, o.end - MIN_DURATION, o.start + delta) });
-        else if (d.mode === 'end') onEditCaption(d.layerId, { end: clamp(o.start + MIN_DURATION, dur, o.end + delta) });
+        if (d.mode === 'start') onEditCaption(d.layerId, { start: clamp(0, o.end - MIN_DURATION, snapT(o.start + delta, d.layerId)) });
+        else if (d.mode === 'end') onEditCaption(d.layerId, { end: clamp(o.start + MIN_DURATION, dur, snapT(o.end + delta, d.layerId)) });
         else {
           const len = o.end - o.start;
-          const s = clamp(0, dur - len, o.start + delta);
+          const s = clamp(0, dur - len, snapT(o.start + delta, d.layerId));
           onEditCaption(d.layerId, { start: s, end: s + len });
         }
         return;
@@ -216,14 +276,18 @@ export default function ProjectTimeline({
       const del = o.deleteEnabled ? o.deleteDur : 0;
       const total = o.typingDur + o.holdDur + del;
       if (d.mode === 'body' || d.mode === 'start') {
-        onEditCaption(d.layerId, { start: clamp(0, dur - total, o.start + delta) });
+        onEditCaption(d.layerId, { start: clamp(0, dur - total, snapT(o.start + delta, d.layerId)) });
       } else if (d.mode === 'end') {
         if (o.deleteEnabled) {
-          const maxDel = dur - o.start - o.typingDur - o.holdDur;
-          onEditCaption(d.layerId, { deleteDur: clamp(MIN_DURATION, maxDel, o.deleteDur + delta) });
+          const base = o.start + o.typingDur + o.holdDur;
+          const snappedEnd = snapT(base + o.deleteDur + delta, d.layerId);
+          const maxDel = dur - base;
+          onEditCaption(d.layerId, { deleteDur: clamp(MIN_DURATION, maxDel, snappedEnd - base) });
         } else {
-          const maxHold = dur - o.start - o.typingDur;
-          onEditCaption(d.layerId, { holdDur: clamp(MIN_DURATION, maxHold, o.holdDur + delta) });
+          const base = o.start + o.typingDur;
+          const snappedEnd = snapT(base + o.holdDur + delta, d.layerId);
+          const maxHold = dur - base;
+          onEditCaption(d.layerId, { holdDur: clamp(MIN_DURATION, maxHold, snappedEnd - base) });
         }
       } else if (d.mode === 'div1') {
         const rest = o.holdDur + del;
@@ -234,7 +298,7 @@ export default function ProjectTimeline({
         onEditCaption(d.layerId, { holdDur: clamp(MIN_DURATION, maxH, o.holdDur + delta) });
       }
     },
-    [dur, fracFromClientX, onEditCaption],
+    [dur, fracFromClientX, onEditCaption, snapT],
   );
 
   // ---- attachment drag ----
@@ -296,9 +360,9 @@ export default function ProjectTimeline({
       const d = bannerDrag.current;
       if (!d || e.buttons === 0) return;
       const delta = (fracFromClientX(e.clientX) - fracFromClientX(d.startX)) * dur;
-      onEditBanner(d.layerId, { freeze: clamp(0, dur, d.origFreeze + delta) });
+      onEditBanner(d.layerId, { freeze: clamp(0, dur, snapT(d.origFreeze + delta, d.layerId)) });
     },
-    [dur, fracFromClientX, onEditBanner],
+    [dur, fracFromClientX, onEditBanner, snapT],
   );
 
   // ---- zoom row drag ----
@@ -320,10 +384,10 @@ export default function ProjectTimeline({
       const d = zoomDrag.current;
       if (!d || e.buttons === 0) return;
       const delta = (fracFromClientX(e.clientX) - fracFromClientX(d.startX)) * dur;
-      if (d.mode === 'start') onEditZoomKf(d.layerId, d.kfId, { start: clamp(0, dur - MIN_ZOOM_DURATION, d.orig.start + delta) });
+      if (d.mode === 'start') onEditZoomKf(d.layerId, d.kfId, { start: clamp(0, dur - MIN_ZOOM_DURATION, snapT(d.orig.start + delta, d.layerId)) });
       else onEditZoomKf(d.layerId, d.kfId, { duration: clamp(MIN_ZOOM_DURATION, dur - d.orig.start, d.orig.duration + delta) });
     },
-    [dur, fracFromClientX, onEditZoomKf],
+    [dur, fracFromClientX, onEditZoomKf, snapT],
   );
 
   // ---- generic overlay-range drag (sketch / highlighter / dramatic) ----
@@ -365,6 +429,7 @@ export default function ProjectTimeline({
         startX: e.clientX,
         origStart,
         origTrail,
+        head,
         minStart,
         maxStart,
         maxTrail,
@@ -378,21 +443,23 @@ export default function ProjectTimeline({
       if (!d || e.buttons === 0) return;
       const delta = (fracFromClientX(e.clientX) - fracFromClientX(d.startX)) * dur;
       if (d.mode === 'move') {
-        const start = clamp(d.minStart, d.maxStart, d.origStart + delta);
+        const start = clamp(d.minStart, d.maxStart, snapT(d.origStart + delta, d.layerId));
         if (d.kind === 'sketch') onEditSketch(d.layerId, { start });
         else if (d.kind === 'highlighter') onEditHighlighter(d.layerId, { start });
         else if (d.kind === 'sticker') onEditSticker(d.layerId, { start });
         else onEditDramatic(d.layerId, { start });
       } else {
         // Resize the trailing span: sketch → freezeDur, sticker → hold, others → duration.
-        const trail = clamp(MIN_DURATION, d.maxTrail, d.origTrail + delta);
+        // Snap the trailing END edge, then convert back to the span length.
+        const snappedEnd = snapT(d.origStart + d.head + d.origTrail + delta, d.layerId);
+        const trail = clamp(MIN_DURATION, d.maxTrail, snappedEnd - d.origStart - d.head);
         if (d.kind === 'sketch') onEditSketch(d.layerId, { freezeDur: trail });
         else if (d.kind === 'highlighter') onEditHighlighter(d.layerId, { duration: trail });
         else if (d.kind === 'sticker') onEditSticker(d.layerId, { hold: trail });
         else onEditDramatic(d.layerId, { duration: trail });
       }
     },
-    [dur, fracFromClientX, onEditSketch, onEditHighlighter, onEditDramatic, onEditSticker],
+    [dur, fracFromClientX, onEditSketch, onEditHighlighter, onEditDramatic, onEditSticker, snapT],
   );
 
   const onUp = useCallback((e: ReactPointerEvent) => {
@@ -406,24 +473,59 @@ export default function ProjectTimeline({
     bannerDrag.current = null;
     zoomDrag.current = null;
     rangeDrag.current = null;
+    setSnapGuide(null);
   }, []);
+
+  const contentStyle = { width: `${zoom * 100}%`, minWidth: '100%' } as const;
+  const zoomIn = () => setZoom((z) => Math.min(40, +(z * 1.5).toFixed(3)));
+  const zoomOut = () => setZoom((z) => Math.max(1, +(z / 1.5).toFixed(3)));
 
   return (
     <div className="mt-4 select-none">
-      {/* Scrub ruler */}
-      <div className="flex justify-between text-[10px] text-[var(--color-text-muted)] mb-1 font-mono">
-        <span>0:00</span>
-        <span>{fmt(currentSec)}</span>
-        <span>{fmt(duration)}</span>
+      {/* header: time readout + horizontal zoom controls */}
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] text-[var(--color-text-muted)] font-mono">{fmt(currentSec)} / {fmt(duration)}</span>
+        <div className="flex items-center gap-1">
+          <button onClick={zoomOut} disabled={zoom <= 1} title="Zoom out" className="w-6 h-6 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm leading-none">−</button>
+          <span className="text-[10px] text-[var(--color-text-muted)] font-mono w-10 text-center">{Math.round(zoom * 100)}%</span>
+          <button onClick={zoomIn} disabled={zoom >= 40} title="Zoom in" className="w-6 h-6 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm leading-none">＋</button>
+          {zoom > 1 && (
+            <button onClick={() => setZoom(1)} title="Fit to width" className="ml-1 px-2 h-6 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] text-[10px]">Fit</button>
+          )}
+        </div>
       </div>
-      <div
-        ref={trackRef}
-        onPointerDown={(e) => onScrub(secFromClientX(e.clientX))}
-        className="relative h-6 rounded-md bg-[var(--color-bg-elevated)] cursor-pointer touch-none mb-2"
-      >
-        <div className="absolute inset-y-0 left-0 rounded-l-md bg-[rgba(116,185,255,0.18)]" style={{ width: playLeft }} />
-        <div className="absolute top-0 bottom-0 w-[2px] bg-[var(--color-primary-blue)]" style={{ left: playLeft }} />
-      </div>
+
+      {/* horizontally scrollable timeline body; inner width scales with zoom */}
+      <div ref={scrollRef} className="overflow-x-auto overflow-y-hidden">
+        <div style={contentStyle} className="relative">
+          {/* Scrub ruler */}
+          <div
+            ref={trackRef}
+            onPointerDown={(e) => onScrub(secFromClientX(e.clientX))}
+            className="relative h-6 rounded-md bg-[var(--color-bg-elevated)] cursor-pointer touch-none mb-1.5"
+          >
+            <div className="absolute inset-y-0 left-0 rounded-l-md bg-[rgba(116,185,255,0.18)]" style={{ width: playLeft }} />
+            <div className="absolute top-0 bottom-0 w-[2px] bg-[var(--color-primary-blue)]" style={{ left: playLeft }} />
+          </div>
+
+          {/* base clips as a lane (boundaries + waveform) */}
+          {clipExtents.length > 0 && (
+            <div className="mb-1.5">
+              <ClipLane
+                extents={clipExtents}
+                duration={duration}
+                currentSec={currentSec}
+                selectedClipId={selectedClipId}
+                getClipBlob={getClipBlob}
+                onSelectClip={onSelectClip}
+              />
+            </div>
+          )}
+
+          {/* snap guide (a temporal lock line) across the whole stack */}
+          {snapGuide !== null && (
+            <div className="pointer-events-none absolute top-0 bottom-0 w-px bg-[#b57cff] shadow-[0_0_6px_#b57cff] z-40" style={{ left: pct(snapGuide) }} />
+          )}
 
       <div className="space-y-1.5">
         {layers.length === 0 && (
@@ -439,7 +541,7 @@ export default function ProjectTimeline({
           if (layer.kind === 'zoom') {
             const sorted = sortedZooms(layer.keyframes);
             return (
-              <div key={layer.id} className="relative h-8 rounded-md bg-[var(--color-bg-elevated)] overflow-hidden">
+              <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)] overflow-hidden">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-30" style={{ left: playLeft }} />
                 {sorted.length === 0 && (
                   <button
@@ -518,7 +620,7 @@ export default function ProjectTimeline({
             const widthPct = ((span.end - span.start) / dur) * 100;
             const freezePct = (layer.freeze / dur) * 100;
             return (
-              <div key={layer.id} className="relative h-8 rounded-md bg-[var(--color-bg-elevated)]">
+              <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
                 <div
                   onPointerDown={(e) => onBannerDown(e, layer)}
@@ -549,7 +651,7 @@ export default function ProjectTimeline({
             const animF = layer.el.animationDur / total;
             const label = layer.el.strokes.length === 0 ? 'empty sketch' : layer.name;
             return (
-              <div key={layer.id} className="relative h-8 rounded-md bg-[var(--color-bg-elevated)]">
+              <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
                 <div
                   onPointerDown={(e) => onRangeDown(e, layer, 'move')}
@@ -576,7 +678,7 @@ export default function ProjectTimeline({
             const inF = Math.max(0, Math.min(1, h.sweepIn / Math.max(0.001, h.duration)));
             const outF = Math.max(0, Math.min(1, h.sweepOut / Math.max(0.001, h.duration)));
             return (
-              <div key={layer.id} className="relative h-8 rounded-md bg-[var(--color-bg-elevated)]">
+              <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
                 <div
                   onPointerDown={(e) => onRangeDown(e, layer, 'move')}
@@ -605,7 +707,7 @@ export default function ProjectTimeline({
             const glyph = w.mode === 'inverse' ? '◱' : w.mode === 'reflection' ? '🔃' : '▤';
             const label = (w.text || 'word').toUpperCase();
             return (
-              <div key={layer.id} className="relative h-8 rounded-md bg-[var(--color-bg-elevated)]">
+              <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
                 <div
                   onPointerDown={(e) => onRangeDown(e, layer, 'move')}
@@ -630,7 +732,7 @@ export default function ProjectTimeline({
             const widthPct = (s.hold / dur) * 100;
             const glyph = s.source === 'video' ? '🎬' : '🖼️';
             return (
-              <div key={layer.id} className="relative h-8 rounded-md bg-[var(--color-bg-elevated)]">
+              <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
                 <div
                   onPointerDown={(e) => onRangeDown(e, layer, 'move')}
@@ -663,7 +765,7 @@ export default function ProjectTimeline({
           const rowColor = ROW_COLORS[i % ROW_COLORS.length];
 
           return (
-            <div key={layer.id} className="relative h-8 rounded-md bg-[var(--color-bg-elevated)]">
+            <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
               <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
               <div
                 onPointerDown={(e) => onCapDown(e, layer, 'body')}
@@ -725,6 +827,8 @@ export default function ProjectTimeline({
             </div>
           );
         })}
+      </div>
+        </div>
       </div>
     </div>
   );
