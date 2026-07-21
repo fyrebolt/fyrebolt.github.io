@@ -1385,23 +1385,28 @@ export default function VideoEditor() {
     setStatus('Recording the composite in real time…');
     try {
       const total = c.totalSec();
-      const webm = await c.record((sec) => setProgress(Math.min(0.99, sec / Math.max(0.1, total))));
-      let outBlob: Blob = webm;
-      let ext = 'webm';
-      let type = 'video/webm';
-      try {
-        setStage('preparing');
-        setStatus('Preparing the MP4 encoder (one-time download)…');
-        await ensureFFmpeg();
-        setStage('encoding');
-        setStatus('Encoding MP4 (H.264)…');
-        setProgress(0);
-        outBlob = await transcodeToMp4(webm, (p) => setProgress(p));
-        ext = 'mp4';
-        type = 'video/mp4';
-      } catch (err) {
-        console.error('MP4 transcode failed, falling back to WebM', err);
-        setStatus('MP4 encoding failed — providing the WebM instead.');
+      const rec = await c.record((sec) => setProgress(Math.min(0.99, sec / Math.max(0.1, total))));
+      let outBlob: Blob = rec.blob;
+      let ext = rec.mime.includes('mp4') ? 'mp4' : 'webm';
+      let type = ext === 'mp4' ? 'video/mp4' : 'video/webm';
+      if (ext !== 'mp4') {
+        // Browser couldn't record H.264/MP4 natively (Firefox): transcode the
+        // VP9/WebM once. When we DID record MP4 directly it's a single encode —
+        // no generational loss — so we skip ffmpeg entirely.
+        try {
+          setStage('preparing');
+          setStatus('Preparing the MP4 encoder (one-time download)…');
+          await ensureFFmpeg();
+          setStage('encoding');
+          setStatus('Encoding MP4 (H.264)…');
+          setProgress(0);
+          outBlob = await transcodeToMp4(rec.blob, (p) => setProgress(p));
+          ext = 'mp4';
+          type = 'video/mp4';
+        } catch (err) {
+          console.error('MP4 transcode failed, falling back to WebM', err);
+          setStatus('MP4 encoding failed — providing the WebM instead.');
+        }
       }
       const blob = new Blob([outBlob], { type });
       const url = URL.createObjectURL(blob);

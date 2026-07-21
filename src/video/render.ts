@@ -46,14 +46,48 @@ export function shade(hex: string, f: number): string {
 
 // ---- output sizing ----
 
+/** Long-edge cap (4K). Keeps the in-browser encoder within sane time/memory. */
+export const RES_CAP = 3840;
+
+const even = (v: number) => Math.max(2, Math.round(v / 2) * 2);
+
+/** Scale a w×h down so its longer edge is ≤ RES_CAP, preserving aspect. */
+function capTo4K(w: number, h: number): { w: number; h: number } {
+  const maxDim = Math.max(w, h);
+  if (maxDim > RES_CAP) {
+    const k = RES_CAP / maxDim;
+    return { w: w * k, h: h * k };
+  }
+  return { w, h };
+}
+
+/**
+ * Output resolution for the export. Rather than hard-capping every preset at
+ * 1080p, we track the SOURCE resolution so a high-res clip exports crisp (up to
+ * 4K) — the aspect ratio is still enforced exactly, we just pick the largest
+ * frame the source can fill without upscaling.
+ *
+ *  - `original`: native dimensions, capped at 4K.
+ *  - a ratio preset: the largest box of that aspect that fits inside the source
+ *    (no upscaling), never smaller than the classic preset, capped at 4K.
+ */
 export function outputSizeFor(ratio: RatioKey, srcW: number, srcH: number): OutputSize {
   if (ratio === 'original') {
-    // Keep native dimensions but clamp to sane, even numbers for the encoder.
-    const w = Math.max(2, Math.round(srcW / 2) * 2);
-    const h = Math.max(2, Math.round(srcH / 2) * 2);
-    return { w, h };
+    const c = capTo4K(Math.max(2, srcW), Math.max(2, srcH));
+    return { w: even(c.w), h: even(c.h) };
   }
-  return RATIOS[ratio];
+  const preset = RATIOS[ratio];
+  const a = preset.w / preset.h;
+  // Largest box of the target aspect that fits inside the source (no upscaling).
+  let h = srcW > 0 && srcH > 0 ? Math.min(srcH, srcW / a) : preset.h;
+  let w = h * a;
+  // Never regress below the classic 1080-wide preset quality.
+  if (w < preset.w || h < preset.h) {
+    w = preset.w;
+    h = preset.h;
+  }
+  const c = capTo4K(w, h);
+  return { w: even(c.w), h: even(c.h) };
 }
 
 // ---- source compositing (fill modes) ----

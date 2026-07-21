@@ -54,7 +54,39 @@ const PENCIL_INTERVAL = 0.06;
 import { bannerFrameAt, crossedLock, compileWarp } from './timeMap';
 import type { TimeWarp } from './timeMap';
 
-const FPS = 30;
+// Capture at 60 so the animated overlays (banner slide, zoom ease, font-boil,
+// sketch draw) stay smooth. For a 30 fps source the base frames simply repeat —
+// never worse than 30, and the browser degrades gracefully if it can't sustain
+// 60 at 4K (fewer unique frames, correct timing).
+const FPS = 60;
+
+/**
+ * Preferred record containers, cleanest first. Recording H.264/MP4 natively
+ * (Chrome/Safari) is a SINGLE encode — no VP9→H.264 generational loss — and
+ * usually hardware-accelerated, which is what makes 4K real-time capture viable.
+ * Firefox has no MP4 recorder, so it falls back to VP9/WebM → ffmpeg transcode.
+ */
+const RECORD_MIME_PREFS = [
+  'video/mp4;codecs=avc1.640033,mp4a.40.2', // H.264 High@L5.1 + AAC
+  'video/mp4;codecs=avc1.640028,mp4a.40.2', // H.264 High@L4.0 + AAC
+  'video/mp4;codecs=avc1,mp4a.40.2',
+  'video/mp4',
+  'video/webm;codecs=vp9,opus',
+  'video/webm',
+];
+
+function pickRecordMime(): string {
+  if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported) {
+    for (const m of RECORD_MIME_PREFS) {
+      try {
+        if (MediaRecorder.isTypeSupported(m)) return m;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return 'video/webm';
+}
 
 export type MediaKind = 'video' | 'image';
 
@@ -922,7 +954,7 @@ export class Compositor {
 
   // ---- export ----
 
-  async record(onProgress?: (sec: number) => void): Promise<Blob> {
+  async record(onProgress?: (sec: number) => void): Promise<{ blob: Blob; mime: string }> {
     if (!this.loaded) throw new Error('No media loaded');
     this.stopLoop();
     this.recording = true;
@@ -939,9 +971,14 @@ export class Compositor {
       dest.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
     }
 
-    let mimeType = 'video/webm;codecs=vp9,opus';
-    if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm';
-    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12_000_000 });
+    const mimeType = pickRecordMime();
+    // Near-transparent bitrate that scales with resolution × fps (~0.22 bpp),
+    // clamped so 1080p stays generous and 4K doesn't run away. Bigger files by
+    // design — the fidelity/size trade favours fidelity here.
+    const videoBitsPerSecond = Math.round(
+      Math.min(120_000_000, Math.max(16_000_000, this.out.w * this.out.h * FPS * 0.22)),
+    );
+    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond });
     const chunks: BlobPart[] = [];
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) chunks.push(e.data);
@@ -974,7 +1011,7 @@ export class Compositor {
     this.onTime = origOnTime;
     this.recording = false;
     stream.getVideoTracks().forEach((t) => t.stop());
-    return new Blob(chunks, { type: 'video/webm' });
+    return { blob: new Blob(chunks, { type: mimeType }), mime: mimeType };
   }
 
   destroy(): void {

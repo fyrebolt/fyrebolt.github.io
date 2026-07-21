@@ -55,12 +55,14 @@ export async function transcodeToMp4(webm: Blob, onProgress?: (p: number) => voi
     await ff.exec([
       '-i', 'input.webm',
       '-c:v', 'libx264',
+      // Quality is set by CRF; keep a fast preset so 4K stays feasible in the
+      // single-threaded wasm encoder. CRF 16 is visually near-transparent.
       '-preset', 'veryfast',
-      '-crf', '20',
+      '-crf', '16',
       '-pix_fmt', 'yuv420p',
       '-movflags', '+faststart',
       '-c:a', 'aac',
-      '-b:a', '192k',
+      '-b:a', '256k',
       'output.mp4',
     ]);
     const data = await ff.readFile('output.mp4');
