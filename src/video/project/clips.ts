@@ -198,6 +198,52 @@ export function hasVideoClip(clips: VideoClip[]): boolean {
   return clips.some((c) => c.kind === 'video');
 }
 
+// ---- split (razor) ----
+
+/**
+ * Split a clip into two independent clips at CLIP-LOCAL time `local` (seconds
+ * from the clip's in-point). The two halves share the same source media (srcId)
+ * but own fresh ids, so they trim / delete / grade independently afterward.
+ *
+ * The volume curve is CLIP-LOCAL (see VolumePoint), so it is redistributed, not
+ * discarded or duplicated: points before the split stay on the FIRST clip
+ * unchanged; points at/after the split move to the SECOND clip with their time
+ * rebased to the new clip's own in-point (t -= local). All other per-clip
+ * properties (mute, colour grade, name, dims) carry to both halves.
+ *
+ * Returns null if the split point isn't at least MIN_CLIP_LEN from both ends
+ * (splitting there would leave a sub-minimum clip).
+ */
+export function splitClip(c: VideoClip, local: number): [VideoClip, VideoClip] | null {
+  const len = clipLen(c);
+  if (local < MIN_CLIP_LEN || local > len - MIN_CLIP_LEN) return null;
+
+  const points = c.volume ?? [];
+  const firstVol = points.filter((p) => p.t < local);
+  const secondVol = points.filter((p) => p.t >= local).map((p) => ({ ...p, t: p.t - local }));
+
+  // Split source seconds: for a still (in === 0) the "in" stays 0 and the length
+  // lives in `out`; for video the second clip picks up where the first left off.
+  const cutSource = c.kind === 'image' ? local : c.in + local;
+
+  uid += 1;
+  const first: VideoClip = {
+    ...c,
+    id: `clip-${Date.now().toString(36)}-${uid}`,
+    out: c.kind === 'image' ? local : cutSource,
+    volume: firstVol.length ? firstVol : undefined,
+  };
+  uid += 1;
+  const second: VideoClip = {
+    ...c,
+    id: `clip-${Date.now().toString(36)}-${uid}`,
+    in: c.kind === 'image' ? 0 : cutSource,
+    out: c.kind === 'image' ? len - local : c.out,
+    volume: secondVol.length ? secondVol : undefined,
+  };
+  return [first, second];
+}
+
 // ---- factory ----
 
 let uid = 0;

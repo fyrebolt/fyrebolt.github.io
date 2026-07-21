@@ -60,7 +60,7 @@ import {
 } from './project/types';
 import type { StickerElement } from './sticker/types';
 import type { VideoClip } from './project/clips';
-import { createClip, clipLen, baseDuration, MIN_CLIP_LEN, IMAGE_CLIP_MAX } from './project/clips';
+import { createClip, clipLen, baseDuration, splitClip, MIN_CLIP_LEN, IMAGE_CLIP_MAX } from './project/clips';
 import { compileWarp } from './project/timeMap';
 import { Panel, Field, ChoiceGrid } from './project/ui';
 import { RATIO_LABELS, FILL_MODES } from './project/constants';
@@ -629,6 +629,36 @@ export default function VideoEditor() {
     },
     [sealDiscrete],
   );
+
+  /**
+   * Razor: split the clip under the playhead into two independent clips at the
+   * cursor. The clip-local cut offset comes from the compositor's warp so it
+   * lands on the visible frame; the volume curve is redistributed by splitClip
+   * (before → clip 1, after → clip 2 rebased). One undo entry via sealDiscrete.
+   */
+  const splitAtPlayhead = useCallback(() => {
+    const comp = compRef.current;
+    if (!comp) return;
+    const info = comp.splitHitAt(comp.currentTimeSec());
+    if (!info) return;
+    const idx = clips.findIndex((c) => c.id === info.clipId);
+    if (idx < 0) return;
+    const parts = splitClip(clips[idx], info.local);
+    if (!parts) {
+      setStatus('Move the playhead further into the clip to split it (needs room on both sides).');
+      return;
+    }
+    sealDiscrete();
+    setClips((cs) => {
+      const j = cs.findIndex((c) => c.id === info.clipId);
+      if (j < 0) return cs;
+      const next = cs.slice();
+      next.splice(j, 1, parts[0], parts[1]);
+      return next;
+    });
+    // Select the trailing half so the fresh cut is the visible selection.
+    setSelectedClipId(parts[1].id);
+  }, [clips, sealDiscrete]);
 
   const addClipClick = useCallback(() => clipInput.current?.click(), []);
 
@@ -1305,6 +1335,13 @@ export default function VideoEditor() {
         if (selectedLayerId) duplicateLayer(selectedLayerId);
         return;
       }
+      // 'S' splits the clip under the playhead (NLE razor convention).
+      if ((e.key === 's' || e.key === 'S') && !editable && !mod) {
+        if (!mediaKind) return;
+        e.preventDefault();
+        splitAtPlayhead();
+        return;
+      }
       // Escape leaves full-screen (crop-escape is owned by the other handler).
       if (e.key === 'Escape' && fullscreen && !croppingId) {
         e.preventDefault();
@@ -1313,7 +1350,7 @@ export default function VideoEditor() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [togglePlay, duplicateLayer, selectedLayerId, fullscreen, croppingId, confirmDeleteId, mediaKind]);
+  }, [togglePlay, duplicateLayer, selectedLayerId, fullscreen, croppingId, confirmDeleteId, mediaKind, splitAtPlayhead]);
 
   // ---- canvas selection (single-layer transforms are owned by TransformBox) ----
   const normFromPointer = useCallback((clientX: number, clientY: number) => {
@@ -2148,6 +2185,9 @@ export default function VideoEditor() {
                   </button>
                   <button onClick={togglePlay} disabled={!mediaKind || busy} title="Play / pause (Space)" className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
                     {isPlaying ? '⏸ Pause' : '▶ Play'}
+                  </button>
+                  <button onClick={splitAtPlayhead} disabled={!mediaKind || busy} title="Split the clip under the playhead (S)" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
+                    ✂ Split
                   </button>
                   <button onClick={undo} disabled={!history.canUndo || busy} title="Undo (⌘Z / Ctrl+Z)" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
                     ↶ Undo
