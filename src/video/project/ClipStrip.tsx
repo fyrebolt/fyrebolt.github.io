@@ -36,6 +36,7 @@ interface Props {
   onSelect: (id: string) => void;
   onReorder: (from: number, to: number) => void;
   onRemove: (id: string) => void;
+  onDuplicate: (id: string) => void;
   onTrim: (id: string, patch: { in?: number; out?: number }) => void;
   onAddClip: () => void;
 }
@@ -58,6 +59,7 @@ export default function ClipStrip({
   onSelect,
   onReorder,
   onRemove,
+  onDuplicate,
   onTrim,
   onAddClip,
 }: Props) {
@@ -170,6 +172,38 @@ export default function ClipStrip({
               <span className="flex-1 truncate text-[11px] font-medium text-[var(--color-text-secondary)]" title={clip.name}>
                 {clip.kind === 'video' ? '🎬' : '🖼️'} {clip.name}
               </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReorder(i, i - 1);
+                }}
+                disabled={i === 0}
+                title="Move left"
+                className="text-[var(--color-text-muted)] hover:text-[var(--color-primary-green)] disabled:opacity-30 disabled:hover:text-[var(--color-text-muted)] text-xs leading-none"
+              >
+                ◀
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReorder(i, i + 1);
+                }}
+                disabled={i === clips.length - 1}
+                title="Move right"
+                className="text-[var(--color-text-muted)] hover:text-[var(--color-primary-green)] disabled:opacity-30 disabled:hover:text-[var(--color-text-muted)] text-xs leading-none"
+              >
+                ▶
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDuplicate(clip.id);
+                }}
+                title="Duplicate clip (⌘/Ctrl+D)"
+                className="text-[var(--color-text-muted)] hover:text-[var(--color-primary-green)] text-xs leading-none"
+              >
+                ⧉
+              </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation();

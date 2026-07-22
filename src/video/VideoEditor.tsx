@@ -695,6 +695,90 @@ export default function VideoEditor() {
     [sealDiscrete],
   );
 
+  // ---- clip duplicate / copy / paste ----
+  //
+  // A clip resolves its decoded media by srcId (clipMedia). Two clips must NOT
+  // share a srcId: the compositor steers/pre-rolls each clip's <video> element by
+  // srcId, so a shared element would fight itself when the copy sits next to the
+  // original. So a copy gets its OWN fresh element (same blob, new srcId) and a
+  // deep-cloned settings object (grade/volume independent of the source).
+  const clipClipboard = useRef<VideoClip | null>(null);
+
+  const cloneClipWithMedia = useCallback(
+    (src: VideoClip): VideoClip | null => {
+      const blob = clipBlobs.current.get(src.srcId);
+      if (!blob) return null;
+      const newSrcId = clipSrcId();
+      const url = URL.createObjectURL(blob);
+      objectUrls.current.push(url);
+      if (src.kind === 'video') {
+        const v = document.createElement('video');
+        v.src = url;
+        v.playsInline = true;
+        v.preload = 'auto';
+        v.crossOrigin = 'anonymous';
+        v.addEventListener('loadeddata', () => compRef.current?.renderStatic(), { once: true });
+        clipMedia.current.set(newSrcId, v);
+      } else {
+        const img = new Image();
+        img.onload = () => compRef.current?.renderStatic();
+        img.src = url;
+        clipMedia.current.set(newSrcId, img);
+      }
+      clipBlobs.current.set(newSrcId, blob);
+      const freshId = `clip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      return { ...structuredClone(src), id: freshId, srcId: newSrcId };
+    },
+    [clipSrcId],
+  );
+
+  /** Insert a copy of `src` right after `afterId` (or at the end), and select it. */
+  const insertClipCopy = useCallback(
+    (src: VideoClip, afterId: string | null, failMsg: string) => {
+      const clone = cloneClipWithMedia(src);
+      if (!clone) {
+        setStatus(failMsg);
+        return;
+      }
+      sealDiscrete();
+      setClips((cs) => {
+        const j = afterId ? cs.findIndex((c) => c.id === afterId) : -1;
+        const next = cs.slice();
+        next.splice(j < 0 ? cs.length : j + 1, 0, clone);
+        return next;
+      });
+      setSelectedClipId(clone.id);
+    },
+    [cloneClipWithMedia, sealDiscrete],
+  );
+
+  const duplicateClip = useCallback(
+    (id: string) => {
+      const src = clips.find((c) => c.id === id);
+      if (!src) return;
+      insertClipCopy(src, id, 'Cannot duplicate: source media unavailable.');
+      setStatus('Clip duplicated.');
+    },
+    [clips, insertClipCopy],
+  );
+
+  const copyClip = useCallback(
+    (id: string) => {
+      const c = clips.find((x) => x.id === id);
+      if (!c) return;
+      clipClipboard.current = c;
+      setStatus('Clip copied — paste with ⌘/Ctrl+V.');
+    },
+    [clips],
+  );
+
+  const pasteClip = useCallback(() => {
+    const src = clipClipboard.current;
+    if (!src) return;
+    insertClipCopy(src, selectedClipId, 'Cannot paste: the copied clip’s media is no longer available.');
+    setStatus('Clip pasted.');
+  }, [insertClipCopy, selectedClipId]);
+
   /**
    * Razor: split the clip under the playhead into two independent clips at the
    * cursor. The clip-local cut offset comes from the compositor's warp so it
@@ -1667,11 +1751,25 @@ export default function VideoEditor() {
         togglePlay();
         return;
       }
-      // Cmd/Ctrl+D duplicates the selected layer.
+      // Cmd/Ctrl+D duplicates the selected layer, or the selected clip if no layer.
       if (mod && (e.key === 'd' || e.key === 'D')) {
         if (editable) return;
         e.preventDefault();
         if (selectedLayerId) duplicateLayer(selectedLayerId);
+        else if (selectedClipId) duplicateClip(selectedClipId);
+        return;
+      }
+      // Cmd/Ctrl+C copies the selected clip; Cmd/Ctrl+V pastes it after the
+      // selection (never while typing, and only when a clip — not a layer — is
+      // the active selection, so text-field copy/paste is untouched).
+      if (mod && (e.key === 'c' || e.key === 'C') && !editable && !selectedLayerId && selectedClipId) {
+        e.preventDefault();
+        copyClip(selectedClipId);
+        return;
+      }
+      if (mod && (e.key === 'v' || e.key === 'V') && !editable && !selectedLayerId && clipClipboard.current) {
+        e.preventDefault();
+        pasteClip();
         return;
       }
       // 'S' splits the clip under the playhead (NLE razor convention).
@@ -1734,6 +1832,7 @@ export default function VideoEditor() {
   }, [
     togglePlay, duplicateLayer, selectedLayerId, fullscreen, croppingId, confirmDeleteId, mediaKind,
     splitAtPlayhead, selectedLayer, nudgeSelected, stepFrame, shuttleBackward, shuttleForward, haltTransport,
+    selectedClipId, duplicateClip, copyClip, pasteClip,
   ]);
 
   // ---- canvas selection (single-layer transforms are owned by TransformBox) ----
@@ -2597,6 +2696,7 @@ export default function VideoEditor() {
                       onSelect={selectClip}
                       onReorder={reorderClip}
                       onRemove={removeClip}
+                      onDuplicate={duplicateClip}
                       onTrim={trimClip}
                       onAddClip={addClipClick}
                     />
