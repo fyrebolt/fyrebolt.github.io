@@ -182,6 +182,27 @@ export class Compositor {
     this.ctx = ctx;
   }
 
+  /**
+   * Re-point the compositor at a new canvas element, preserving all playback,
+   * audio, and warp state. Needed because toggling full screen swaps the wrapper
+   * component (IpadFrame ↔ plain div), which remounts the <canvas> to a fresh DOM
+   * node — otherwise the loop keeps drawing to the old, detached canvas and the
+   * visible one stays frozen. A no-op when the node hasn't actually changed.
+   */
+  setCanvas(canvas: HTMLCanvasElement): void {
+    if (canvas === this.canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('2D canvas context unavailable');
+    this.canvas = canvas;
+    this.ctx = ctx;
+    // The fresh canvas has default dimensions; restore the output backing size.
+    canvas.width = this.out.w;
+    canvas.height = this.out.h;
+    // Paint the current frame so the new canvas isn't blank. While playing, the
+    // loop already draws through this.ctx on its next tick.
+    if (!this.playing) this.renderStatic();
+  }
+
   // ---- clip sequence accessors ----
 
   private clips(): VideoClip[] {
