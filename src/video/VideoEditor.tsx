@@ -239,6 +239,8 @@ export default function VideoEditor() {
 
   // ---- ui ----
   const [showSafeZones, setShowSafeZones] = useState(true);
+  /** True while a file is being dragged over the upload / preview drop zone. */
+  const [dragOver, setDragOver] = useState(false);
   const [guidesOn, setGuidesOn] = useState(true);
   const [guideSettings, setGuideSettings] = useState<GuideSettings>(DEFAULT_GUIDES);
   const [gearOpen, setGearOpen] = useState(false);
@@ -556,6 +558,26 @@ export default function VideoEditor() {
     },
     [imageDuration, sealDiscrete, clipSrcId],
   );
+
+  /** Accept any image/video files dropped onto the upload or preview zone. */
+  const onDropFiles = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      const files = Array.from(e.dataTransfer.files).filter(
+        (f) => f.type.startsWith('image') || f.type.startsWith('video'),
+      );
+      for (const f of files) onFile(f);
+    },
+    [onFile],
+  );
+
+  const onDragOverFiles = useCallback((e: React.DragEvent) => {
+    if (Array.from(e.dataTransfer.types).includes('Files')) {
+      e.preventDefault();
+      setDragOver(true);
+    }
+  }, []);
 
   // ---- J/K/L shuttle transport state (declared early so play/pause/seek can
   //      halt it; the transport logic itself lives after the playback block) ----
@@ -2241,15 +2263,34 @@ export default function VideoEditor() {
           <div className="grid lg:grid-cols-[minmax(0,1fr)_360px] gap-8 items-start">
             {/* ---- Preview + timeline ---- */}
             <section>
-              <label className="block glass-card p-4 mb-4 cursor-pointer hover:bg-[var(--color-glass-hover)] transition-colors">
-                <span className="text-sm font-medium">{clips.length === 0 ? 'Photo or video' : 'Add another clip'}</span>
+              <label
+                onDragOver={onDragOverFiles}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={onDropFiles}
+                className={`block glass-card mb-4 cursor-pointer text-center border-2 border-dashed rounded-xl px-4 py-7 transition-colors ${
+                  dragOver
+                    ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]'
+                    : 'border-[var(--color-glass-border)] hover:bg-[var(--color-glass-hover)]'
+                }`}
+              >
+                <div className="text-2xl mb-1" aria-hidden>
+                  {dragOver ? '⬇️' : '🎞️'}
+                </div>
+                <div className="text-sm font-medium">
+                  {dragOver
+                    ? 'Drop to upload'
+                    : clips.length === 0
+                      ? 'Drag & drop a photo or video'
+                      : 'Drag & drop another clip'}
+                </div>
+                <div className="text-xs text-[var(--color-text-muted)] mt-0.5">or click to browse</div>
                 <input
                   type="file"
                   accept="image/*,video/*"
-                  className="block mt-2 text-sm text-[var(--color-text-secondary)] file:mr-3 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-[var(--color-bg-elevated)] file:text-[var(--color-text-primary)]"
+                  multiple
+                  className="hidden"
                   onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) onFile(f);
+                    for (const f of Array.from(e.target.files ?? [])) onFile(f);
                     e.target.value = '';
                   }}
                 />
@@ -2319,7 +2360,16 @@ export default function VideoEditor() {
               />
 
               <div className="glass-card p-3">
-                <div ref={wrapRef} className="relative mx-auto max-w-[420px]">
+                <div
+                  ref={wrapRef}
+                  className="relative mx-auto max-w-[420px]"
+                  onDragOver={onDragOverFiles}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={onDropFiles}
+                >
+                  {dragOver && (
+                    <div className="pointer-events-none absolute inset-0 z-30 rounded-lg border-2 border-dashed border-[var(--color-primary-green)] bg-[rgba(139,233,199,0.12)]" />
+                  )}
                   <canvas
                     ref={canvasRef}
                     onPointerDown={onCanvasPointerDown}
@@ -2402,7 +2452,7 @@ export default function VideoEditor() {
                     })()}
 
                   {/* safe zones */}
-                  {showSafeZones && ratio === '9:16' && !editingZoom && (
+                  {mediaKind && showSafeZones && ratio === '9:16' && !editingZoom && (
                     <div className="pointer-events-none absolute inset-0 rounded-lg overflow-hidden">
                       <div className="absolute inset-x-0 top-0 h-[12%] bg-[rgba(255,0,80,0.1)] border-b border-[rgba(255,0,80,0.3)]" />
                       <div className="absolute inset-x-0 bottom-0 h-[20%] bg-[rgba(255,0,80,0.1)] border-t border-[rgba(255,0,80,0.3)]" />
@@ -2517,7 +2567,11 @@ export default function VideoEditor() {
                     </div>
                   )}
 
-                  {!mediaKind && <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[var(--color-text-muted)] text-sm">Upload to preview</div>}
+                  {!mediaKind && (
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[var(--color-text-muted)] text-sm">
+                      {dragOver ? 'Drop to upload' : 'Upload a file first'}
+                    </div>
+                  )}
                 </div>
 
                 {editingZoom && (
