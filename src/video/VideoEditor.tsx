@@ -21,7 +21,7 @@ import { createAttachment, staticWindowOf } from './captions/types';
 import type { Attachment, AttachmentType, Caption, CaptionEl, TypewriterCaption } from './captions/types';
 import { createZoom } from './zoom/types';
 import type { ZoomKeyframe, ZoomRect } from './zoom/types';
-import { applySpeedRegion, clampSpeed, REGION_RAMP, REGION_HOLD, FREEZE_RAMP } from './timemachine/types';
+import { applySpeedRegion, clampSpeed, speedAt, REGION_RAMP, REGION_HOLD, FREEZE_RAMP } from './timemachine/types';
 import type { SpeedPoint } from './timemachine/types';
 import type { SketchElement, SketchStroke } from './sketch/types';
 import type { Highlighter } from './highlight/types';
@@ -42,7 +42,7 @@ import type {
   ZoomLayer,
 } from './project/types';
 import {
-  bannerLayer,
+  bannerLayers,
   zoomLayer,
   timeMachineLayer,
   overlayLayers,
@@ -64,7 +64,7 @@ import type { VideoClip } from './project/clips';
 import { createClip, clipLen, baseDuration, splitClip, MIN_CLIP_LEN, IMAGE_CLIP_MAX } from './project/clips';
 import type { ColorGrade } from './project/grade';
 import { NEUTRAL_GRADE } from './project/grade';
-import { compileWarp } from './project/timeMap';
+import { compileWarp, bannerBlockedSpans, fitBannerFreeze, fitBannerHold } from './project/timeMap';
 import { Panel, Field, ChoiceGrid } from './project/ui';
 import { RATIO_LABELS, FILL_MODES, FRAME_SEC } from './project/constants';
 import CaptionPanel from './project/panels/CaptionPanel';
@@ -256,6 +256,8 @@ export default function VideoEditor() {
   const [stage, setStage] = useState<ExportStage>('idle');
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('Upload a photo or video, then add layers with “+”.');
+  // Transient note when a banner edit was clamped to avoid a freeze/warp overlap.
+  const [bannerConflict, setBannerConflict] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadName, setDownloadName] = useState('camera.mp4');
 
@@ -311,7 +313,6 @@ export default function VideoEditor() {
   // Output sizing reference = the first clip's native dimensions.
   const srcDims = useMemo(() => (clips[0] ? { w: clips[0].w, h: clips[0].h } : { w: 0, h: 0 }), [clips]);
 
-  const banner = bannerLayer(project);
   const zoom = zoomLayer(project);
   const timeMachine = timeMachineLayer(project);
   const selectedLayer = layers.find((l) => l.id === selectedLayerId) ?? null;
@@ -741,18 +742,48 @@ export default function VideoEditor() {
       const outAR = outSize.w / outSize.h;
 
       if (kind === 'banner') {
-        if (bannerLayer(projectRef.current)) return;
-        const freeze = mediaKind === 'video' ? Math.min(duration * 0.33, Math.max(0, duration - 0.2)) : 1.5;
-        const layer = createBannerLayer(z, { freeze });
+        // Multi-instance: every "+" adds an independent banner. Default its freeze
+        // to a clear spot after the last existing banner/Time Machine window so it
+        // never conflicts (their freeze+hold windows must stay disjoint).
+        const blocked = bannerBlockedSpans(projectRef.current);
+        const lastEnd = blocked.reduce((m, s) => Math.max(m, s.end === Infinity ? m : s.end), 0);
+        const wantFreeze =
+          blocked.length > 0
+            ? lastEnd + 0.1
+            : mediaKind === 'video'
+              ? Math.min(duration * 0.33, Math.max(0, duration - 0.2))
+              : 1.5;
+        const base = createBannerLayer(z);
+        const cap = mediaKind === 'video' ? timelineDuration : Math.max(timelineDuration, 6);
+        const fit = fitBannerFreeze(wantFreeze, base.hold, blocked, cap);
+        const layer = createBannerLayer(z, { freeze: fit.freeze });
         setLayers((ls) => [...ls, layer]);
         clearZoomEdit();
         setSelectedLayerId(layer.id);
         setSelectedAttachmentId(null);
+        setBannerConflict(null);
         seekTo(bannerPreviewTime(layer));
         return;
       }
       if (kind === 'zoom') {
-        if (zoomLayer(projectRef.current)) return;
+        // Zoom is a single crop track. First "+" creates the (empty) track; a later
+        // "+" drops another keyframe on the SAME track at the playhead, ready to edit.
+        const existingZoom = zoomLayer(projectRef.current);
+        if (existingZoom) {
+          const total = mediaKind === 'video' ? timelineDuration : Math.max(timelineDuration, 6);
+          const start = Math.max(0, Math.min(currentSec, Math.max(0, total - 0.5)));
+          const kfDur = 1;
+          const kf = createZoom({ start, duration: kfDur, rect: { x: 0.15, y: 0.15, w: 0.7, h: 0.7 } });
+          setLayers((ls) => ls.map((l) => (l.id === existingZoom.id && l.kind === 'zoom' ? { ...l, keyframes: [...l.keyframes, kf] } : l)));
+          setSelectedLayerId(existingZoom.id);
+          setSelectedAttachmentId(null);
+          setSelectedZoomKfId(kf.id);
+          setEditingZoomBoth(true);
+          const landing = Math.min(start + kfDur, total);
+          compRef.current?.editZoomAt(landing);
+          setCurrentSec(landing);
+          return;
+        }
         const layer = createZoomLayer(z);
         setLayers((ls) => [...ls, layer]);
         setSelectedLayerId(layer.id);
@@ -761,8 +792,22 @@ export default function VideoEditor() {
         return;
       }
       if (kind === 'timemachine') {
-        // Video-only singleton (a still image has no playback speed to warp).
-        if (mediaKind !== 'video' || timeMachineLayer(projectRef.current)) return;
+        // Video-only (a still image has no playback speed to warp). One authoritative
+        // speed curve: first "+" creates it; a later "+" drops another point on the
+        // SAME curve at the playhead (keeping the curve shape — drag it afterwards).
+        if (mediaKind !== 'video') return;
+        const existingTm = timeMachineLayer(projectRef.current);
+        if (existingTm) {
+          const t = Math.max(0, Math.min(currentSec, timelineDuration));
+          const speed = clampSpeed(speedAt(t, existingTm.points));
+          setLayers((ls) => ls.map((l) => (l.id === existingTm.id && l.kind === 'timemachine' ? { ...l, points: [...l.points, { t, speed }] } : l)));
+          clearZoomEdit();
+          setSelectedLayerId(existingTm.id);
+          setSelectedAttachmentId(null);
+          setSelectedSpeedIdx(existingTm.points.length);
+          seekTo(t);
+          return;
+        }
         const layer = createTimeMachineLayer(z);
         setLayers((ls) => [...ls, layer]);
         clearZoomEdit();
@@ -828,7 +873,7 @@ export default function VideoEditor() {
       setSelectedAttachmentId(null);
       seekTo(midOfCaption(layer.el));
     },
-    [mediaKind, duration, ratio, srcDims, timelineDuration, staggerStart, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime, sealDiscrete, boilPool, normalize],
+    [mediaKind, duration, ratio, srcDims, timelineDuration, currentSec, staggerStart, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime, sealDiscrete, boilPool, normalize],
   );
 
   /** Fit a source-aspect box into ~40% of the frame, centred (out-normalised). */
@@ -954,9 +999,37 @@ export default function VideoEditor() {
     );
   }, []);
 
-  const updateBanner = useCallback((id: string, patch: Partial<BannerLayer>) => {
-    setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'banner' ? { ...l, ...patch } : l)));
-  }, []);
+  const updateBanner = useCallback(
+    (id: string, patch: Partial<BannerLayer>) => {
+      let applied = patch;
+      // Freeze/hold shifts the frozen window, which must stay clear of every other
+      // banner's window and every Time Machine warp — clamp it and flag conflicts.
+      if (patch.freeze !== undefined || patch.hold !== undefined) {
+        const cur = bannerLayers(projectRef.current).find((b) => b.id === id);
+        if (cur) {
+          const blocked = bannerBlockedSpans(projectRef.current, id);
+          let conflicted = false;
+          applied = { ...patch };
+          if (patch.freeze !== undefined) {
+            const fit = fitBannerFreeze(patch.freeze, patch.hold ?? cur.hold, blocked, timelineDuration);
+            applied.freeze = fit.freeze;
+            conflicted = fit.blocked;
+          } else if (patch.hold !== undefined) {
+            const fit = fitBannerHold(cur.freeze, patch.hold, blocked);
+            applied.hold = fit.hold;
+            conflicted = fit.blocked;
+          }
+          setBannerConflict(
+            conflicted
+              ? 'Freeze/hold can’t overlap another banner or a Time Machine warp — snapped to the nearest free spot.'
+              : null,
+          );
+        }
+      }
+      setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'banner' ? { ...l, ...applied } : l)));
+    },
+    [timelineDuration],
+  );
 
   const updateBannerStyle = useCallback((id: string, patch: Partial<BannerStyle>) => {
     setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'banner' ? { ...l, style: { ...l.style, ...patch } } : l)));
@@ -1040,8 +1113,29 @@ export default function VideoEditor() {
     (id: string) => {
       const layer = layers.find((l) => l.id === id);
       if (!layer) return;
-      if (layer.kind === 'banner' || layer.kind === 'zoom' || layer.kind === 'timemachine') {
-        setStatus('Banner, Zoom, and Time Machine are single-instance — nothing to duplicate.');
+      if (layer.kind === 'zoom' || layer.kind === 'timemachine') {
+        setStatus('Zoom and Time Machine are single-track — add another keyframe/point with “+” instead.');
+        return;
+      }
+      const freshId = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      if (layer.kind === 'banner') {
+        // Banners are multi-instance but their freeze+hold windows must not overlap —
+        // drop the copy at the next clear spot after everything currently placed.
+        const blocked = bannerBlockedSpans(projectRef.current);
+        const lastEnd = blocked.reduce((m, s) => Math.max(m, s.end === Infinity ? m : s.end), 0);
+        const cap = mediaKind === 'video' ? timelineDuration : Math.max(timelineDuration, 6);
+        const fit = fitBannerFreeze(lastEnd + 0.1, layer.hold, blocked, cap);
+        const clone = structuredClone(layer);
+        clone.id = freshId('banner');
+        clone.z = nextZ(projectRef.current);
+        clone.freeze = fit.freeze;
+        sealDiscrete();
+        setLayers((ls) => [...ls, clone]);
+        clearZoomEdit();
+        setSelectedLayerId(clone.id);
+        setSelectedAttachmentId(null);
+        setBannerConflict(null);
+        seekTo(bannerPreviewTime(clone));
         return;
       }
       if (layer.kind === 'music') {
@@ -1050,7 +1144,6 @@ export default function VideoEditor() {
         setStatus('Add another music track with “+ Add layer” rather than duplicating.');
         return;
       }
-      const freshId = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
       const clone = structuredClone(layer) as Extract<Layer, { el: unknown }>;
       clone.id = freshId(clone.kind);
       clone.z = nextZ(projectRef.current);
@@ -1091,7 +1184,7 @@ export default function VideoEditor() {
       setSelectedLayerId(clone.id);
       setSelectedAttachmentId(null);
     },
-    [layers, timelineDuration, sealDiscrete, clearZoomEdit],
+    [layers, mediaKind, timelineDuration, sealDiscrete, clearZoomEdit, seekTo, bannerPreviewTime],
   );
 
   // ---- attachments ----
@@ -1324,7 +1417,10 @@ export default function VideoEditor() {
     (id: string) => {
       const layer = layers.find((l) => l.id === id);
       if (!layer) return;
-      setSelectedLayerId(id);
+      setSelectedLayerId((prev) => {
+        if (prev !== id) setBannerConflict(null); // drop a stale overlap note on switch
+        return id;
+      });
       setSelectedAttachmentId(null);
       setCroppingId((c) => (c === id ? c : null)); // leave crop mode when switching layers
       if (layer.kind === 'zoom') {
@@ -2337,12 +2433,17 @@ export default function VideoEditor() {
                       {addOpen && (
                         <div className="absolute right-0 mt-1.5 w-44 rounded-xl bg-[var(--color-bg-surface)] shadow-lg border border-[var(--color-glass-border)] overflow-hidden z-20">
                           {ADD_ITEMS.map((it) => {
+                            // Banner is multi-instance; Zoom / Time Machine are single-track
+                            // but a repeat "+" adds a keyframe/point — so nothing is ever
+                            // "added"-disabled. Time Machine only needs a video base.
                             const tmUnavailable = it.kind === 'timemachine' && mediaKind !== 'video';
-                            const disabled =
-                              (it.kind === 'banner' && !!banner) ||
-                              (it.kind === 'zoom' && !!zoom) ||
-                              (it.kind === 'timemachine' && !!timeMachine) ||
-                              tmUnavailable;
+                            const disabled = tmUnavailable;
+                            const hint =
+                              it.kind === 'zoom' && !!zoom
+                                ? 'add keyframe'
+                                : it.kind === 'timemachine' && !!timeMachine
+                                  ? 'add point'
+                                  : null;
                             return (
                               <button
                                 key={it.kind}
@@ -2352,9 +2453,11 @@ export default function VideoEditor() {
                               >
                                 <span aria-hidden>{it.icon}</span>
                                 <span>{it.label}</span>
-                                {disabled && (
-                                  <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">{tmUnavailable ? 'video only' : 'added'}</span>
-                                )}
+                                {tmUnavailable ? (
+                                  <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">video only</span>
+                                ) : hint ? (
+                                  <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">{hint}</span>
+                                ) : null}
                               </button>
                             );
                           })}
@@ -2629,6 +2732,7 @@ export default function VideoEditor() {
                     <BannerPanel
                       layer={selectedLayer as BannerLayer}
                       duration={timelineDuration}
+                      conflict={bannerConflict}
                       onEdit={(patch) => updateBanner(selectedLayer.id, patch)}
                       onEditStyle={(patch) => updateBannerStyle(selectedLayer.id, patch)}
                       onRemove={() => setConfirmDeleteId(selectedLayer.id)}

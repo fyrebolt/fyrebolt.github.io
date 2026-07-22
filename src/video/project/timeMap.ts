@@ -25,9 +25,9 @@
 import type { BannerFrame } from '../types';
 import { POSITION_ANCHORS } from '../types';
 import { easeInCubic, easeOutBack } from '../render';
-import type { BannerLayer, Project } from './types';
-import { bannerLayer, timeMachineLayer } from './types';
-import { FREEZE_EPS, maxSpeedFrom, speedAt as trackSpeedAt } from '../timemachine/types';
+import type { BannerLayer, Project, Span, TimeMachineLayer } from './types';
+import { bannerLayers, timeMachineLayer } from './types';
+import { FREEZE_EPS, NORMAL_SPEED, maxSpeedFrom, sortedSpeeds, speedAt as trackSpeedAt } from '../timemachine/types';
 
 const FLASH_SEC = 0.15; // white-flash decay at the lock
 
@@ -40,6 +40,14 @@ export interface FreezeSpec {
 export function freezeSpecOf(banner: BannerLayer | null): FreezeSpec | null {
   if (!banner || banner.hold <= 0) return null;
   return { freeze: Math.max(0, banner.freeze), hold: Math.max(0, banner.hold) };
+}
+
+/** Every banner's freeze span, sorted by freeze source-second (holds skipped). */
+export function freezeSpecsOf(banners: BannerLayer[]): FreezeSpec[] {
+  return banners
+    .map((b) => freezeSpecOf(b))
+    .filter((s): s is FreezeSpec => s !== null)
+    .sort((a, b) => a.freeze - b.freeze);
 }
 
 // ---- compiled time-warp ----
@@ -89,7 +97,7 @@ export function compileWarp(project: Project, clipDur: number, videoBase = true)
   // a single-image project's output length unchanged (a banner never stretches it).
   const tm = videoBase ? timeMachineLayer(project) : null;
   const pts = tm ? tm.points : [];
-  const spec = videoBase ? freezeSpecOf(bannerLayer(project)) : null;
+  const specs = videoBase ? freezeSpecsOf(bannerLayers(project)) : [];
   const dur = Math.max(0, clipDur);
 
   const outs: number[] = [0];
@@ -110,16 +118,16 @@ export function compileWarp(project: Project, clipDur: number, videoBase = true)
   const MAX_OUT = 3600; // 1h hard cap (guards a trailing freeze with no resume)
   let o = 0;
   let src = 0;
-  let bannerPending = !!spec;
+  let bi = 0; // index of the next pending banner freeze (specs is sorted by freeze)
   let guard = 0;
 
   while (src < dur - 1e-6 && o < MAX_OUT && guard < 4_000_000) {
     guard += 1;
-    // Banner freeze: when the clip reaches the freeze source, insert its hold.
-    if (bannerPending && spec && src >= spec.freeze - 1e-6) {
-      o += spec.hold;
+    // Banner freeze: when the clip reaches the next freeze source, insert its hold.
+    if (bi < specs.length && src >= specs[bi].freeze - 1e-6) {
+      o += specs[bi].hold;
       push(o, src, 0);
-      bannerPending = false;
+      bi += 1;
       continue;
     }
     const s = trackSpeedAt(o, pts);
@@ -132,7 +140,7 @@ export function compileWarp(project: Project, clipDur: number, videoBase = true)
     }
     // Advance one step, capping it to land exactly on the freeze / clip end.
     let step = DT;
-    if (bannerPending && spec) step = Math.min(step, Math.max(1e-6, (spec.freeze - src) / s));
+    if (bi < specs.length) step = Math.min(step, Math.max(1e-6, (specs[bi].freeze - src) / s));
     step = Math.min(step, Math.max(1e-6, (dur - src) / s));
     src += s * step;
     o += step;
@@ -213,4 +221,130 @@ export function bannerFrameAt(banner: BannerLayer, outputT: number, t = 0): Bann
 /** Whether the lock instant (freeze) falls in [prevT, curT) — for firing the entrance SFX once. */
 export function crossedLock(banner: BannerLayer, prevT: number, curT: number): boolean {
   return prevT < banner.freeze && curT >= banner.freeze;
+}
+
+// ---- banner ↔ banner ↔ Time Machine overlap guard ----
+//
+// A banner's freeze+hold and a non-1× Time Machine segment each PAUSE/WARP the
+// one shared base clock. Two of them overlapping in time is undefined, so the
+// editor keeps these windows disjoint: when a banner is placed/dragged/resized
+// it is clamped against every OTHER banner's window and every Time Machine warp.
+
+/** How far a speed may drift from 1× before a segment counts as a warp. */
+const SPEED_OFF = 1e-3;
+
+/** Merge a set of spans into sorted, non-overlapping intervals. */
+export function mergeSpans(spans: Span[]): Span[] {
+  const sorted = spans.filter((s) => s.end > s.start + 1e-9).sort((a, b) => a.start - b.start);
+  const out: Span[] = [];
+  for (const s of sorted) {
+    const prev = out[out.length - 1];
+    if (prev && s.start <= prev.end + 1e-9) prev.end = Math.max(prev.end, s.end);
+    else out.push({ start: s.start, end: s.end });
+  }
+  return out;
+}
+
+/** Output-second spans where the Time Machine speed curve is not ~1× (a warp). */
+export function timeMachineWarpSpans(tm: TimeMachineLayer | null): Span[] {
+  if (!tm || tm.points.length === 0) return [];
+  const pts = sortedSpeeds(tm.points);
+  const off = (s: number): boolean => Math.abs(s - NORMAL_SPEED) > SPEED_OFF;
+  // A lone control point holds flat across the WHOLE timeline.
+  if (pts.length === 1) return off(pts[0].speed) ? [{ start: 0, end: Number.POSITIVE_INFINITY }] : [];
+  const spans: Span[] = [];
+  if (off(pts[0].speed)) spans.push({ start: 0, end: pts[0].t }); // head flat
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (off(pts[i].speed) || off(pts[i + 1].speed)) spans.push({ start: pts[i].t, end: pts[i + 1].t });
+  }
+  const last = pts[pts.length - 1];
+  if (off(last.speed)) spans.push({ start: last.t, end: Number.POSITIVE_INFINITY }); // tail flat
+  return mergeSpans(spans);
+}
+
+/** The freeze+hold window [freeze, freeze+hold] of a banner, in timeline seconds. */
+export function bannerWindow(b: BannerLayer): Span {
+  const freeze = Math.max(0, b.freeze);
+  return { start: freeze, end: freeze + Math.max(0, b.hold) };
+}
+
+/**
+ * Every timeline window a banner must stay clear of: each OTHER banner's
+ * freeze+hold window plus each non-1× Time Machine segment. Merged + sorted.
+ */
+export function bannerBlockedSpans(project: Project, exceptBannerId?: string): Span[] {
+  const windows = bannerLayers(project)
+    .filter((b) => b.id !== exceptBannerId && b.hold > 0)
+    .map(bannerWindow);
+  const warps = timeMachineWarpSpans(timeMachineLayer(project));
+  return mergeSpans([...windows, ...warps]);
+}
+
+export interface FreezeFit {
+  freeze: number;
+  /** True when the desired freeze had to move to avoid a conflict. */
+  blocked: boolean;
+}
+
+/**
+ * Clamp a banner freeze so its [freeze, freeze+hold] window stays clear of every
+ * `blocked` span, keeping `hold` intact. Keeps the desired freeze when it is
+ * already clear, else snaps to the nearest clear position.
+ */
+export function fitBannerFreeze(desiredFreeze: number, hold: number, blocked: Span[], maxFreeze: number): FreezeFit {
+  const cap = Math.max(0, maxFreeze);
+  const want = Math.min(Math.max(0, desiredFreeze), cap);
+  const h = Math.max(0, hold);
+  const merged = mergeSpans(blocked);
+  // Freeze intervals where [f, f+h] is fully clear of every blocked span.
+  const cands: Span[] = [];
+  let cursor = 0;
+  for (const b of merged) {
+    const hi = Math.min(b.start - h, cap); // window must END by the blocker start
+    if (hi >= cursor - 1e-9) cands.push({ start: cursor, end: hi });
+    cursor = Math.max(cursor, b.end);
+  }
+  cands.push({ start: cursor, end: Math.max(cursor, cap) }); // tail — no blocker to the right
+  const valid = cands.filter((c) => c.end >= c.start - 1e-9);
+  if (valid.length === 0) return { freeze: want, blocked: false };
+  for (const c of valid) if (want >= c.start - 1e-9 && want <= c.end + 1e-9) return { freeze: want, blocked: false };
+  let best = valid[0].start;
+  let bestD = Infinity;
+  for (const c of valid) {
+    const f = Math.min(Math.max(want, c.start), c.end);
+    const d = Math.abs(f - want);
+    if (d < bestD) {
+      bestD = d;
+      best = f;
+    }
+  }
+  return { freeze: best, blocked: true };
+}
+
+export interface HoldFit {
+  hold: number;
+  /** True when the desired hold had to shrink to avoid a conflict. */
+  blocked: boolean;
+}
+
+/**
+ * Trim a banner hold so [freeze, freeze+hold] stays clear of `blocked`, keeping
+ * the freeze fixed.
+ */
+export function fitBannerHold(freeze: number, desiredHold: number, blocked: Span[]): HoldFit {
+  const f = Math.max(0, freeze);
+  const want = Math.max(0, desiredHold);
+  const merged = mergeSpans(blocked);
+  let limit = Number.POSITIVE_INFINITY;
+  for (const b of merged) {
+    if (b.end <= f + 1e-9) continue; // entirely at/before the freeze
+    if (b.start >= f - 1e-9) {
+      limit = b.start - f; // next blocker to the right bounds the hold
+      break;
+    }
+    limit = 0; // freeze sits inside a blocked span (shouldn't happen once placed)
+    break;
+  }
+  const hold = Math.min(want, Math.max(0, limit));
+  return { hold, blocked: hold < want - 1e-6 };
 }
