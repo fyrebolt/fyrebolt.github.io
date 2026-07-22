@@ -83,7 +83,7 @@ import type { MusicElement } from './music/types';
 import StickerCropEditor from './sticker/StickerCropEditor';
 import { useHistory } from './project/useHistory';
 import type { HistoryApi } from './project/useHistory';
-import type { PersistSnapshot, MediaEntry, LoadedProject } from './project/persist';
+import type { PersistSnapshot, MediaEntry, LoadedProject, LibraryEntry, LibraryMedia } from './project/persist';
 import {
   saveSnapshot,
   saveMedia,
@@ -93,7 +93,14 @@ import {
   referencedSrcIds,
   exportProjectJSON,
   importProjectJSON,
+  listLibrary,
+  addToLibrary,
+  libraryEntryByHash,
+  renameLibraryEntry,
+  deleteLibraryEntry,
 } from './project/persist';
+import { hashBlob, makeThumb } from './project/thumbnail';
+import LibraryBrowser from './project/LibraryBrowser';
 
 /** First non-overlapping gap of ≥0.6s among dramatic layers, else null. */
 function findDramaticGap(spans: Span[], total: number, want: number): { start: number; duration: number } | null {
@@ -198,6 +205,28 @@ const ADD_ITEMS: { kind: AddKind; label: string; icon: string }[] = [
   { kind: 'dramatic-inverse', label: 'Inverse word', icon: '◱' },
   { kind: 'dramatic-reflection', label: 'Reflection word', icon: '🔃' },
 ];
+
+/** Where an asset from the library is being inserted (decides filter + decode). */
+type LibraryIntent = 'clip' | 'sticker-image' | 'sticker-video' | 'music';
+/** Which library media kinds are valid to reuse for each intent. */
+const LIBRARY_INTENT_MEDIA: Record<LibraryIntent, LibraryMedia[]> = {
+  clip: ['video', 'image'],
+  'sticker-image': ['image'],
+  'sticker-video': ['video'],
+  music: ['audio'],
+};
+const LIBRARY_INTENT_TITLE: Record<LibraryIntent, string> = {
+  clip: 'Add a clip',
+  'sticker-image': 'Add an image sticker',
+  'sticker-video': 'Add a video sticker',
+  music: 'Add a music track',
+};
+const LIBRARY_INTENT_EMPTY: Record<LibraryIntent, string> = {
+  clip: 'No saved clips yet. Upload one and it’ll appear here for reuse in any project.',
+  'sticker-image': 'No saved image stickers yet. Upload one and it’ll appear here for reuse.',
+  'sticker-video': 'No saved video stickers yet. Upload one and it’ll appear here for reuse.',
+  music: 'No saved music yet. Upload a track and it’ll appear here for reuse in any project.',
+};
 
 export default function VideoEditor() {
   // ---- media ----
@@ -501,22 +530,68 @@ export default function VideoEditor() {
   const history = useHistory<EditorSnapshot>({ live: snapshot, restore: restoreSnapshot, equal: snapshotEqual });
   historyRef.current = history;
 
+  // ---- cross-project asset library ----
+  const [library, setLibrary] = useState<LibraryEntry[]>([]);
+  /** Which insertion intent the library browser is open for, or null when closed. */
+  const [libraryOpen, setLibraryOpen] = useState<LibraryIntent | null>(null);
+
+  const refreshLibrary = useCallback(async () => {
+    try {
+      setLibrary(await listLibrary());
+    } catch {
+      /* IndexedDB unavailable — the library is simply empty this session. */
+    }
+  }, []);
+
+  // Load the saved library once on mount (survives project switches + Clear).
+  useEffect(() => {
+    void refreshLibrary();
+  }, [refreshLibrary]);
+
+  /** Auto-save a NEW upload to the library (deduped by content hash). Never runs
+   *  for a library INSERT — those already exist in the library. */
+  const saveUploadToLibrary = useCallback(
+    async (blob: Blob, name: string, media: LibraryMedia) => {
+      try {
+        const hash = await hashBlob(blob);
+        if (await libraryEntryByHash(hash)) return; // same file already saved — reuse it
+        const thumb = await makeThumb(media, blob);
+        await addToLibrary({
+          id: `lib-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          name: name || 'Asset',
+          media,
+          type: blob.type || 'application/octet-stream',
+          blob,
+          thumb,
+          hash,
+          addedAt: Date.now(),
+        });
+        await refreshLibrary();
+      } catch {
+        /* storage full / unavailable — non-fatal; the upload itself still works. */
+      }
+    },
+    [refreshLibrary],
+  );
+
   // ---- media load (append a clip to the base sequence) ----
   const clipSrcId = useCallback(
     () => `clipsrc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
     [],
   );
 
-  const onFile = useCallback(
-    (file: File) => {
+  // Decode a clip source (video / image) from a blob and append it to the base
+  // sequence, under a FRESH srcId. No library side effects — reused both by a new
+  // upload (onFile) and by inserting a copy from the asset library.
+  const ingestClipBlob = useCallback(
+    (blob: Blob, name: string) => {
       const c = compRef.current;
       if (!c) return;
-      const url = URL.createObjectURL(file);
+      const url = URL.createObjectURL(blob);
       objectUrls.current.push(url);
       setDownloadUrl(null);
       setStage('idle');
       setProgress(0);
-      const name = file.name.replace(/\.[^./\\]+$/, '') || 'Clip';
 
       const append = (clip: VideoClip) => {
         sealDiscrete();
@@ -528,7 +603,7 @@ export default function VideoEditor() {
         );
       };
 
-      if (file.type.startsWith('video')) {
+      if (blob.type.startsWith('video')) {
         const video = document.createElement('video');
         video.src = url;
         video.playsInline = true;
@@ -539,7 +614,7 @@ export default function VideoEditor() {
         video.addEventListener('loadedmetadata', () => {
           const srcId = clipSrcId();
           clipMedia.current.set(srcId, video);
-          clipBlobs.current.set(srcId, file);
+          clipBlobs.current.set(srcId, blob);
           append(
             createClip({
               srcId,
@@ -551,12 +626,12 @@ export default function VideoEditor() {
             }),
           );
         });
-      } else if (file.type.startsWith('image')) {
+      } else if (blob.type.startsWith('image')) {
         const image = new Image();
         image.onload = () => {
           const srcId = clipSrcId();
           clipMedia.current.set(srcId, image);
-          clipBlobs.current.set(srcId, file);
+          clipBlobs.current.set(srcId, blob);
           append(
             createClip(
               { srcId, kind: 'image', name, srcDuration: 0, w: image.naturalWidth, h: image.naturalHeight },
@@ -568,6 +643,16 @@ export default function VideoEditor() {
       }
     },
     [imageDuration, sealDiscrete, clipSrcId],
+  );
+
+  const onFile = useCallback(
+    (file: File) => {
+      const name = file.name.replace(/\.[^./\\]+$/, '') || 'Clip';
+      ingestClipBlob(file, name);
+      if (file.type.startsWith('video')) void saveUploadToLibrary(file, name, 'video');
+      else if (file.type.startsWith('image')) void saveUploadToLibrary(file, name, 'image');
+    },
+    [ingestClipBlob, saveUploadToLibrary],
   );
 
   /** Accept any image/video files dropped onto the upload or preview zone. */
@@ -812,7 +897,8 @@ export default function VideoEditor() {
     setSelectedClipId(parts[1].id);
   }, [clips, sealDiscrete]);
 
-  const addClipClick = useCallback(() => clipInput.current?.click(), []);
+  // The clip-strip "+ Clip" tile opens the library browser (Upload new + reuse).
+  const addClipClick = useCallback(() => setLibraryOpen('clip'), []);
 
   const midOfCaption = useCallback((el: CaptionEl): number => {
     if (el.kind === 'boil') return (el.start + el.end) / 2;
@@ -839,18 +925,18 @@ export default function VideoEditor() {
     (kind: AddKind) => {
       setAddOpen(false);
       if (!mediaKind) return;
-      // Stickers need media first — open the picker; the layer is created on select.
+      // Stickers / music need media first — open the asset-library browser, which
+      // offers "Upload new" alongside previously-used assets to reuse.
       if (kind === 'sticker-image') {
-        stickerImageInput.current?.click();
+        setLibraryOpen('sticker-image');
         return;
       }
       if (kind === 'sticker-video') {
-        stickerVideoInput.current?.click();
+        setLibraryOpen('sticker-video');
         return;
       }
-      // Music needs an audio file first — open the picker; layer created on select.
       if (kind === 'music') {
-        musicInput.current?.click();
+        setLibraryOpen('music');
         return;
       }
       sealDiscrete();
@@ -1032,13 +1118,14 @@ export default function VideoEditor() {
     [sealDiscrete, fitStickerBox, staggerStart, clearZoomEdit, seekTo],
   );
 
-  /** Decode a picked file into an image / video element, then add the sticker. */
-  const onStickerFile = useCallback(
-    (file: File, source: 'image' | 'video') => {
-      const url = URL.createObjectURL(file);
+  /** Decode a sticker blob into an image / video element, then add the sticker
+   *  under a fresh srcId. No library side effects (reused by library insert). */
+  const ingestStickerBlob = useCallback(
+    (blob: Blob, source: 'image' | 'video') => {
+      const url = URL.createObjectURL(blob);
       objectUrls.current.push(url);
       const srcId = `stkmedia-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-      stickerBlobs.current.set(srcId, file);
+      stickerBlobs.current.set(srcId, blob);
       if (source === 'image') {
         const img = new Image();
         img.onload = () => {
@@ -1064,6 +1151,16 @@ export default function VideoEditor() {
     [addStickerLayer],
   );
 
+  /** Decode a picked file into a sticker + auto-save the upload to the library. */
+  const onStickerFile = useCallback(
+    (file: File, source: 'image' | 'video') => {
+      ingestStickerBlob(file, source);
+      const name = file.name.replace(/\.[^./\\]+$/, '') || (source === 'video' ? 'Video sticker' : 'Image sticker');
+      void saveUploadToLibrary(file, name, source === 'video' ? 'video' : 'image');
+    },
+    [ingestStickerBlob, saveUploadToLibrary],
+  );
+
   const updateStickerEl = useCallback((id: string, patch: Partial<StickerElement>) => {
     setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'sticker' ? { ...l, el: { ...l.el, ...patch } } : l)));
   }, []);
@@ -1084,13 +1181,14 @@ export default function VideoEditor() {
     [sealDiscrete, currentSec, timelineDuration, clearZoomEdit],
   );
 
-  /** Decode a picked audio file into an <audio> element, then add the music layer. */
-  const onMusicFile = useCallback(
-    (file: File) => {
-      const url = URL.createObjectURL(file);
+  /** Decode a music blob into an <audio> element, then add the music layer under
+   *  a fresh srcId. No library side effects (reused by library insert). */
+  const ingestMusicBlob = useCallback(
+    (blob: Blob, name: string) => {
+      const url = URL.createObjectURL(blob);
       objectUrls.current.push(url);
       const srcId = `musmedia-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-      musicBlobs.current.set(srcId, file);
+      musicBlobs.current.set(srcId, blob);
       const a = new Audio();
       a.src = url;
       a.preload = 'auto';
@@ -1098,7 +1196,7 @@ export default function VideoEditor() {
       const onReady = () => {
         a.removeEventListener('loadedmetadata', onReady);
         musicMedia.current.set(srcId, a);
-        addMusicLayer(srcId, file.name.replace(/\.[^.]+$/, ''), a.duration || 0);
+        addMusicLayer(srcId, name, a.duration || 0);
       };
       a.addEventListener('loadedmetadata', onReady);
       a.addEventListener('error', () => setStatus('Could not load that audio file.'));
@@ -1106,9 +1204,79 @@ export default function VideoEditor() {
     [addMusicLayer],
   );
 
+  /** Decode a picked audio file into a music layer + auto-save it to the library. */
+  const onMusicFile = useCallback(
+    (file: File) => {
+      const name = file.name.replace(/\.[^.]+$/, '') || 'Music';
+      ingestMusicBlob(file, name);
+      void saveUploadToLibrary(file, name, 'audio');
+    },
+    [ingestMusicBlob, saveUploadToLibrary],
+  );
+
   const updateMusicEl = useCallback((id: string, patch: Partial<MusicElement>) => {
     setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'music' ? { ...l, el: { ...l.el, ...patch } } : l)));
   }, []);
+
+  // ---- asset library: insert a COPY into the current project ----
+  const insertFromLibrary = useCallback(
+    (entry: LibraryEntry, intent: LibraryIntent) => {
+      // The decode paths mint a fresh srcId and register the blob in this
+      // project's media refs, so the project stays self-contained — deleting the
+      // library entry later can never affect a project that already used it.
+      if (intent === 'clip') ingestClipBlob(entry.blob, entry.name);
+      else if (intent === 'sticker-image') ingestStickerBlob(entry.blob, 'image');
+      else if (intent === 'sticker-video') ingestStickerBlob(entry.blob, 'video');
+      else ingestMusicBlob(entry.blob, entry.name);
+    },
+    [ingestClipBlob, ingestStickerBlob, ingestMusicBlob],
+  );
+
+  /** "Upload new file" from within the browser → trigger the matching picker. */
+  const libraryUploadNew = useCallback((intent: LibraryIntent) => {
+    setLibraryOpen(null);
+    if (intent === 'clip') clipInput.current?.click();
+    else if (intent === 'sticker-image') stickerImageInput.current?.click();
+    else if (intent === 'sticker-video') stickerVideoInput.current?.click();
+    else musicInput.current?.click();
+  }, []);
+
+  const libraryPick = useCallback(
+    (entry: LibraryEntry) => {
+      const intent = libraryOpen;
+      setLibraryOpen(null);
+      if (intent) insertFromLibrary(entry, intent);
+    },
+    [libraryOpen, insertFromLibrary],
+  );
+
+  const libraryRename = useCallback(
+    (id: string, name: string) => {
+      void (async () => {
+        try {
+          await renameLibraryEntry(id, name);
+          await refreshLibrary();
+        } catch {
+          /* ignore */
+        }
+      })();
+    },
+    [refreshLibrary],
+  );
+
+  const libraryDelete = useCallback(
+    (id: string) => {
+      void (async () => {
+        try {
+          await deleteLibraryEntry(id);
+          await refreshLibrary();
+        } catch {
+          /* ignore */
+        }
+      })();
+    },
+    [refreshLibrary],
+  );
 
   const updateCaptionEl = useCallback((layerId: string, patch: Partial<Caption> | Partial<TypewriterCaption>) => {
     setLayers((ls) =>
@@ -2459,6 +2627,14 @@ export default function VideoEditor() {
                 />
               </label>
 
+              {/* Reuse a previously-uploaded clip from the cross-project library. */}
+              <button
+                onClick={() => setLibraryOpen('clip')}
+                className="mb-4 -mt-2 w-full inline-flex items-center justify-center gap-1.5 text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]"
+              >
+                <span aria-hidden>📚</span> Choose a clip from your library
+              </button>
+
               {/* Hidden input used by the clip strip's "+ Clip" tile. */}
               <input
                 ref={clipInput}
@@ -3164,6 +3340,20 @@ export default function VideoEditor() {
             </aside>
           </div>
         </div>
+
+        {/* asset-library browser (choose from library / upload new) */}
+        {libraryOpen && (
+          <LibraryBrowser
+            title={LIBRARY_INTENT_TITLE[libraryOpen]}
+            emptyHint={LIBRARY_INTENT_EMPTY[libraryOpen]}
+            entries={library.filter((e) => LIBRARY_INTENT_MEDIA[libraryOpen].includes(e.media))}
+            onClose={() => setLibraryOpen(null)}
+            onUploadNew={() => libraryUploadNew(libraryOpen)}
+            onPick={libraryPick}
+            onRename={libraryRename}
+            onDelete={libraryDelete}
+          />
+        )}
 
         {/* delete-layer confirmation dialog */}
         {confirmDeleteId &&
