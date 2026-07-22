@@ -44,9 +44,15 @@ export interface MediaEntry {
 }
 
 const DB_NAME = 'fyrebolt-video';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const META_STORE = 'meta';
 const MEDIA_STORE = 'media';
+// A cross-PROJECT asset library. Unlike MEDIA_STORE (per-project, pruned by
+// pruneMedia when a source is no longer referenced), library entries persist
+// independently of any project — pruneMedia never touches this store — so an
+// intro track / sticker uploaded in one project can be reused in the next. See
+// the library API at the bottom of this file.
+const LIBRARY_STORE = 'library';
 const META_KEY = 'autosave';
 
 function openDB(): Promise<IDBDatabase> {
@@ -56,6 +62,9 @@ function openDB(): Promise<IDBDatabase> {
       const db = req.result;
       if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE);
       if (!db.objectStoreNames.contains(MEDIA_STORE)) db.createObjectStore(MEDIA_STORE);
+      // v2: add the library store, preserving existing meta + media (an upgrade,
+      // not a wipe — older autosaves survive the version bump untouched).
+      if (!db.objectStoreNames.contains(LIBRARY_STORE)) db.createObjectStore(LIBRARY_STORE);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -223,4 +232,92 @@ export async function importProjectJSON(file: File): Promise<LoadedProject> {
     blob: new Blob([base64ToBytes(m.data)], { type: m.type }),
   }));
   return { snapshot: parsed.snapshot, media };
+}
+
+// ---- Cross-project asset library (persists across projects; never pruned) ----
+//
+// A separate store from MEDIA_STORE so a re-usable asset (music, sticker, clip)
+// survives project switches, `clearProject`, and pruneMedia. Entries keep the
+// ORIGINAL bytes verbatim (same lossless promise as everything else) plus a
+// small preview thumbnail and a content hash used to skip re-adding duplicates.
+//
+// Adding an asset FROM the library into a project COPIES its blob into that
+// project's own MEDIA_STORE under a fresh srcId (done by the editor, not here),
+// so projects stay self-contained and deleting a library entry can never break
+// a project that already used it.
+
+/** How to decode a library blob back into a usable element. */
+export type LibraryMedia = 'video' | 'image' | 'audio';
+
+export interface LibraryEntry {
+  /** Library-scoped id (independent of any project srcId). */
+  id: string;
+  /** Display name (defaults to the original filename; user-renamable). */
+  name: string;
+  /** Decode kind — also decides which upload pickers can reuse it. */
+  media: LibraryMedia;
+  /** Original MIME type. */
+  type: string;
+  /** Original bytes, verbatim (lossless). */
+  blob: Blob;
+  /** Small preview: an image/JPEG data URL (frame grab / image / waveform). */
+  thumb: string;
+  /** Content hash (SHA-256 hex) — dedupes re-uploads of the same file. */
+  hash: string;
+  /** When it was first added (ms epoch) — newest-first ordering. */
+  addedAt: number;
+}
+
+/** Every library entry, newest first. */
+export async function listLibrary(): Promise<LibraryEntry[]> {
+  const db = await openDB();
+  try {
+    const all = await tx<LibraryEntry[]>(db, LIBRARY_STORE, 'readonly', (s) => s.getAll());
+    return all.sort((a, b) => b.addedAt - a.addedAt);
+  } finally {
+    db.close();
+  }
+}
+
+/** Add (or overwrite) a library entry, keyed by its id. */
+export async function addToLibrary(entry: LibraryEntry): Promise<void> {
+  const db = await openDB();
+  try {
+    await tx(db, LIBRARY_STORE, 'readwrite', (s) => s.put(entry, entry.id));
+  } finally {
+    db.close();
+  }
+}
+
+/** The existing entry with this content hash, if any (to skip duplicate adds). */
+export async function libraryEntryByHash(hash: string): Promise<LibraryEntry | null> {
+  const db = await openDB();
+  try {
+    const all = await tx<LibraryEntry[]>(db, LIBRARY_STORE, 'readonly', (s) => s.getAll());
+    return all.find((e) => e.hash === hash) ?? null;
+  } finally {
+    db.close();
+  }
+}
+
+/** Rename a library entry (future availability only — copies already in projects are unaffected). */
+export async function renameLibraryEntry(id: string, name: string): Promise<void> {
+  const db = await openDB();
+  try {
+    const rec = await tx<LibraryEntry | undefined>(db, LIBRARY_STORE, 'readonly', (s) => s.get(id));
+    if (!rec) return;
+    await tx(db, LIBRARY_STORE, 'readwrite', (s) => s.put({ ...rec, name }, id));
+  } finally {
+    db.close();
+  }
+}
+
+/** Remove a library entry (only from future availability — see the header note). */
+export async function deleteLibraryEntry(id: string): Promise<void> {
+  const db = await openDB();
+  try {
+    await tx(db, LIBRARY_STORE, 'readwrite', (s) => s.delete(id));
+  } finally {
+    db.close();
+  }
 }
