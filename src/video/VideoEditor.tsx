@@ -254,6 +254,9 @@ export default function VideoEditor() {
   /** Layer id pending a delete confirmation, else null. */
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
+  /** Autosave indicator: 'idle' (nothing pending), 'saving' (write in flight), 'saved'. */
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+
   // ---- export ----
   const [stage, setStage] = useState<ExportStage>('idle');
   const [progress, setProgress] = useState(0);
@@ -2083,9 +2086,12 @@ export default function VideoEditor() {
   }, [applyLoadedProject]);
 
   // Debounced autosave: write the snapshot on every edit + newly-seen media once.
+  // Drives the top-bar indicator: 'saving' while an edit is pending/writing,
+  // 'saved' once the write lands.
   useEffect(() => {
     if (!hydratedRef.current || clips.length === 0) return;
     const snapshot = currentSnapshot();
+    setSaveState('saving');
     const id = window.setTimeout(() => {
       void (async () => {
         try {
@@ -2101,8 +2107,10 @@ export default function VideoEditor() {
           }
           await pruneMedia(ids);
           for (const srcId of [...persistedRef.current]) if (!ids.has(srcId)) persistedRef.current.delete(srcId);
+          setSaveState('saved');
         } catch {
-          /* ignore autosave failures (storage full / unavailable) */
+          /* storage full / unavailable — drop back to idle rather than hang on "Saving…" */
+          setSaveState('idle');
         }
       })();
     }, 800);
@@ -2143,6 +2151,7 @@ export default function VideoEditor() {
     try {
       await clearProject();
       persistedRef.current = new Set();
+      setSaveState('idle');
       setStatus('Cleared the autosaved project from this browser.');
     } catch {
       /* ignore */
@@ -2359,6 +2368,53 @@ export default function VideoEditor() {
         </header>
 
         <div className="max-w-7xl mx-auto px-5 pt-6 pb-28">
+          {/* Autosave status + JSON backup — kept at the top, always visible. */}
+          <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
+            <div className="inline-flex items-center gap-1.5 text-xs font-medium" aria-live="polite">
+              {saveState === 'saving' ? (
+                <>
+                  <svg className="animate-spin text-[var(--color-accent)]" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeOpacity="0.25" />
+                    <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                  </svg>
+                  <span className="text-[var(--color-text-secondary)]">Saving…</span>
+                </>
+              ) : saveState === 'saved' ? (
+                <>
+                  <span className="text-[var(--color-primary-green)] text-sm leading-none" aria-hidden>✓</span>
+                  <span className="text-[var(--color-text-secondary)]">Saved to this browser</span>
+                </>
+              ) : (
+                <span className="text-[var(--color-text-muted)]">Autosaves in this browser</span>
+              )}
+            </div>
+            <div className="inline-flex items-center gap-2">
+              <button
+                onClick={saveProjectFile}
+                disabled={!mediaKind || busy}
+                title="Download a JSON backup (media embedded, lossless)"
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40"
+              >
+                ↓ Save project
+              </button>
+              <button
+                onClick={() => projectInput.current?.click()}
+                disabled={busy}
+                title="Load a project JSON"
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40"
+              >
+                ↑ Load project
+              </button>
+              <button
+                onClick={clearAutosave}
+                title="Clear the autosaved project from this browser"
+                className="px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--color-glass-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-glass-hover)]"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight flex items-center gap-3 mb-1">
             <span aria-hidden>🎬</span>
             <span className="gradient-text">Layer editor</span>
@@ -3019,34 +3075,7 @@ export default function VideoEditor() {
                 </Panel>
               )}
 
-              {/* Project autosave + JSON backup */}
-              <Panel title="Project">
-                <p className="text-[11px] text-[var(--color-text-muted)] mb-2">
-                  Your work autosaves in this browser (media included, lossless) — a refresh or crash restores it. Save a JSON to back up or move a project between browsers.
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={saveProjectFile}
-                    disabled={!mediaKind || busy}
-                    className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium"
-                  >
-                    ↓ Save project
-                  </button>
-                  <button
-                    onClick={() => projectInput.current?.click()}
-                    disabled={busy}
-                    className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium"
-                  >
-                    ↑ Load project
-                  </button>
-                </div>
-                <button
-                  onClick={clearAutosave}
-                  className="mt-2 w-full px-3 py-2 rounded-md border border-[var(--color-glass-border)] text-[var(--color-text-secondary)] text-xs font-medium hover:bg-[var(--color-glass-hover)]"
-                >
-                  Clear autosave
-                </button>
-              </Panel>
+              {/* Autosave + JSON backup moved to the top bar (status + Save/Load/Clear). */}
 
               {/* Project output settings */}
               <Panel title="Output">
