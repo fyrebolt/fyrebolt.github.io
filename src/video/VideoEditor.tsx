@@ -57,6 +57,7 @@ import {
   createHighlighterLayer,
   createDramaticLayer,
   createStickerLayer,
+  createMusicLayer,
 } from './project/types';
 import type { StickerElement } from './sticker/types';
 import type { VideoClip } from './project/clips';
@@ -77,6 +78,8 @@ import DramaticPanel from './project/panels/DramaticPanel';
 import StickerPanel from './project/panels/StickerPanel';
 import ClipPanel from './project/panels/ClipPanel';
 import GradePanel from './project/panels/GradePanel';
+import MusicPanel from './project/panels/MusicPanel';
+import type { MusicElement } from './music/types';
 import StickerCropEditor from './sticker/StickerCropEditor';
 import { useHistory } from './project/useHistory';
 import type { HistoryApi } from './project/useHistory';
@@ -177,7 +180,8 @@ type AddKind =
   | 'dramatic-inverse'
   | 'dramatic-reflection'
   | 'sticker-image'
-  | 'sticker-video';
+  | 'sticker-video'
+  | 'music';
 
 const ADD_ITEMS: { kind: AddKind; label: string; icon: string }[] = [
   { kind: 'banner', label: 'Entrance Banner', icon: '⚔️' },
@@ -189,6 +193,7 @@ const ADD_ITEMS: { kind: AddKind; label: string; icon: string }[] = [
   { kind: 'highlighter', label: 'Highlighter', icon: '🖍️' },
   { kind: 'sticker-image', label: 'Image sticker', icon: '🖼️' },
   { kind: 'sticker-video', label: 'Video sticker', icon: '🎬' },
+  { kind: 'music', label: 'Music track', icon: '🎵' },
   { kind: 'dramatic-normal', label: 'Dramatic word', icon: '🔠' },
   { kind: 'dramatic-inverse', label: 'Inverse word', icon: '◱' },
   { kind: 'dramatic-reflection', label: 'Reflection word', icon: '🔃' },
@@ -269,6 +274,12 @@ export default function VideoEditor() {
   const stickerMedia = useRef<Map<string, HTMLImageElement | HTMLVideoElement>>(new Map());
   /** Original sticker source blobs per srcId (lossless — for JSON/autosave). */
   const stickerBlobs = useRef<Map<string, Blob>>(new Map());
+  /** Decoded music tracks (HTMLAudioElement), kept out of the project. */
+  const musicMedia = useRef<Map<string, HTMLAudioElement>>(new Map());
+  /** Original music source blobs per srcId (lossless — for JSON/autosave). */
+  const musicBlobs = useRef<Map<string, Blob>>(new Map());
+  /** Hidden file input for adding a background-music track. */
+  const musicInput = useRef<HTMLInputElement>(null);
   /** Hidden file input for loading a project JSON. */
   const projectInput = useRef<HTMLInputElement>(null);
   /** Hidden file inputs used to pick sticker media on demand. */
@@ -309,8 +320,9 @@ export default function VideoEditor() {
   // Zoom + Time Machine are base tracks — they sit at the bottom of the stack.
   const displayLayers = useMemo(() => {
     const overlays = overlayLayers(project).slice().reverse(); // front first
+    const music = project.layers.filter((l) => l.kind === 'music'); // audio-only rows
     const bases = project.layers.filter((l) => l.kind === 'zoom' || l.kind === 'timemachine');
-    return [...overlays, ...bases];
+    return [...overlays, ...music, ...bases];
   }, [project]);
 
   // Output→source time-warp (video only). Drives the timeline length AND where
@@ -373,6 +385,7 @@ export default function VideoEditor() {
       (srcId) => clipMedia.current.get(srcId),
       (sec) => setCurrentSec(sec),
       (srcId) => stickerMedia.current.get(srcId),
+      (srcId) => musicMedia.current.get(srcId),
     );
     compRef.current = c;
     return () => {
@@ -717,6 +730,11 @@ export default function VideoEditor() {
         stickerVideoInput.current?.click();
         return;
       }
+      // Music needs an audio file first — open the picker; layer created on select.
+      if (kind === 'music') {
+        musicInput.current?.click();
+        return;
+      }
       sealDiscrete();
       const z = nextZ(projectRef.current);
       const outSize = srcDims.w > 0 ? outputSizeFor(ratio, srcDims.w, srcDims.h) : outputSizeFor(ratio, 1080, 1920);
@@ -888,6 +906,48 @@ export default function VideoEditor() {
     setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'sticker' ? { ...l, el: { ...l.el, ...patch } } : l)));
   }, []);
 
+  /** Register a decoded music track and add its layer, placed at the playhead. */
+  const addMusicLayer = useCallback(
+    (srcId: string, name: string, srcDuration: number) => {
+      sealDiscrete();
+      const z = nextZ(projectRef.current);
+      const start = Math.max(0, Math.min(currentSec, Math.max(0, timelineDuration - 0.5)));
+      const layer = createMusicLayer(z, { srcId, name, srcDuration }, start);
+      setLayers((ls) => [...ls, layer]);
+      clearZoomEdit();
+      setSelectedLayerId(layer.id);
+      setSelectedAttachmentId(null);
+      setSelectedClipId(null);
+    },
+    [sealDiscrete, currentSec, timelineDuration, clearZoomEdit],
+  );
+
+  /** Decode a picked audio file into an <audio> element, then add the music layer. */
+  const onMusicFile = useCallback(
+    (file: File) => {
+      const url = URL.createObjectURL(file);
+      objectUrls.current.push(url);
+      const srcId = `musmedia-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      musicBlobs.current.set(srcId, file);
+      const a = new Audio();
+      a.src = url;
+      a.preload = 'auto';
+      a.crossOrigin = 'anonymous';
+      const onReady = () => {
+        a.removeEventListener('loadedmetadata', onReady);
+        musicMedia.current.set(srcId, a);
+        addMusicLayer(srcId, file.name.replace(/\.[^.]+$/, ''), a.duration || 0);
+      };
+      a.addEventListener('loadedmetadata', onReady);
+      a.addEventListener('error', () => setStatus('Could not load that audio file.'));
+    },
+    [addMusicLayer],
+  );
+
+  const updateMusicEl = useCallback((id: string, patch: Partial<MusicElement>) => {
+    setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'music' ? { ...l, el: { ...l.el, ...patch } } : l)));
+  }, []);
+
   const updateCaptionEl = useCallback((layerId: string, patch: Partial<Caption> | Partial<TypewriterCaption>) => {
     setLayers((ls) =>
       ls.map((l) => (l.id === layerId && l.kind === 'caption' ? { ...l, el: { ...l.el, ...patch } as CaptionEl } : l)),
@@ -982,6 +1042,12 @@ export default function VideoEditor() {
       if (!layer) return;
       if (layer.kind === 'banner' || layer.kind === 'zoom' || layer.kind === 'timemachine') {
         setStatus('Banner, Zoom, and Time Machine are single-instance — nothing to duplicate.');
+        return;
+      }
+      if (layer.kind === 'music') {
+        // A music layer owns a single <audio> element by srcId; two layers can't
+        // share it. Add another track instead.
+        setStatus('Add another music track with “+ Add layer” rather than duplicating.');
         return;
       }
       const freshId = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -1674,7 +1740,10 @@ export default function VideoEditor() {
     [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade],
   );
 
-  const blobForSrc = useCallback((srcId: string) => clipBlobs.current.get(srcId) ?? stickerBlobs.current.get(srcId), []);
+  const blobForSrc = useCallback(
+    (srcId: string) => clipBlobs.current.get(srcId) ?? stickerBlobs.current.get(srcId) ?? musicBlobs.current.get(srcId),
+    [],
+  );
 
   /** Every referenced source as a MediaEntry (original blob, verbatim). */
   const collectMedia = useCallback((snapshot: PersistSnapshot): MediaEntry[] => {
@@ -1731,6 +1800,23 @@ export default function VideoEditor() {
       const url = URL.createObjectURL(m.blob);
       objectUrls.current.push(url);
       stickerMedia.current.set(layer.el.srcId, layer.el.source === 'video' ? await decodeVideo(url, true) : await decodeImage(url));
+    }
+    for (const layer of loaded.snapshot.layers) {
+      if (layer.kind !== 'music') continue;
+      const m = bySrc.get(layer.el.srcId);
+      if (!m) continue;
+      musicBlobs.current.set(layer.el.srcId, m.blob);
+      const url = URL.createObjectURL(m.blob);
+      objectUrls.current.push(url);
+      const a = new Audio();
+      a.src = url;
+      a.preload = 'auto';
+      a.crossOrigin = 'anonymous';
+      await new Promise<void>((res) => {
+        a.addEventListener('loadedmetadata', () => res(), { once: true });
+        a.addEventListener('error', () => res(), { once: true });
+      });
+      musicMedia.current.set(layer.el.srcId, a);
     }
 
     const s = loaded.snapshot;
@@ -2110,6 +2196,19 @@ export default function VideoEditor() {
                 }}
               />
 
+              {/* Hidden input for adding a background-music track. */}
+              <input
+                ref={musicInput}
+                type="file"
+                accept="audio/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onMusicFile(f);
+                  e.target.value = '';
+                }}
+              />
+
               {/* Hidden input for loading a saved project JSON. */}
               <input
                 ref={projectInput}
@@ -2370,6 +2469,7 @@ export default function VideoEditor() {
                     onEditHighlighter={updateHighlighterEl}
                     onEditDramatic={updateDramaticEl}
                     onEditSticker={updateStickerEl}
+                    onEditMusic={updateMusicEl}
                   />
                 )}
 
@@ -2441,6 +2541,8 @@ export default function VideoEditor() {
                                     : '🖼️'
                                 : l.kind === 'highlighter'
                                   ? '🖍️'
+                                  : l.kind === 'music'
+                                    ? '🎵'
                                   : l.kind === 'dramatic'
                                     ? l.el.mode === 'inverse'
                                       ? '◱'
@@ -2455,8 +2557,10 @@ export default function VideoEditor() {
                           ? l.el.text.split('\n')[0] || l.name
                           : l.kind === 'dramatic'
                             ? (l.el.text || l.name).toUpperCase()
-                            : l.name;
-                      const canMove = l.kind !== 'zoom' && l.kind !== 'timemachine';
+                            : l.kind === 'music'
+                              ? l.el.name || l.name
+                              : l.name;
+                      const canMove = l.kind !== 'zoom' && l.kind !== 'timemachine' && l.kind !== 'music';
                       return (
                         <div key={l.id} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md border ${isSel ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]' : 'border-[var(--color-glass-border)]'}`}>
                           <button onClick={() => selectLayer(l.id)} className="flex items-center gap-2 text-left text-[13px] min-w-0 flex-1">
@@ -2495,6 +2599,8 @@ export default function VideoEditor() {
                               : 'Image sticker'
                           : selectedLayer.kind === 'highlighter'
                             ? 'Highlighter'
+                            : selectedLayer.kind === 'music'
+                              ? 'Music track'
                             : selectedLayer.kind === 'dramatic'
                               ? selectedLayer.el.mode === 'inverse'
                                 ? 'Inverse word'
@@ -2590,6 +2696,16 @@ export default function VideoEditor() {
                       onEdit={(patch) => updateStickerEl(selectedLayer.id, patch)}
                       onToggleCrop={() => setCroppingId((c) => (c === selectedLayer.id ? null : selectedLayer.id))}
                       onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                    />
+                  )}
+                  {selectedLayer.kind === 'music' && (
+                    <MusicPanel
+                      key={selectedLayer.id}
+                      el={selectedLayer.el}
+                      onEdit={(patch, discrete) => {
+                        if (discrete) sealDiscrete();
+                        updateMusicEl(selectedLayer.id, patch);
+                      }}
                     />
                   )}
                 </Panel>

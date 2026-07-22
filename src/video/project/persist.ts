@@ -157,11 +157,11 @@ async function readMediaFor(db: IDBDatabase, srcIds: Set<string>): Promise<Media
   return out;
 }
 
-/** Every srcId a project references: base clips + sticker layers. */
+/** Every srcId a project references: base clips + sticker + music layers. */
 export function referencedSrcIds(snapshot: PersistSnapshot): Set<string> {
   const ids = new Set<string>();
   for (const c of snapshot.clips) ids.add(c.srcId);
-  for (const l of snapshot.layers) if (l.kind === 'sticker') ids.add(l.el.srcId);
+  for (const l of snapshot.layers) if (l.kind === 'sticker' || l.kind === 'music') ids.add(l.el.srcId);
   return ids;
 }
 

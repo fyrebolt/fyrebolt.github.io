@@ -44,6 +44,7 @@ import { elementEnd as sketchEnd } from '../sketch/types';
 import { elementEnd as highlightEnd } from '../highlight/types';
 import { elementEnd as dramaticEnd } from '../dramatic/types';
 import { elementEnd as stickerEnd } from '../sticker/types';
+import { elementEnd as musicEnd, musicSourceAt } from '../music/types';
 import type { Project, CaptionLayer } from './types';
 import { bannerLayer, zoomLayer, timeMachineLayer, overlayLayers, layerSpan } from './types';
 import type { VideoClip, BaseHit } from './clips';
@@ -141,6 +142,8 @@ export class Compositor {
   private sfx: SfxEngine | null = null;
   /** One source+gain per VIDEO clip element (keyed by clip srcId), built for export. */
   private clipAudio = new Map<string, ClipAudio>();
+  /** One source+gain per MUSIC track element (keyed by srcId). */
+  private musicAudio = new Map<string, ClipAudio>();
 
   // per-pass SFX edge tracking
   private firedEntrance = false;
@@ -157,6 +160,8 @@ export class Compositor {
   private getClipMedia: (srcId: string) => ClipEl | undefined;
   /** Resolve a sticker's decoded media by registry id (kept outside the project). */
   private getStickerMedia?: (srcId: string) => HTMLImageElement | HTMLVideoElement | undefined;
+  /** Resolve a music track's decoded HTMLAudioElement by registry id. */
+  private getMusicMedia?: (srcId: string) => HTMLAudioElement | undefined;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -164,12 +169,14 @@ export class Compositor {
     getClipMedia: (srcId: string) => ClipEl | undefined,
     onTime?: (outputSec: number) => void,
     getStickerMedia?: (srcId: string) => HTMLImageElement | HTMLVideoElement | undefined,
+    getMusicMedia?: (srcId: string) => HTMLAudioElement | undefined,
   ) {
     this.canvas = canvas;
     this.getProject = getProject;
     this.getClipMedia = getClipMedia;
     this.onTime = onTime;
     this.getStickerMedia = getStickerMedia;
+    this.getMusicMedia = getMusicMedia;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas context unavailable');
     this.ctx = ctx;
@@ -257,7 +264,9 @@ export class Compositor {
     const p = this.getProject();
     if (this.hasVideo()) return Math.max(0.1, this.warp().totalOutput);
     // Image-only sequence: base length, but never shorter than a placed overlay.
-    const ends = p.layers.map((l) => layerSpan(l).end);
+    // Music is CLAMPED to the content — it never extends the total output (an
+    // independent audio track shouldn't stretch an image project), so exclude it.
+    const ends = p.layers.filter((l) => l.kind !== 'music').map((l) => layerSpan(l).end);
     return Math.max(3, baseDuration(p.clips), ...ends);
   }
 
@@ -404,6 +413,68 @@ export class Compositor {
       if (layer.kind !== 'sticker' || layer.el.source !== 'video') continue;
       const v = this.getStickerMedia(layer.el.srcId);
       if (v instanceof HTMLVideoElement && !v.paused) v.pause();
+    }
+  }
+
+  /** Whether the project has any background-music track. */
+  private hasMusic(): boolean {
+    return this.getProject().layers.some((l) => l.kind === 'music');
+  }
+
+  /**
+   * Steer every MUSIC track's <audio> to OUTPUT time `outputT`. Music lives in
+   * OUTPUT time and is NEVER warped — it always plays at rate 1, so Time Machine
+   * speed changes on the video leave the music untouched (independent-track
+   * behaviour). While playing/recording (`allowPlay`) it plays and corrects only
+   * large drift (the loop wrap is a deliberate large jump back to the segment
+   * start); while paused/scrubbing it seeks and pauses. The per-track GainNode
+   * carries the placement-local volume curve + mute, exactly like clip audio, so
+   * preview and export match.
+   */
+  private driveMusic(outputT: number, allowPlay: boolean): void {
+    if (!this.getMusicMedia) return;
+    const when = this.audioCtx ? this.audioCtx.currentTime : 0;
+    for (const layer of this.getProject().layers) {
+      if (layer.kind !== 'music') continue;
+      const el = layer.el;
+      const a = this.getMusicMedia(el.srcId);
+      if (!(a instanceof HTMLAudioElement)) continue;
+      const audio = this.musicAudio.get(el.srcId);
+      const local = outputT - el.start;
+      const visible = outputT >= el.start && outputT < musicEnd(el);
+      const target = visible ? musicSourceAt(el, local) : null;
+
+      if (!visible || target === null) {
+        if (!a.paused) a.pause();
+        if (audio && this.audioCtx) audio.gain.gain.setTargetAtTime(0, when, 0.01);
+        continue;
+      }
+
+      const cap = Math.max(0, el.srcDuration - 0.03);
+      const tgt = Math.max(0, Math.min(target, cap));
+      if (a.playbackRate !== 1) a.playbackRate = 1;
+      if (allowPlay) {
+        if (a.paused) void a.play().catch(() => undefined);
+        // Correct only large drift; a fresh start / loop-wrap lands via this seek.
+        if (Math.abs(a.currentTime - tgt) > 0.3) a.currentTime = tgt;
+      } else {
+        if (!a.paused) a.pause();
+        if (Math.abs(a.currentTime - tgt) > 0.05) a.currentTime = tgt;
+      }
+      if (audio && this.audioCtx) {
+        const level = el.muted === true ? 0 : sampleVolume(el.volume, local);
+        audio.gain.gain.setTargetAtTime(level, when, 0.01);
+      }
+    }
+  }
+
+  /** Pause every music track (lifecycle stop / teardown). */
+  private pauseMusic(): void {
+    if (!this.getMusicMedia) return;
+    for (const layer of this.getProject().layers) {
+      if (layer.kind !== 'music') continue;
+      const a = this.getMusicMedia(layer.el.srcId);
+      if (a instanceof HTMLAudioElement && !a.paused) a.pause();
     }
   }
 
@@ -666,6 +737,7 @@ export class Compositor {
     if (!this.loaded || this.editing) return;
     const sec = this.pausedT;
     this.driveStickerVideos(sec, false);
+    this.driveMusic(sec, false);
     const hit = this.hitAt(sec);
     const active = hit && hit.clip.kind === 'video' ? this.elOf(hit.clip) : null;
     this.pauseClipVideos();
@@ -706,6 +778,14 @@ export class Compositor {
     }
   }
 
+  /** The shared recorder destination (clip audio + music + sfx all fan into it). */
+  private ensureStreamDest(): MediaStreamAudioDestinationNode {
+    const ctx = this.ensureCtx();
+    if (!this.streamDest) this.streamDest = ctx.createMediaStreamDestination();
+    if (this.sfx) this.sfx.output.connect(this.streamDest);
+    return this.streamDest;
+  }
+
   /**
    * Route every VIDEO clip element through its own source→gain into a shared
    * stream destination (for the recorder) + the speakers. Each element can only
@@ -717,7 +797,7 @@ export class Compositor {
     const clips = this.clips().filter((c) => c.kind === 'video');
     if (clips.length === 0) return null;
     const ctx = this.ensureCtx();
-    if (!this.streamDest) this.streamDest = ctx.createMediaStreamDestination();
+    const dest = this.ensureStreamDest();
     for (const clip of clips) {
       if (this.clipAudio.has(clip.srcId)) continue;
       const v = this.elOf(clip);
@@ -728,14 +808,46 @@ export class Compositor {
         gain.gain.value = 0; // driveClips brings the active clip up
         node.connect(gain);
         gain.connect(ctx.destination);
-        gain.connect(this.streamDest);
+        gain.connect(dest);
         this.clipAudio.set(clip.srcId, { node, gain });
       } catch {
         /* element already wrapped elsewhere — skip */
       }
     }
-    if (this.sfx) this.sfx.output.connect(this.streamDest);
-    return this.streamDest.stream ?? null;
+    return dest.stream ?? null;
+  }
+
+  /**
+   * Route every MUSIC track's <audio> through its own source→gain into the shared
+   * stream destination + speakers (built lazily, cached by srcId). driveMusic
+   * sets each gain from the track's volume curve / mute. Returns the recorder
+   * stream, or null when there is no music.
+   */
+  private ensureMusicAudio(): MediaStream | null {
+    if (!this.getMusicMedia) return null;
+    const music = this.getProject().layers.filter((l) => l.kind === 'music');
+    if (music.length === 0) return null;
+    const ctx = this.ensureCtx();
+    const dest = this.ensureStreamDest();
+    for (const layer of music) {
+      if (layer.kind !== 'music') continue;
+      const srcId = layer.el.srcId;
+      if (this.musicAudio.has(srcId)) continue;
+      const a = this.getMusicMedia(srcId);
+      if (!(a instanceof HTMLAudioElement)) continue;
+      try {
+        const node = ctx.createMediaElementSource(a);
+        const gain = ctx.createGain();
+        gain.gain.value = 0; // driveMusic brings it up
+        node.connect(gain);
+        gain.connect(ctx.destination);
+        gain.connect(dest);
+        this.musicAudio.set(srcId, { node, gain });
+      } catch {
+        /* element already wrapped elsewhere — skip */
+      }
+    }
+    return dest.stream ?? null;
   }
 
   // ---- preview ----
@@ -751,6 +863,9 @@ export class Compositor {
     // volume-automation curve + mute are audible while previewing — exactly the
     // same nodes the export drives, so preview and the exported file always match.
     if (this.hasVideo()) this.ensureClipAudio();
+    // Background music mixes through the same graph (independent of clip audio),
+    // so it's audible in preview and captured on export identically.
+    if (this.hasMusic()) this.ensureMusicAudio();
     this.startPlayback(fromSec);
     this.loop();
   }
@@ -783,6 +898,7 @@ export class Compositor {
 
     // Steer clips to the start frame (pauses non-active, plays the active one).
     this.driveClips(start, true);
+    this.driveMusic(start, true);
   }
 
   private loop = (): void => {
@@ -799,6 +915,7 @@ export class Compositor {
       this.startPlayback();
       this.driveClips(0, true);
       this.driveStickerVideos(0, true);
+      this.driveMusic(0, true);
       this.drawFrameAt(0, false);
       this.onTime?.(0);
       this.raf = requestAnimationFrame(this.loop);
@@ -807,6 +924,7 @@ export class Compositor {
 
     this.driveClips(outputT, true);
     this.driveStickerVideos(outputT, true);
+    this.driveMusic(outputT, true);
     this.drawFrameAt(outputT, true);
     this.onTime?.(outputT);
     this.raf = requestAnimationFrame(this.loop);
@@ -821,6 +939,7 @@ export class Compositor {
     this.prevT = sec;
     this.pausedT = sec;
     this.driveStickerVideos(sec, false);
+    this.driveMusic(sec, false); // seek music to the scrub point, keep it paused
 
     const hit = this.hitAt(sec);
     const activeVideo = hit && hit.clip.kind === 'video' ? this.elOf(hit.clip) : null;
@@ -997,6 +1116,7 @@ export class Compositor {
     this.playing = false;
     this.pauseClipVideos();
     this.pauseStickerVideos();
+    this.pauseMusic();
   }
 
   // ---- export ----
@@ -1009,9 +1129,13 @@ export class Compositor {
     this.ensureSfx();
 
     const stream = this.canvas.captureStream(FPS);
-    if (this.hasVideo()) {
-      const audio = this.ensureClipAudio();
-      audio?.getAudioTracks().forEach((t) => stream.addTrack(t));
+    const hasVideo = this.hasVideo();
+    const hasMusic = this.hasMusic();
+    if (hasVideo) this.ensureClipAudio();
+    if (hasMusic) this.ensureMusicAudio();
+    if ((hasVideo || hasMusic) && this.streamDest) {
+      // The shared destination carries clip audio + music + sfx.
+      this.streamDest.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
     } else if (this.sfx) {
       const dest = this.ensureCtx().createMediaStreamDestination();
       this.sfx.output.connect(dest);
@@ -1068,12 +1192,17 @@ export class Compositor {
         node.disconnect();
         gain.disconnect();
       }
+      for (const { node, gain } of this.musicAudio.values()) {
+        node.disconnect();
+        gain.disconnect();
+      }
       this.streamDest?.disconnect();
       void this.audioCtx?.close();
     } catch {
       /* ignore */
     }
     this.clipAudio.clear();
+    this.musicAudio.clear();
     this.audioCtx = null;
     this.streamDest = null;
     this.sfx = null;
