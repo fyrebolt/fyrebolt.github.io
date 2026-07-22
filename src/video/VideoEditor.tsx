@@ -397,6 +397,14 @@ export default function VideoEditor() {
     };
   }, []);
 
+  // Callback ref for the preview canvas. Toggling full screen swaps the wrapper
+  // (IpadFrame ↔ full-screen div), which remounts the <canvas> to a new DOM node;
+  // re-point the (long-lived) compositor at it so it keeps drawing to what's shown.
+  const attachCanvas = useCallback((node: HTMLCanvasElement | null) => {
+    canvasRef.current = node;
+    if (node) compRef.current?.setCanvas(node);
+  }, []);
+
   useEffect(() => {
     const urls = objectUrls.current;
     return () => urls.forEach((u) => URL.revokeObjectURL(u));
@@ -2371,7 +2379,7 @@ export default function VideoEditor() {
                     <div className="pointer-events-none absolute inset-0 z-30 rounded-lg border-2 border-dashed border-[var(--color-primary-green)] bg-[rgba(139,233,199,0.12)]" />
                   )}
                   <canvas
-                    ref={canvasRef}
+                    ref={attachCanvas}
                     onPointerDown={onCanvasPointerDown}
                     onPointerMove={onCanvasPointerMove}
                     onPointerUp={onCanvasPointerUp}
