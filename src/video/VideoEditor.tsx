@@ -254,6 +254,9 @@ export default function VideoEditor() {
   /** Layer id pending a delete confirmation, else null. */
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
+  /** Autosave indicator: 'idle' (nothing pending), 'saving' (write in flight), 'saved'. */
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+
   // ---- export ----
   const [stage, setStage] = useState<ExportStage>('idle');
   const [progress, setProgress] = useState(0);
@@ -694,6 +697,90 @@ export default function VideoEditor() {
     },
     [sealDiscrete],
   );
+
+  // ---- clip duplicate / copy / paste ----
+  //
+  // A clip resolves its decoded media by srcId (clipMedia). Two clips must NOT
+  // share a srcId: the compositor steers/pre-rolls each clip's <video> element by
+  // srcId, so a shared element would fight itself when the copy sits next to the
+  // original. So a copy gets its OWN fresh element (same blob, new srcId) and a
+  // deep-cloned settings object (grade/volume independent of the source).
+  const clipClipboard = useRef<VideoClip | null>(null);
+
+  const cloneClipWithMedia = useCallback(
+    (src: VideoClip): VideoClip | null => {
+      const blob = clipBlobs.current.get(src.srcId);
+      if (!blob) return null;
+      const newSrcId = clipSrcId();
+      const url = URL.createObjectURL(blob);
+      objectUrls.current.push(url);
+      if (src.kind === 'video') {
+        const v = document.createElement('video');
+        v.src = url;
+        v.playsInline = true;
+        v.preload = 'auto';
+        v.crossOrigin = 'anonymous';
+        v.addEventListener('loadeddata', () => compRef.current?.renderStatic(), { once: true });
+        clipMedia.current.set(newSrcId, v);
+      } else {
+        const img = new Image();
+        img.onload = () => compRef.current?.renderStatic();
+        img.src = url;
+        clipMedia.current.set(newSrcId, img);
+      }
+      clipBlobs.current.set(newSrcId, blob);
+      const freshId = `clip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      return { ...structuredClone(src), id: freshId, srcId: newSrcId };
+    },
+    [clipSrcId],
+  );
+
+  /** Insert a copy of `src` right after `afterId` (or at the end), and select it. */
+  const insertClipCopy = useCallback(
+    (src: VideoClip, afterId: string | null, failMsg: string) => {
+      const clone = cloneClipWithMedia(src);
+      if (!clone) {
+        setStatus(failMsg);
+        return;
+      }
+      sealDiscrete();
+      setClips((cs) => {
+        const j = afterId ? cs.findIndex((c) => c.id === afterId) : -1;
+        const next = cs.slice();
+        next.splice(j < 0 ? cs.length : j + 1, 0, clone);
+        return next;
+      });
+      setSelectedClipId(clone.id);
+    },
+    [cloneClipWithMedia, sealDiscrete],
+  );
+
+  const duplicateClip = useCallback(
+    (id: string) => {
+      const src = clips.find((c) => c.id === id);
+      if (!src) return;
+      insertClipCopy(src, id, 'Cannot duplicate: source media unavailable.');
+      setStatus('Clip duplicated.');
+    },
+    [clips, insertClipCopy],
+  );
+
+  const copyClip = useCallback(
+    (id: string) => {
+      const c = clips.find((x) => x.id === id);
+      if (!c) return;
+      clipClipboard.current = c;
+      setStatus('Clip copied — paste with ⌘/Ctrl+V.');
+    },
+    [clips],
+  );
+
+  const pasteClip = useCallback(() => {
+    const src = clipClipboard.current;
+    if (!src) return;
+    insertClipCopy(src, selectedClipId, 'Cannot paste: the copied clip’s media is no longer available.');
+    setStatus('Clip pasted.');
+  }, [insertClipCopy, selectedClipId]);
 
   /**
    * Razor: split the clip under the playhead into two independent clips at the
@@ -1667,11 +1754,25 @@ export default function VideoEditor() {
         togglePlay();
         return;
       }
-      // Cmd/Ctrl+D duplicates the selected layer.
+      // Cmd/Ctrl+D duplicates the selected layer, or the selected clip if no layer.
       if (mod && (e.key === 'd' || e.key === 'D')) {
         if (editable) return;
         e.preventDefault();
         if (selectedLayerId) duplicateLayer(selectedLayerId);
+        else if (selectedClipId) duplicateClip(selectedClipId);
+        return;
+      }
+      // Cmd/Ctrl+C copies the selected clip; Cmd/Ctrl+V pastes it after the
+      // selection (never while typing, and only when a clip — not a layer — is
+      // the active selection, so text-field copy/paste is untouched).
+      if (mod && (e.key === 'c' || e.key === 'C') && !editable && !selectedLayerId && selectedClipId) {
+        e.preventDefault();
+        copyClip(selectedClipId);
+        return;
+      }
+      if (mod && (e.key === 'v' || e.key === 'V') && !editable && !selectedLayerId && clipClipboard.current) {
+        e.preventDefault();
+        pasteClip();
         return;
       }
       // 'S' splits the clip under the playhead (NLE razor convention).
@@ -1734,6 +1835,7 @@ export default function VideoEditor() {
   }, [
     togglePlay, duplicateLayer, selectedLayerId, fullscreen, croppingId, confirmDeleteId, mediaKind,
     splitAtPlayhead, selectedLayer, nudgeSelected, stepFrame, shuttleBackward, shuttleForward, haltTransport,
+    selectedClipId, duplicateClip, copyClip, pasteClip,
   ]);
 
   // ---- canvas selection (single-layer transforms are owned by TransformBox) ----
@@ -1984,9 +2086,12 @@ export default function VideoEditor() {
   }, [applyLoadedProject]);
 
   // Debounced autosave: write the snapshot on every edit + newly-seen media once.
+  // Drives the top-bar indicator: 'saving' while an edit is pending/writing,
+  // 'saved' once the write lands.
   useEffect(() => {
     if (!hydratedRef.current || clips.length === 0) return;
     const snapshot = currentSnapshot();
+    setSaveState('saving');
     const id = window.setTimeout(() => {
       void (async () => {
         try {
@@ -2002,8 +2107,10 @@ export default function VideoEditor() {
           }
           await pruneMedia(ids);
           for (const srcId of [...persistedRef.current]) if (!ids.has(srcId)) persistedRef.current.delete(srcId);
+          setSaveState('saved');
         } catch {
-          /* ignore autosave failures (storage full / unavailable) */
+          /* storage full / unavailable — drop back to idle rather than hang on "Saving…" */
+          setSaveState('idle');
         }
       })();
     }, 800);
@@ -2044,6 +2151,7 @@ export default function VideoEditor() {
     try {
       await clearProject();
       persistedRef.current = new Set();
+      setSaveState('idle');
       setStatus('Cleared the autosaved project from this browser.');
     } catch {
       /* ignore */
@@ -2260,6 +2368,53 @@ export default function VideoEditor() {
         </header>
 
         <div className="max-w-7xl mx-auto px-5 pt-6 pb-28">
+          {/* Autosave status + JSON backup — kept at the top, always visible. */}
+          <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
+            <div className="inline-flex items-center gap-1.5 text-xs font-medium" aria-live="polite">
+              {saveState === 'saving' ? (
+                <>
+                  <svg className="animate-spin text-[var(--color-accent)]" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeOpacity="0.25" />
+                    <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                  </svg>
+                  <span className="text-[var(--color-text-secondary)]">Saving…</span>
+                </>
+              ) : saveState === 'saved' ? (
+                <>
+                  <span className="text-[var(--color-primary-green)] text-sm leading-none" aria-hidden>✓</span>
+                  <span className="text-[var(--color-text-secondary)]">Saved to this browser</span>
+                </>
+              ) : (
+                <span className="text-[var(--color-text-muted)]">Autosaves in this browser</span>
+              )}
+            </div>
+            <div className="inline-flex items-center gap-2">
+              <button
+                onClick={saveProjectFile}
+                disabled={!mediaKind || busy}
+                title="Download a JSON backup (media embedded, lossless)"
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40"
+              >
+                ↓ Save project
+              </button>
+              <button
+                onClick={() => projectInput.current?.click()}
+                disabled={busy}
+                title="Load a project JSON"
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40"
+              >
+                ↑ Load project
+              </button>
+              <button
+                onClick={clearAutosave}
+                title="Clear the autosaved project from this browser"
+                className="px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--color-glass-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-glass-hover)]"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight flex items-center gap-3 mb-1">
             <span aria-hidden>🎬</span>
             <span className="gradient-text">Layer editor</span>
@@ -2597,6 +2752,7 @@ export default function VideoEditor() {
                       onSelect={selectClip}
                       onReorder={reorderClip}
                       onRemove={removeClip}
+                      onDuplicate={duplicateClip}
                       onTrim={trimClip}
                       onAddClip={addClipClick}
                     />
@@ -2919,34 +3075,7 @@ export default function VideoEditor() {
                 </Panel>
               )}
 
-              {/* Project autosave + JSON backup */}
-              <Panel title="Project">
-                <p className="text-[11px] text-[var(--color-text-muted)] mb-2">
-                  Your work autosaves in this browser (media included, lossless) — a refresh or crash restores it. Save a JSON to back up or move a project between browsers.
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={saveProjectFile}
-                    disabled={!mediaKind || busy}
-                    className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium"
-                  >
-                    ↓ Save project
-                  </button>
-                  <button
-                    onClick={() => projectInput.current?.click()}
-                    disabled={busy}
-                    className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium"
-                  >
-                    ↑ Load project
-                  </button>
-                </div>
-                <button
-                  onClick={clearAutosave}
-                  className="mt-2 w-full px-3 py-2 rounded-md border border-[var(--color-glass-border)] text-[var(--color-text-secondary)] text-xs font-medium hover:bg-[var(--color-glass-hover)]"
-                >
-                  Clear autosave
-                </button>
-              </Panel>
+              {/* Autosave + JSON backup moved to the top bar (status + Save/Load/Clear). */}
 
               {/* Project output settings */}
               <Panel title="Output">
@@ -2960,9 +3089,29 @@ export default function VideoEditor() {
                   // Precise length control for the selected image clip (else the first).
                   const target = clips.find((c) => c.id === selectedClipId && c.kind === 'image') ?? clips.find((c) => c.kind === 'image');
                   const len = target ? clipLen(target) : imageDuration;
+                  // Slider for a quick coarse set; the number field types an exact,
+                  // frame-precise length (e.g. 3.03s) without snapping to 0.5s steps.
+                  const setLen = (v: number) => {
+                    if (!Number.isFinite(v)) return;
+                    const c = Math.max(MIN_CLIP_LEN, Math.min(IMAGE_CLIP_MAX, v));
+                    setImageDuration(c);
+                    if (target) trimClip(target.id, { out: c });
+                  };
                   return (
-                  <Field label={`Clip length — ${len.toFixed(1)}s`}>
-                    <input type="range" min={2} max={20} step={0.5} value={len} onChange={(e) => { const v = Number(e.target.value); setImageDuration(v); if (target) trimClip(target.id, { out: v }); }} className="w-full accent-[var(--color-primary-green)]" />
+                  <Field label="Clip length">
+                    <div className="flex items-center gap-2">
+                      <input type="range" min={0.5} max={20} step={0.1} value={Math.min(20, len)} onChange={(e) => setLen(Number(e.target.value))} className="flex-1 accent-[var(--color-primary-green)]" />
+                      <input
+                        type="number"
+                        min={MIN_CLIP_LEN}
+                        max={IMAGE_CLIP_MAX}
+                        step={0.01}
+                        value={Number(len.toFixed(2))}
+                        onChange={(e) => setLen(Number(e.target.value))}
+                        className="w-20 px-2 py-1 rounded-md bg-[var(--color-bg-elevated)] border border-[var(--color-glass-border)] text-sm text-right tabular-nums"
+                      />
+                      <span className="text-xs text-[var(--color-text-muted)]">s</span>
+                    </div>
                   </Field>
                   );
                 })()}
