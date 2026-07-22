@@ -19,6 +19,9 @@ import { preloadAllFontPools, FONT_POOLS } from './captions/fonts';
 import type { BoilPoolId } from './captions/fonts';
 import { createAttachment, staticWindowOf } from './captions/types';
 import type { Attachment, AttachmentType, Caption, CaptionEl, TypewriterCaption } from './captions/types';
+import FindReplace from './captions/FindReplace';
+import { replaceAllInText, replaceOneAt } from './captions/search';
+import type { CaptionText } from './captions/search';
 import { createZoom } from './zoom/types';
 import type { ZoomKeyframe, ZoomRect } from './zoom/types';
 import { applySpeedRegion, clampSpeed, speedAt, REGION_RAMP, REGION_HOLD, FREEZE_RAMP } from './timemachine/types';
@@ -265,6 +268,8 @@ export default function VideoEditor() {
   const [isPlaying, setIsPlaying] = useState(false);
   /** In-app full-screen (breaks out of the iPad frame + dock). Transient view state. */
   const [fullscreen, setFullscreen] = useState(false);
+  /** Find & Replace panel (Cmd/Ctrl+F) open state. */
+  const [findOpen, setFindOpen] = useState(false);
 
   // ---- ui ----
   const [showSafeZones, setShowSafeZones] = useState(true);
@@ -454,6 +459,15 @@ export default function VideoEditor() {
       if (e.key === 'Escape' && croppingId) {
         e.preventDefault();
         setCroppingId(null);
+        return;
+      }
+
+      // Cmd/Ctrl+F opens Find & Replace (caption text). Suppressed inside text
+      // fields so the browser's native in-field find is left untouched.
+      if (mod && (e.key === 'f' || e.key === 'F')) {
+        if (editable) return;
+        e.preventDefault();
+        setFindOpen(true);
         return;
       }
 
@@ -1283,6 +1297,54 @@ export default function VideoEditor() {
       ls.map((l) => (l.id === layerId && l.kind === 'caption' ? { ...l, el: { ...l.el, ...patch } as CaptionEl } : l)),
     );
   }, []);
+
+  // ---- find & replace across caption / typewriter text (current project) ----
+  /** Every caption/typewriter element's live text, ordered by start time. */
+  const captionsForFind = useMemo<CaptionText[]>(
+    () =>
+      layers
+        .filter((l): l is CaptionLayer => l.kind === 'caption')
+        .slice()
+        .sort((a, b) => a.el.start - b.el.start)
+        .map((l) => ({ id: l.id, text: l.el.text, label: l.el.text.split('\n')[0] || l.name })),
+    [layers],
+  );
+
+  /** Replace one occurrence in a single caption — one undo entry. */
+  const replaceOneCaption = useCallback(
+    (layerId: string, at: number, search: string, replacement: string, caseSensitive: boolean) => {
+      const src = projectRef.current.layers;
+      const layer = src.find((l) => l.id === layerId);
+      if (!layer || layer.kind !== 'caption') return;
+      const next = replaceOneAt(layer.el.text, at, search, replacement, caseSensitive);
+      if (next === null) return; // stale index — the text changed under us
+      sealDiscrete();
+      setLayers(src.map((l) => (l.id === layerId && l.kind === 'caption' ? { ...l, el: { ...l.el, text: next } as CaptionEl } : l)));
+      setSelectedLayerId(layerId);
+    },
+    [sealDiscrete],
+  );
+
+  /** Replace EVERY occurrence across all captions in ONE undo step. Returns count. */
+  const replaceAllCaptions = useCallback(
+    (search: string, replacement: string, caseSensitive: boolean): number => {
+      if (!search) return 0;
+      const src = projectRef.current.layers;
+      let count = 0;
+      const next = src.map((l) => {
+        if (l.kind !== 'caption') return l;
+        const r = replaceAllInText(l.el.text, search, replacement, caseSensitive);
+        if (r.n === 0) return l;
+        count += r.n;
+        return { ...l, el: { ...l.el, text: r.text } as CaptionEl };
+      });
+      if (count === 0) return 0;
+      sealDiscrete(); // single seal + single setLayers → one undoable action
+      setLayers(next);
+      return count;
+    },
+    [sealDiscrete],
+  );
 
   const updateBanner = useCallback(
     (id: string, patch: Partial<BannerLayer>) => {
@@ -3340,6 +3402,17 @@ export default function VideoEditor() {
             </aside>
           </div>
         </div>
+
+        {/* find & replace across caption / typewriter text (Cmd/Ctrl+F) */}
+        {findOpen && (
+          <FindReplace
+            captions={captionsForFind}
+            onReveal={selectLayer}
+            onReplaceOne={replaceOneCaption}
+            onReplaceAll={replaceAllCaptions}
+            onClose={() => setFindOpen(false)}
+          />
+        )}
 
         {/* asset-library browser (choose from library / upload new) */}
         {libraryOpen && (
