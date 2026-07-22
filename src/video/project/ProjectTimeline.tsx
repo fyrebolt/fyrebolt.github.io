@@ -26,12 +26,14 @@ import type { Highlighter } from '../highlight/types';
 import type { DramaticWord } from '../dramatic/types';
 import { elementEnd as dramaticEnd } from '../dramatic/types';
 import type { StickerElement } from '../sticker/types';
+import type { MusicElement } from '../music/types';
 import type {
   BannerLayer,
   CaptionLayer,
   DramaticLayer,
   HighlighterLayer,
   Layer,
+  MusicLayer,
   SketchLayer,
   StickerLayer,
   ZoomLayer,
@@ -50,6 +52,7 @@ const BANNER_COLOR = '#f0883e';
 const SKETCH_COLOR = '#c4a7fb';
 const SKETCH_ANIM = 'rgba(196,167,251,0.45)';
 const STICKER_COLOR = '#fbbf77';
+const MUSIC_COLOR = '#7ee0d3';
 
 const ROW_COLORS = ['#8be9c7', '#74b9ff', '#ffeaa7', '#ff9ff3', '#ffa07a', '#81ecec'];
 
@@ -97,6 +100,7 @@ interface Props {
   onEditHighlighter: (layerId: string, patch: Partial<Highlighter>) => void;
   onEditDramatic: (layerId: string, patch: Partial<DramaticWord>) => void;
   onEditSticker: (layerId: string, patch: Partial<StickerElement>) => void;
+  onEditMusic: (layerId: string, patch: Partial<MusicElement>) => void;
 }
 
 type CaptionDragMode = 'start' | 'end' | 'body' | 'div1' | 'div2';
@@ -128,10 +132,10 @@ interface ZoomDrag {
   startX: number;
   orig: ZoomKeyframe;
 }
-/** Generic overlay-range drag (sketch / highlighter / dramatic / sticker). */
+/** Generic overlay-range drag (sketch / highlighter / dramatic / sticker / music). */
 interface RangeDrag {
   layerId: string;
-  kind: 'sketch' | 'highlighter' | 'dramatic' | 'sticker';
+  kind: 'sketch' | 'highlighter' | 'dramatic' | 'sticker' | 'music';
   mode: 'move' | 'end';
   startX: number;
   origStart: number;
@@ -175,6 +179,7 @@ export default function ProjectTimeline({
   onEditHighlighter,
   onEditDramatic,
   onEditSticker,
+  onEditMusic,
 }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -455,7 +460,7 @@ export default function ProjectTimeline({
 
   // ---- generic overlay-range drag (sketch / highlighter / dramatic) ----
   const onRangeDown = useCallback(
-    (e: ReactPointerEvent, layer: SketchLayer | HighlighterLayer | DramaticLayer | StickerLayer, mode: 'move' | 'end') => {
+    (e: ReactPointerEvent, layer: SketchLayer | HighlighterLayer | DramaticLayer | StickerLayer | MusicLayer, mode: 'move' | 'end') => {
       e.stopPropagation();
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -463,10 +468,17 @@ export default function ProjectTimeline({
         /* ignore */
       }
       onSelectLayer(layer.id);
-      // Sketch resizes its trailing FREEZE; sticker resizes HOLD; others DURATION.
+      // Sketch resizes trailing FREEZE; sticker resizes HOLD; music resizes DUR;
+      // others resize DURATION.
       const origStart = layer.el.start;
       const origTrail =
-        layer.kind === 'sketch' ? layer.el.freezeDur : layer.kind === 'sticker' ? layer.el.hold : layer.el.duration;
+        layer.kind === 'sketch'
+          ? layer.el.freezeDur
+          : layer.kind === 'sticker'
+            ? layer.el.hold
+            : layer.kind === 'music'
+              ? layer.el.dur
+              : layer.el.duration;
       const head = layer.kind === 'sketch' ? layer.el.animationDur : 0;
       // Dramatic words never overlap: clamp between the nearest neighbours.
       let minStart = 0;
@@ -510,19 +522,21 @@ export default function ProjectTimeline({
         if (d.kind === 'sketch') onEditSketch(d.layerId, { start });
         else if (d.kind === 'highlighter') onEditHighlighter(d.layerId, { start });
         else if (d.kind === 'sticker') onEditSticker(d.layerId, { start });
+        else if (d.kind === 'music') onEditMusic(d.layerId, { start });
         else onEditDramatic(d.layerId, { start });
       } else {
-        // Resize the trailing span: sketch → freezeDur, sticker → hold, others → duration.
-        // Snap the trailing END edge, then convert back to the span length.
+        // Resize the trailing span: sketch → freezeDur, sticker → hold, music → dur,
+        // others → duration. Snap the trailing END edge, then back to span length.
         const snappedEnd = snapT(d.origStart + d.head + d.origTrail + delta, d.layerId);
         const trail = clamp(MIN_DURATION, d.maxTrail, snappedEnd - d.origStart - d.head);
         if (d.kind === 'sketch') onEditSketch(d.layerId, { freezeDur: trail });
         else if (d.kind === 'highlighter') onEditHighlighter(d.layerId, { duration: trail });
         else if (d.kind === 'sticker') onEditSticker(d.layerId, { hold: trail });
+        else if (d.kind === 'music') onEditMusic(d.layerId, { dur: trail });
         else onEditDramatic(d.layerId, { duration: trail });
       }
     },
-    [dur, fracFromClientX, onEditSketch, onEditHighlighter, onEditDramatic, onEditSticker, snapT],
+    [dur, fracFromClientX, onEditSketch, onEditHighlighter, onEditDramatic, onEditSticker, onEditMusic, snapT],
   );
 
   const onUp = useCallback((e: ReactPointerEvent) => {
@@ -812,6 +826,30 @@ export default function ProjectTimeline({
                   title="Drag to move · drag the right edge for the hold time"
                 >
                   <span className="relative text-[10px] font-medium text-black/80 whitespace-nowrap truncate pointer-events-none">{glyph} {layer.name}</span>
+                  <div onPointerDown={(e) => onRangeDown(e, layer, 'end')} onPointerMove={onRangeMove} onPointerUp={onUp} className="absolute right-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-md touch-none z-20" />
+                </div>
+              </div>
+            );
+          }
+
+          if (layer.kind === 'music') {
+            const m = layer.el;
+            const leftPct = (m.start / dur) * 100;
+            const widthPct = (m.dur / dur) * 100;
+            return (
+              <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
+                <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                <div
+                  onPointerDown={(e) => onRangeDown(e, layer, 'move')}
+                  onPointerMove={onRangeMove}
+                  onPointerUp={onUp}
+                  className={`absolute top-0 bottom-0 rounded-md flex items-center px-2 cursor-grab active:cursor-grabbing touch-none overflow-hidden ${ring}`}
+                  style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: MUSIC_COLOR }}
+                  title="Drag to move · drag the right edge for the track length"
+                >
+                  <span className="relative text-[10px] font-medium text-black/80 whitespace-nowrap truncate pointer-events-none">
+                    🎵 {m.loop ? '↻ ' : ''}{layer.name}
+                  </span>
                   <div onPointerDown={(e) => onRangeDown(e, layer, 'end')} onPointerMove={onRangeMove} onPointerUp={onUp} className="absolute right-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-md touch-none z-20" />
                 </div>
               </div>

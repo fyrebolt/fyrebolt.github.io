@@ -43,6 +43,8 @@ import type { DramaticWord, WordMode } from '../dramatic/types';
 import { elementEnd as dramaticEnd } from '../dramatic/types';
 import type { StickerElement, StickerSeed } from '../sticker/types';
 import { createSticker, elementEnd as stickerEnd } from '../sticker/types';
+import type { MusicElement, MusicSeed } from '../music/types';
+import { createMusic, elementEnd as musicEnd } from '../music/types';
 import type { VideoClip } from './clips';
 import { baseDuration } from './clips';
 import type { ColorGrade } from './grade';
@@ -115,6 +117,12 @@ export interface StickerLayer extends LayerBase {
   el: StickerElement;
 }
 
+/** One background-music track: independent audio on the OUTPUT clock (not warped). */
+export interface MusicLayer extends LayerBase {
+  kind: 'music';
+  el: MusicElement;
+}
+
 export type Layer =
   | BannerLayer
   | CaptionLayer
@@ -123,7 +131,8 @@ export type Layer =
   | SketchLayer
   | HighlighterLayer
   | DramaticLayer
-  | StickerLayer;
+  | StickerLayer
+  | MusicLayer;
 
 export type LayerKind = Layer['kind'];
 
@@ -180,8 +189,10 @@ export function timeMachineLayer(p: Project): TimeMachineLayer | null {
 
 /** Overlay layers (everything that draws ON TOP of the base), sorted bottom-first by z. */
 export function overlayLayers(p: Project): Layer[] {
-  // zoom (base crop) and timemachine (clock warp) draw nothing on top.
-  return p.layers.filter((l) => l.kind !== 'zoom' && l.kind !== 'timemachine').sort((a, b) => a.z - b.z);
+  // zoom (base crop), timemachine (clock warp) and music (audio) draw nothing.
+  return p.layers
+    .filter((l) => l.kind !== 'zoom' && l.kind !== 'timemachine' && l.kind !== 'music')
+    .sort((a, b) => a.z - b.z);
 }
 
 /** Next z for a newly-added overlay (on top of the current stack). */
@@ -223,6 +234,8 @@ export function layerSpan(layer: Layer): Span {
       return { start: layer.el.start, end: dramaticEnd(layer.el) };
     case 'sticker':
       return { start: layer.el.start, end: stickerEnd(layer.el) };
+    case 'music':
+      return { start: layer.el.start, end: musicEnd(layer.el) };
   }
 }
 
@@ -362,6 +375,22 @@ export function createStickerLayer(
     z,
     name: seed.source === 'video' ? 'Video sticker' : 'Image sticker',
     el: createSticker(seed),
+    ...overrides,
+  };
+}
+
+export function createMusicLayer(
+  z: number,
+  seed: MusicSeed,
+  start: number,
+  overrides: Partial<MusicLayer> = {},
+): MusicLayer {
+  return {
+    kind: 'music',
+    id: id('mus'),
+    z,
+    name: 'Music',
+    el: createMusic(seed, start),
     ...overrides,
   };
 }
