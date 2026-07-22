@@ -46,7 +46,7 @@ import { elementEnd as dramaticEnd } from '../dramatic/types';
 import { elementEnd as stickerEnd } from '../sticker/types';
 import { elementEnd as musicEnd, musicSourceAt } from '../music/types';
 import type { Project, CaptionLayer } from './types';
-import { bannerLayer, zoomLayer, timeMachineLayer, overlayLayers, layerSpan } from './types';
+import { bannerLayers, zoomLayer, timeMachineLayer, overlayLayers, layerSpan } from './types';
 import type { VideoClip, BaseHit } from './clips';
 import { baseDuration, resolveBase, hasVideoClip, sampleVolume, clipLen } from './clips';
 import { gradeFilter, isNeutralGrade } from './grade';
@@ -146,7 +146,7 @@ export class Compositor {
   private musicAudio = new Map<string, ClipAudio>();
 
   // per-pass SFX edge tracking
-  private firedEntrance = false;
+  private firedEntrance = new Set<string>(); // banner ids whose entrance slash already fired
   private firedWhoosh = new Set<string>();
   private lastFontIdx = new Map<string, number>();
   private lastReveal = new Map<string, number>();
@@ -678,8 +678,8 @@ export class Compositor {
         );
       } else if (layer.kind === 'banner') {
         drawBanner(this.ctx, this.out, layer.style, bannerFrameAt(layer, outputT, performance.now() / 1000));
-        if (sfxOn && layer.sfx && !this.firedEntrance && crossedLock(layer, this.prevT, outputT)) {
-          this.firedEntrance = true;
+        if (sfxOn && layer.sfx && !this.firedEntrance.has(layer.id) && crossedLock(layer, this.prevT, outputT)) {
+          this.firedEntrance.add(layer.id);
           this.sfx!.trigger('entrance', when);
         }
       } else if (layer.kind === 'sketch') {
@@ -872,7 +872,7 @@ export class Compositor {
 
   private startPlayback(fromSec = 0): void {
     if (!this.loaded) return;
-    this.firedEntrance = false;
+    this.firedEntrance.clear();
     this.firedWhoosh.clear();
     this.lastFontIdx.clear();
     this.lastReveal.clear();
@@ -890,8 +890,7 @@ export class Compositor {
     this.playStartWall = performance.now();
 
     // Suppress SFX for cues whose trigger instant already elapsed before `start`.
-    const banner = bannerLayer(p);
-    if (banner && start >= banner.freeze) this.firedEntrance = true;
+    for (const banner of bannerLayers(p)) if (start >= banner.freeze) this.firedEntrance.add(banner.id);
     const zoom = zoomLayer(p);
     if (zoom) for (const kf of zoom.keyframes) if (start >= kf.start) this.firedWhoosh.add(kf.id);
     // Time Machine whoosh is onset-based (prevT vs outputT), so nothing to pre-seed.

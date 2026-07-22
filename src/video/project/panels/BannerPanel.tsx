@@ -16,6 +16,8 @@ const POSITIONS: { key: BannerPosition; label: string }[] = [
 interface Props {
   layer: BannerLayer;
   duration: number;
+  /** Set when the last freeze/hold edit was clamped to avoid an overlap. */
+  conflict?: string | null;
   onEdit: (patch: Partial<BannerLayer>) => void;
   onEditStyle: (patch: Partial<BannerStyle>) => void;
   onRemove: () => void;
@@ -29,7 +31,7 @@ function SecSlider({ label, value, min, max, step, onChange }: { label: string; 
   );
 }
 
-export default function BannerPanel({ layer, duration, onEdit, onEditStyle, onRemove }: Props) {
+export default function BannerPanel({ layer, duration, conflict, onEdit, onEditStyle, onRemove }: Props) {
   const s = layer.style;
   return (
     <>
@@ -72,6 +74,11 @@ export default function BannerPanel({ layer, duration, onEdit, onEditStyle, onRe
 
       <div className="pt-3 border-t border-[var(--color-glass-border)] space-y-4">
         <div className="text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">Timing</div>
+        {conflict && (
+          <p className="text-[11px] rounded-md px-2 py-1.5 bg-[rgba(255,180,60,0.12)] border border-[rgba(255,180,60,0.4)] text-[rgba(255,200,120,0.95)]">
+            ⚠ {conflict}
+          </p>
+        )}
         <Field label={`Freeze point — ${layer.freeze.toFixed(2)}s`}>
           <input
             type="number"

@@ -3,10 +3,15 @@
 // The layer-based editor composites any mix of layers over ONE source clip on
 // ONE shared timeline. A layer is a discriminated union spanning genuinely
 // different shapes:
-//   - banner:  a single freeze-point marker + banner styling. The freeze is a
-//              global time distortion — the whole composite HOLDS on the freeze
-//              frame for `hold` seconds, then resumes (see project/timeMap.ts).
-//              Singleton (one freeze per project).
+//   - banner:  a freeze-point marker + banner styling. The freeze is a global
+//              time distortion — the whole composite HOLDS on the freeze frame
+//              for `hold` seconds, then resumes (see project/timeMap.ts).
+//              Multi-instance: any number of independent banners, each with its
+//              own style/position/freeze/hold/fade/sfx. Because each banner's
+//              freeze+hold pauses the ONE base clock (as does a Time Machine
+//              warp), no banner's freeze+hold window may overlap another
+//              banner's window or a non-1× Time Machine segment — the editor
+//              clamps placements to keep these windows disjoint.
 //   - caption: one draggable text element — a font-boil caption (start/end) or a
 //              typewriter (typing/hold/delete phases), each with optional word
 //              highlight/underline attachments. Multi-instance.
@@ -175,8 +180,9 @@ export function projectMediaKind(p: Project): 'video' | 'image' | null {
   return p.clips.some((c) => c.kind === 'video') ? 'video' : 'image';
 }
 
-export function bannerLayer(p: Project): BannerLayer | null {
-  return (p.layers.find((l) => l.kind === 'banner') as BannerLayer | undefined) ?? null;
+/** Every banner layer, in paint order (banners are multi-instance). */
+export function bannerLayers(p: Project): BannerLayer[] {
+  return p.layers.filter((l): l is BannerLayer => l.kind === 'banner');
 }
 
 export function zoomLayer(p: Project): ZoomLayer | null {
