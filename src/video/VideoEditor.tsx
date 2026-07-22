@@ -3060,9 +3060,29 @@ export default function VideoEditor() {
                   // Precise length control for the selected image clip (else the first).
                   const target = clips.find((c) => c.id === selectedClipId && c.kind === 'image') ?? clips.find((c) => c.kind === 'image');
                   const len = target ? clipLen(target) : imageDuration;
+                  // Slider for a quick coarse set; the number field types an exact,
+                  // frame-precise length (e.g. 3.03s) without snapping to 0.5s steps.
+                  const setLen = (v: number) => {
+                    if (!Number.isFinite(v)) return;
+                    const c = Math.max(MIN_CLIP_LEN, Math.min(IMAGE_CLIP_MAX, v));
+                    setImageDuration(c);
+                    if (target) trimClip(target.id, { out: c });
+                  };
                   return (
-                  <Field label={`Clip length — ${len.toFixed(1)}s`}>
-                    <input type="range" min={2} max={20} step={0.5} value={len} onChange={(e) => { const v = Number(e.target.value); setImageDuration(v); if (target) trimClip(target.id, { out: v }); }} className="w-full accent-[var(--color-primary-green)]" />
+                  <Field label="Clip length">
+                    <div className="flex items-center gap-2">
+                      <input type="range" min={0.5} max={20} step={0.1} value={Math.min(20, len)} onChange={(e) => setLen(Number(e.target.value))} className="flex-1 accent-[var(--color-primary-green)]" />
+                      <input
+                        type="number"
+                        min={MIN_CLIP_LEN}
+                        max={IMAGE_CLIP_MAX}
+                        step={0.01}
+                        value={Number(len.toFixed(2))}
+                        onChange={(e) => setLen(Number(e.target.value))}
+                        className="w-20 px-2 py-1 rounded-md bg-[var(--color-bg-elevated)] border border-[var(--color-glass-border)] text-sm text-right tabular-nums"
+                      />
+                      <span className="text-xs text-[var(--color-text-muted)]">s</span>
+                    </div>
                   </Field>
                   );
                 })()}
