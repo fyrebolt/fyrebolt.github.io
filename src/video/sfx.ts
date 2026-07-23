@@ -5,7 +5,7 @@
 // and/or the export recording stream. Works on a normal AudioContext (live) or
 // an OfflineAudioContext (tests).
 
-export type SfxKind = 'entrance' | 'riffle' | 'key' | 'whoosh' | 'pencil';
+export type SfxKind = 'entrance' | 'riffle' | 'key' | 'whoosh' | 'pencil' | 'zap';
 
 export class SfxEngine {
   /** Route this to ctx.destination (monitoring) and/or a MediaStreamDestination (export). */
@@ -31,7 +31,54 @@ export class SfxEngine {
     else if (kind === 'riffle') this.riffle(when);
     else if (kind === 'whoosh') this.whoosh(when, gain);
     else if (kind === 'pencil') this.pencil(when, gain);
+    else if (kind === 'zap') this.zap(when, gain);
     else this.key(when, gain);
+  }
+
+  /**
+   * Digital-transition cue for the glitch / flash boundaries: a bit-crushed
+   * stutter — three descending square blips machine-gunned over a clipped noise
+   * burst — so it reads as a signal dropout rather than a musical hit.
+   */
+  private zap(t: number, gain = 1): void {
+    const ctx = this.ctx;
+
+    // clipped noise burst (the "dropout")
+    const src = this.noiseSource();
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 900;
+    const shaper = ctx.createWaveShaper();
+    // hard-clip curve: squares off the noise for a digital, crushed edge
+    const curve = new Float32Array(129);
+    for (let i = 0; i < curve.length; i++) {
+      const x = (i / (curve.length - 1)) * 2 - 1;
+      curve[i] = Math.max(-0.7, Math.min(0.7, x * 4));
+    }
+    shaper.curve = curve;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, t);
+    ng.gain.exponentialRampToValueAtTime(0.3 * gain, t + 0.006);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    src.connect(hp).connect(shaper).connect(ng).connect(this.output);
+    src.start(t);
+    src.stop(t + 0.2);
+
+    // three descending square blips — the stutter
+    const freqs = [1760, 1245, 880];
+    for (let i = 0; i < freqs.length; i++) {
+      const at = t + i * 0.035;
+      const o = ctx.createOscillator();
+      o.type = 'square';
+      o.frequency.setValueAtTime(freqs[i], at);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(0.12 * gain, at + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + 0.03);
+      o.connect(g).connect(this.output);
+      o.start(at);
+      o.stop(at + 0.05);
+    }
   }
 
   /**

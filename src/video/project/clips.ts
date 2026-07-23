@@ -17,6 +17,7 @@
 // project data. VideoClip therefore carries only serialisable fields.
 
 import type { ColorGrade } from './grade';
+import type { Transition } from './transitions';
 
 export type ClipKind = 'video' | 'image';
 
@@ -59,6 +60,13 @@ export interface VideoClip {
   /** Per-clip colour grade (brightness/contrast/saturation), applied to this
    *  clip's base frame in both preview and export. Absent == neutral. */
   grade?: ColorGrade;
+  /** Transition INTO this clip, i.e. the boundary between it and the clip before
+   *  it. Living on the incoming clip means it survives reorder/duplicate/split
+   *  like every other per-clip property. Ignored on the first clip (no boundary
+   *  before it); absent == a hard cut, so existing projects are unchanged.
+   *  See project/transitions.ts — the window straddles the cut and never changes
+   *  baseDuration(). */
+  transitionIn?: Transition;
 }
 
 /** Smallest a clip may be trimmed to (seconds). */
@@ -245,6 +253,10 @@ export function splitClip(c: VideoClip, local: number): [VideoClip, VideoClip] |
     in: c.kind === 'image' ? 0 : cutSource,
     out: c.kind === 'image' ? len - local : c.out,
     volume: secondVol.length ? secondVol : undefined,
+    // The razor introduces a BRAND NEW boundary: it starts as a plain cut. (The
+    // clip's incoming transition belongs to the boundary before it, which the
+    // first half keeps.)
+    transitionIn: undefined,
   };
   return [first, second];
 }
