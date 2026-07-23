@@ -65,6 +65,12 @@ import {
 import type { StickerElement } from './sticker/types';
 import type { VideoClip } from './project/clips';
 import { createClip, clipLen, baseDuration, splitClip, MIN_CLIP_LEN, IMAGE_CLIP_MAX } from './project/clips';
+import type { Transition } from './project/transitions';
+import {
+  clampDuration as clampTransitionDur,
+  randomizeAll as randomizeAllTransitions,
+  transitionAt,
+} from './project/transitions';
 import type { ColorGrade } from './project/grade';
 import { NEUTRAL_GRADE } from './project/grade';
 import { compileWarp, bannerBlockedSpans, fitBannerFreeze, fitBannerHold } from './project/timeMap';
@@ -80,6 +86,7 @@ import HighlighterPanel from './project/panels/HighlighterPanel';
 import DramaticPanel from './project/panels/DramaticPanel';
 import StickerPanel from './project/panels/StickerPanel';
 import ClipPanel from './project/panels/ClipPanel';
+import TransitionPanel from './project/panels/TransitionPanel';
 import GradePanel from './project/panels/GradePanel';
 import MusicPanel from './project/panels/MusicPanel';
 import type { MusicElement } from './music/types';
@@ -725,6 +732,8 @@ export default function VideoEditor() {
 
   // ---- clip sequence management ----
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  /** Selected clip BOUNDARY (index of the incoming clip) whose transition is being edited. */
+  const [selectedBoundary, setSelectedBoundary] = useState<number | null>(null);
 
   /** Base-sequence start time of each clip (for scrubbing to a clip's head). */
   const clipStarts = useMemo(() => {
@@ -796,6 +805,46 @@ export default function VideoEditor() {
     },
     [sealDiscrete],
   );
+
+  // ---- clip-boundary transitions ----
+  //
+  // A transition lives on the INCOMING clip (`transitionIn`), so boundary index
+  // i means "the boundary entering clip i". Editing one is an ordinary clip
+  // patch, which puts it under the same snapshot history as every other edit.
+
+  /** Set the whole transition at a boundary. `discrete` seals its own undo entry. */
+  const setTransition = useCallback(
+    (index: number, tr: Transition, discrete = false) => {
+      if (discrete) sealDiscrete();
+      setClips((cs) => {
+        if (index <= 0 || index >= cs.length) return cs;
+        const next = { ...tr, duration: clampTransitionDur(cs, index, tr.duration) };
+        return cs.map((c, i) => (i === index ? { ...c, transitionIn: next.kind === 'cut' ? undefined : next } : c));
+      });
+    },
+    [sealDiscrete],
+  );
+
+  /** Duration-only edit (the chip drag) — streamed, so the history coalesces it. */
+  const setTransitionDur = useCallback(
+    (index: number, dur: number) => {
+      setClips((cs) => {
+        if (index <= 0 || index >= cs.length) return cs;
+        const cur = transitionAt(cs, index);
+        // Dragging a boundary that is still a plain Cut turns it into the default
+        // crossfade — the quickest way to get a transition onto a boundary.
+        const kind = cur.kind === 'cut' ? 'crossfade' : cur.kind;
+        const tr: Transition = { ...cur, kind, duration: clampTransitionDur(cs, index, dur) };
+        return cs.map((c, i) => (i === index ? { ...c, transitionIn: tr } : c));
+      });
+    },
+    [],
+  );
+
+  const randomizeTransitions = useCallback(() => {
+    sealDiscrete();
+    setClips((cs) => (cs.length > 1 ? randomizeAllTransitions(cs) : cs));
+  }, [sealDiscrete]);
 
   // ---- clip duplicate / copy / paste ----
   //
@@ -2993,6 +3042,10 @@ export default function VideoEditor() {
                       onDuplicate={duplicateClip}
                       onTrim={trimClip}
                       onAddClip={addClipClick}
+                      selectedBoundary={selectedBoundary}
+                      onSelectBoundary={setSelectedBoundary}
+                      onTransitionDur={setTransitionDur}
+                      onRandomizeTransitions={randomizeTransitions}
                     />
                   </div>
                 )}
@@ -3268,6 +3321,19 @@ export default function VideoEditor() {
                       }}
                     />
                   )}
+                </Panel>
+              )}
+
+              {/* Selected clip boundary: its transition type + duration */}
+              {selectedBoundary !== null && selectedBoundary > 0 && selectedBoundary < clips.length && (
+                <Panel title="Transition">
+                  <TransitionPanel
+                    key={selectedBoundary}
+                    clips={clips}
+                    index={selectedBoundary}
+                    onEdit={setTransition}
+                    onRandomizeAll={randomizeTransitions}
+                  />
                 </Panel>
               )}
 
