@@ -27,10 +27,6 @@ function smoothstep(p: number): number {
   return p * p * (3 - 2 * p);
 }
 
-function easeOutCubic(p: number): number {
-  return 1 - Math.pow(1 - p, 3);
-}
-
 /** Deterministic PRNG so preview and the exported re-capture glitch identically. */
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -136,26 +132,27 @@ export class TransitionRenderer {
     const b = this.paintTo(0, out, paintB);
     if (!b) return;
     const { w, h } = out;
-    // The revealed region grows from the side the wipe travels FROM.
+    // `dir` is the direction the wipe LINE TRAVELS (matching push), so the
+    // revealed region grows from the opposite edge.
     let rect: [number, number, number, number];
     let edge: [number, number, number, number]; // the bright line, in the sweep's path
     const thickness = Math.max(2, Math.round(Math.min(w, h) * 0.004));
     if (dir === 'left') {
-      const x = w * p;
-      rect = [0, 0, x, h];
-      edge = [x - thickness, 0, thickness, h];
-    } else if (dir === 'right') {
       const x = w * (1 - p);
       rect = [x, 0, w - x, h];
       edge = [x, 0, thickness, h];
+    } else if (dir === 'right') {
+      const x = w * p;
+      rect = [0, 0, x, h];
+      edge = [x - thickness, 0, thickness, h];
     } else if (dir === 'up') {
-      const y = h * p;
-      rect = [0, 0, w, y];
-      edge = [0, y - thickness, w, thickness];
-    } else {
       const y = h * (1 - p);
       rect = [0, y, w, h - y];
       edge = [0, y, w, thickness];
+    } else {
+      const y = h * p;
+      rect = [0, 0, w, y];
+      edge = [0, y - thickness, w, thickness];
     }
     ctx.save();
     ctx.beginPath();
@@ -220,7 +217,9 @@ export class TransitionRenderer {
     const cx = w / 2;
     const cy = h / 2;
     const maxR = Math.hypot(w, h) / 2;
-    const e = easeOutCubic(p);
+    // Eased at both ends so the circle doesn't cover most of the frame in the
+    // first quarter of the window.
+    const e = smoothstep(p);
     if (mode === 'in') {
       // Expanding circle of the INCOMING clip over the outgoing one.
       paintA(ctx);
