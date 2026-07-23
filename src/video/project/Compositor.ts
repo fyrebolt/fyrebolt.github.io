@@ -12,10 +12,22 @@
 //
 // The base sequence is the ONLY thing that knows about multiple clips. Overlays
 // and the warp operate in OUTPUT / base time exactly as in the single-source
-// editor, so a one-clip project is bit-for-bit the old behaviour. Clip boundaries
-// are hard CUTS: the active clip's <video> plays / is steered, every other clip's
-// <video> is paused (and, once the export audio graph exists, gain-muted), so the
-// audio hard-cuts at each boundary. Crossfade / wipe transitions are a follow-up.
+// editor, so a one-clip project is bit-for-bit the old behaviour.
+//
+// Each clip boundary carries a TRANSITION (project/transitions.ts). Outside a
+// transition window the behaviour is the original hard cut: the active clip's
+// <video> plays / is steered and every other clip's <video> is paused and
+// gain-muted. INSIDE a window both sides are steered at once, the two frames are
+// composited by project/transitionDraw.ts, and their gains ride an equal-power
+// crossfade — so the audio no longer hard-cuts. The window straddles the cut and
+// never changes baseDuration(), so no overlay's timing moves when a transition
+// is added or changed.
+//
+// Where both sides resolve to the SAME media element (a razor split, or a
+// duplicated clip) one element cannot present two positions at once: the
+// outgoing side is captured to a freeze-frame at the window start and the live
+// element carries the incoming side, with the audio ducking through the splice
+// instead of crossfading.
 
 import {
   drawSource,
@@ -49,6 +61,9 @@ import type { Project, CaptionLayer } from './types';
 import { bannerLayers, zoomLayer, timeMachineLayer, overlayLayers, layerSpan } from './types';
 import type { VideoClip, BaseHit } from './clips';
 import { baseDuration, resolveBase, hasVideoClip, sampleVolume, clipLen } from './clips';
+import type { ActiveTransition } from './transitions';
+import { activeTransitionAt, allWindows, crossfadeGains, duckGain, isOverlapping, windowAt } from './transitions';
+import { TransitionRenderer } from './transitionDraw';
 import { gradeFilter, isNeutralGrade } from './grade';
 
 /** Seconds between pencil-on-paper grains while a sketch animates. */
@@ -152,6 +167,16 @@ export class Compositor {
   private lastReveal = new Map<string, number>();
   private deleteCueFired = new Set<string>();
   private lastPencil = new Map<string, number>();
+  /** Boundary keys whose transition cue already fired this pass. */
+  private firedTransition = new Set<string>();
+
+  // boundary transitions
+  private transitions = new TransitionRenderer();
+  /** Freeze-frame of the outgoing side at a same-source boundary (see captureFreeze). */
+  private freezeCanvas: HTMLCanvasElement | null = null;
+  private freezeFrame: HTMLCanvasElement | null = null;
+  /** Which boundary `freezeFrame` belongs to (`index:cut`), or null when stale. */
+  private freezeKey: string | null = null;
 
   private canvas: HTMLCanvasElement;
   private getProject: () => Project;
@@ -318,6 +343,61 @@ export class Compositor {
     const nextIdx = activeIdx >= 0 && activeIdx + 1 < clips.length ? activeIdx + 1 : -1;
     const when = this.audioCtx ? this.audioCtx.currentTime : 0;
 
+    // ---- boundary transition: both sides live, gains on an equal-power crossfade ----
+    //
+    // `steered` maps clip index → the source second that clip must show and the
+    // gain multiplier its original audio rides. Outside a window it holds only
+    // the single active clip, i.e. exactly the original hard-cut behaviour.
+    const active = this.activeTransition(outputT);
+    const steered = new Map<number, { target: number; gain: number }>();
+    if (active) {
+      // A same-source boundary must snapshot the outgoing frame BEFORE the shared
+      // element is re-steered below.
+      const key = `${active.index}:${active.cut.toFixed(4)}`;
+      if (active.sameSource && this.freezeKey !== key) this.captureFreeze(active, outputT);
+      if (!active.sameSource) this.freezeFrame = null;
+
+      const overlap = isOverlapping(active.tr.kind);
+      const g = crossfadeGains(active.progress);
+      const duck = duckGain(active.progress);
+      const outLocal = active.outgoingSourceT - active.outgoing.in;
+      const inLocal = Math.max(0, active.incomingSourceT - active.incoming.in);
+
+      if (active.sameSource) {
+        // One element: it carries the INCOMING side; the audio ducks through the
+        // splice rather than crossfading with itself.
+        steered.set(active.incomingIndex, {
+          target: active.incomingSourceT,
+          gain: duck * sampleVolume(active.incoming.volume, inLocal),
+        });
+      } else if (overlap) {
+        steered.set(active.outgoingIndex, {
+          target: active.outgoingSourceT,
+          gain: g.out * sampleVolume(active.outgoing.volume, outLocal),
+        });
+        steered.set(active.incomingIndex, {
+          target: active.incomingSourceT,
+          gain: g.in * sampleVolume(active.incoming.volume, inLocal),
+        });
+      } else {
+        // flash: no sustained overlap — only the visible side is audible, ducked
+        // across the cut so the splice doesn't click. Both elements are still
+        // steered so the swap at the midpoint lands on the right frame.
+        const past = active.progress >= 0.5;
+        steered.set(active.outgoingIndex, {
+          target: active.outgoingSourceT,
+          gain: past ? 0 : duck * sampleVolume(active.outgoing.volume, outLocal),
+        });
+        steered.set(active.incomingIndex, {
+          target: active.incomingSourceT,
+          gain: past ? duck * sampleVolume(active.incoming.volume, inLocal) : 0,
+        });
+      }
+    } else {
+      this.freezeFrame = null;
+      this.freezeKey = null;
+    }
+
     for (let i = 0; i < clips.length; i++) {
       const clip = clips[i];
       if (clip.kind !== 'video') continue;
@@ -326,8 +406,14 @@ export class Compositor {
       const audio = this.clipAudio.get(clip.srcId);
       const cap = Math.max(0, clip.srcDuration - 0.03);
 
-      if (i === activeIdx && hit) {
-        const target = Math.min(hit.sourceT, cap);
+      // Inside a transition window `steered` is authoritative (it may hold BOTH
+      // sides); outside one it is empty and the single active clip drives, as
+      // before. Everything else pauses and mutes.
+      const want = steered.get(i);
+      const driven = active ? want !== undefined : i === activeIdx && hit !== null;
+
+      if (driven) {
+        const target = Math.min(want ? want.target : hit ? hit.sourceT : 0, cap);
         if (frozen || !allowPlay) {
           if (!v.paused) v.pause();
           if (Math.abs(v.currentTime - target) > 0.05) v.currentTime = Math.max(0, target);
@@ -340,18 +426,24 @@ export class Compositor {
         }
         if (audio && this.audioCtx) {
           // Base = the clip's own automation curve at this clip-local instant
-          // (hit.local == seconds from the in-point). Pitch-shifted / paused audio
-          // is still silenced on a freeze or off-speed span, and mute wins outright.
+          // (hit.local == seconds from the in-point), or — inside a transition —
+          // that curve already multiplied by the crossfade/duck envelope.
+          // Pitch-shifted / paused audio is still silenced on a freeze or
+          // off-speed span, and mute wins outright.
           const suppressed = frozen || Math.abs(speed - 1) > 0.02 || clip.muted === true;
-          const level = suppressed ? 0 : sampleVolume(clip.volume, hit.local);
-          audio.gain.gain.setTargetAtTime(level, when, 0.01);
+          const base = want ? want.gain : hit ? sampleVolume(clip.volume, hit.local) : 0;
+          audio.gain.gain.setTargetAtTime(suppressed ? 0 : base, when, 0.01);
         }
       } else {
         if (!v.paused) v.pause();
         if (audio && this.audioCtx) audio.gain.gain.setTargetAtTime(0, when, 0.01);
-        // Pre-roll the upcoming clip to its trim in-point so the cut is instant.
-        if (i === nextIdx && Math.abs(v.currentTime - clip.in) > 0.1) {
-          v.currentTime = Math.max(0, Math.min(clip.in, cap));
+        // Pre-roll the upcoming clip so the cut is instant. When it is entered
+        // through a transition, roll back a further half-window — that is where
+        // its side of the window starts (the frames its trim discarded).
+        if (i === nextIdx) {
+          const w = windowAt(clips, i);
+          const pre = Math.max(0, clip.in - (w ? w.tr.duration / 2 : 0));
+          if (Math.abs(v.currentTime - pre) > 0.1) v.currentTime = Math.max(0, Math.min(pre, cap));
         }
       }
     }
@@ -517,20 +609,99 @@ export class Compositor {
 
   // ---- drawing ----
 
-  private drawBase(outputT: number): void {
+  /**
+   * Paint ONE clip's finished base frame (zoom crop or aspect composite, plus its
+   * per-clip grade) into `ctx`. The element is drawn at whatever frame it is
+   * currently showing — driveClips is what steers it to the right source second.
+   */
+  private paintClipFrame(ctx: CanvasRenderingContext2D, clip: VideoClip, src: ClipEl, outputT: number): void {
     const p = this.getProject();
+    const grade = gradeFilter(clip.grade);
+    const zoom = zoomLayer(p);
+    if (zoom && zoom.keyframes.length > 0) {
+      drawZoomed(ctx, src, this.out, rectAt(outputT, zoom.keyframes), grade);
+    } else {
+      drawSource(ctx, src, this.out, p.fillMode, grade);
+    }
+  }
+
+  private drawBase(outputT: number): void {
+    const active = this.activeTransition(outputT);
+    if (active) {
+      this.drawTransition(active, outputT);
+      return;
+    }
     const hit = this.hitAt(outputT);
     if (!hit) return;
     const src = this.elOf(hit.clip);
     if (!src) return;
-    // Per-clip colour grade applies to this clip's base frame only.
-    const grade = gradeFilter(hit.clip.grade);
-    const zoom = zoomLayer(p);
-    if (zoom && zoom.keyframes.length > 0) {
-      drawZoomed(this.ctx, src, this.out, rectAt(outputT, zoom.keyframes), grade);
-    } else {
-      drawSource(this.ctx, src, this.out, p.fillMode, grade);
+    this.paintClipFrame(this.ctx, hit.clip, src, outputT);
+  }
+
+  /** The boundary transition covering OUTPUT time `outputT`, if any. */
+  private activeTransition(outputT: number): ActiveTransition | null {
+    const clips = this.clips();
+    if (clips.length < 2) return null;
+    const baseT = this.hasVideo() ? this.warp().sourceAt(outputT) : outputT;
+    return activeTransitionAt(clips, baseT);
+  }
+
+  /** Composite the two sides of a boundary transition onto the canvas. */
+  private drawTransition(active: ActiveTransition, outputT: number): void {
+    const outEl = this.elOf(active.outgoing);
+    const inEl = this.elOf(active.incoming);
+    const frozen = active.sameSource ? this.freezeFrame : null;
+
+    const paintA = (c: CanvasRenderingContext2D): void => {
+      // Same-source boundaries show the captured freeze-frame for the outgoing
+      // side (one element can't be at two positions); it is already a finished
+      // base frame, so it blits straight in.
+      if (frozen) {
+        c.drawImage(frozen, 0, 0, this.out.w, this.out.h);
+        return;
+      }
+      if (outEl) this.paintClipFrame(c, active.outgoing, outEl, outputT);
+    };
+    const paintB = (c: CanvasRenderingContext2D): void => {
+      if (inEl) this.paintClipFrame(c, active.incoming, inEl, outputT);
+    };
+
+    // Nothing to mix against — fall back to a plain cut rather than a black frame.
+    if (!inEl || (!outEl && !frozen)) {
+      const only = inEl ?? outEl;
+      const clip = inEl ? active.incoming : active.outgoing;
+      if (only) this.paintClipFrame(this.ctx, clip, only, outputT);
+      return;
     }
+
+    this.transitions.draw(this.ctx, this.out, active.tr, active.progress, paintA, paintB, active.cut);
+  }
+
+  /**
+   * Capture the outgoing side of a same-source boundary as a finished base frame.
+   * Called from driveClips at the instant the window is entered — BEFORE the
+   * shared element is re-steered to the incoming position, so it still shows the
+   * outgoing frame. (Scrubbing straight into the middle of a window has no such
+   * instant: the capture then holds whatever frame the element was last on. Live
+   * playback — and therefore export, which is a real-time re-capture — always
+   * takes the correct path.)
+   */
+  private captureFreeze(active: ActiveTransition, outputT: number): void {
+    const src = this.elOf(active.outgoing);
+    if (!src) return;
+    if (!this.freezeCanvas) this.freezeCanvas = document.createElement('canvas');
+    const c = this.freezeCanvas;
+    if (c.width !== this.out.w || c.height !== this.out.h) {
+      c.width = this.out.w;
+      c.height = this.out.h;
+    }
+    const cctx = c.getContext('2d');
+    if (!cctx) return;
+    cctx.setTransform(1, 0, 0, 1, 0, 0);
+    cctx.clearRect(0, 0, this.out.w, this.out.h);
+    this.paintClipFrame(cctx, active.outgoing, src, outputT);
+    this.freezeFrame = c;
+    this.freezeKey = `${active.index}:${active.cut.toFixed(4)}`;
   }
 
   /** Lazily-sized scratch canvas for the global-grade final pass. */
@@ -682,6 +853,25 @@ export class Compositor {
       }
     }
 
+    // Boundary-transition cue: one hit as the window OPENS (so a whoosh leads
+    // into the cut rather than trailing it). Onset is tested in BASE time, where
+    // the windows live, so a Time Machine warp can't skip or double-fire it.
+    if (sfxOn && p.clips.length > 1) {
+      const hasVid = this.hasVideo();
+      const basePrev = hasVid ? this.warp().sourceAt(this.prevT) : this.prevT;
+      const baseNow = hasVid ? this.warp().sourceAt(outputT) : outputT;
+      for (const w of allWindows(p.clips)) {
+        if (!w.tr.sfx) continue;
+        const key = `${w.index}:${w.cut.toFixed(4)}`;
+        if (this.firedTransition.has(key)) continue;
+        if (basePrev < w.start && baseNow >= w.start) {
+          this.firedTransition.add(key);
+          const cue = w.tr.kind === 'glitch' || w.tr.kind === 'flash' ? 'zap' : 'whoosh';
+          this.sfx!.trigger(cue, when);
+        }
+      }
+    }
+
     // time-machine (replay) whoosh: fire on each slow-mo / freeze ONSET — when the
     // free-form speed curve crosses down into slow motion between frames.
     const tm = timeMachineLayer(p);
@@ -759,6 +949,7 @@ export class Compositor {
     const sec = this.pausedT;
     this.driveStickerVideos(sec, false);
     this.driveMusic(sec, false);
+    if (this.parkTransition(sec)) return;
     const hit = this.hitAt(sec);
     const active = hit && hit.clip.kind === 'video' ? this.elOf(hit.clip) : null;
     this.pauseClipVideos();
@@ -775,6 +966,34 @@ export class Compositor {
       }
     }
     this.drawFrameAt(sec, false);
+  }
+
+  /** Redraw the paused frame once this element's in-flight seek lands. */
+  private redrawWhenSeeked(v: HTMLVideoElement): void {
+    const draw = (): void => {
+      v.removeEventListener('seeked', draw);
+      if (!this.playing && !this.editing) this.drawFrameAt(this.pausedT, false);
+    };
+    v.addEventListener('seeked', draw);
+  }
+
+  /**
+   * Park a PAUSED frame that falls inside a transition window: both sides have to
+   * sit on their own source second, so this hands the seeking to driveClips (which
+   * also captures the same-source freeze-frame) and repaints as each seek lands.
+   * Returns false when `sec` isn't in a window, leaving the caller's normal
+   * single-clip path to run.
+   */
+  private parkTransition(sec: number): boolean {
+    const active = this.activeTransition(sec);
+    if (!active) return false;
+    this.driveClips(sec, false);
+    for (const clip of [active.outgoing, active.incoming]) {
+      const v = this.elOf(clip);
+      if (v instanceof HTMLVideoElement) this.redrawWhenSeeked(v);
+    }
+    this.drawFrameAt(sec, false);
+    return true;
   }
 
   // ---- audio graph ----
@@ -899,6 +1118,9 @@ export class Compositor {
     this.lastReveal.clear();
     this.deleteCueFired.clear();
     this.lastPencil.clear();
+    this.firedTransition.clear();
+    this.freezeFrame = null;
+    this.freezeKey = null;
 
     const p = this.getProject();
     // Clamp the resume point; treat "at/after the end" as a fresh restart at 0.
@@ -914,6 +1136,13 @@ export class Compositor {
     for (const banner of bannerLayers(p)) if (start >= banner.freeze) this.firedEntrance.add(banner.id);
     const zoom = zoomLayer(p);
     if (zoom) for (const kf of zoom.keyframes) if (start >= kf.start) this.firedWhoosh.add(kf.id);
+    // Same for any transition window whose opening is already behind the resume point.
+    {
+      const startBase = this.hasVideo() ? this.warp().sourceAt(start) : start;
+      for (const w of allWindows(p.clips)) {
+        if (startBase >= w.start) this.firedTransition.add(`${w.index}:${w.cut.toFixed(4)}`);
+      }
+    }
     // Time Machine whoosh is onset-based (prevT vs outputT), so nothing to pre-seed.
 
     // Steer clips to the start frame (pauses non-active, plays the active one).
@@ -960,6 +1189,13 @@ export class Compositor {
     this.pausedT = sec;
     this.driveStickerVideos(sec, false);
     this.driveMusic(sec, false); // seek music to the scrub point, keep it paused
+
+    // A scrub landing inside a transition window needs BOTH sides parked, which
+    // the coalescing single-element path below can't express.
+    if (this.parkTransition(sec)) {
+      this.scrubNext = null;
+      return;
+    }
 
     const hit = this.hitAt(sec);
     const activeVideo = hit && hit.clip.kind === 'video' ? this.elOf(hit.clip) : null;

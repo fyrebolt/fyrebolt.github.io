@@ -10,6 +10,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { VideoClip } from './clips';
 import { clipLen, MIN_CLIP_LEN } from './clips';
+import { glyphOf, labelOf, maxDurationAt, transitionAt, MIN_TRANSITION_DUR } from './transitions';
 
 const CARD_W = 150; // px, fixed
 const CARD_GAP = 8; // px, must match the flex gap below
@@ -39,7 +40,16 @@ interface Props {
   onDuplicate: (id: string) => void;
   onTrim: (id: string, patch: { in?: number; out?: number }) => void;
   onAddClip: () => void;
+  /** Boundary index (== the INCOMING clip's index) whose transition is selected. */
+  selectedBoundary: number | null;
+  onSelectBoundary: (index: number) => void;
+  /** Live duration drag on a boundary chip (coalesced by the history like a trim). */
+  onTransitionDur: (index: number, dur: number) => void;
+  onRandomizeTransitions: () => void;
 }
+
+/** Pixels of horizontal drag per second of transition duration. */
+const DUR_PX_PER_SEC = 120;
 
 function fmt(sec: number): string {
   if (!isFinite(sec) || sec < 0) sec = 0;
@@ -62,10 +72,15 @@ export default function ClipStrip({
   onDuplicate,
   onTrim,
   onAddClip,
+  selectedBoundary,
+  onSelectBoundary,
+  onTransitionDur,
+  onRandomizeTransitions,
 }: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragDx, setDragDx] = useState(0);
   const drag = useRef<{ id: string; from: number; startX: number } | null>(null);
+  const durDrag = useRef<{ index: number; startX: number; orig: number; moved: boolean } | null>(null);
   const trim = useRef<{ id: string; edge: TrimEdge; startX: number; max: number; trackW: number; origIn: number; origOut: number } | null>(null);
 
   const total = useMemo(() => clips.reduce((s, c) => s + clipLen(c), 0), [clips]);
@@ -136,6 +151,36 @@ export default function ClipStrip({
     release(e);
   }, []);
 
+  // ---- boundary transition: click selects, horizontal drag sets the duration ----
+  const onBoundaryDown = useCallback(
+    (e: ReactPointerEvent, index: number) => {
+      e.preventDefault();
+      e.stopPropagation();
+      capture(e);
+      onSelectBoundary(index);
+      durDrag.current = { index, startX: e.clientX, orig: transitionAt(clips, index).duration, moved: false };
+    },
+    [clips, onSelectBoundary],
+  );
+  const onBoundaryMove = useCallback(
+    (e: ReactPointerEvent) => {
+      const d = durDrag.current;
+      if (!d) return;
+      const dx = e.clientX - d.startX;
+      if (!d.moved && Math.abs(dx) < 3) return; // let a plain click stay a click
+      d.moved = true;
+      // A boundary still set to Cut has duration 0; dragging it out starts from
+      // the minimum so the first pixel of drag produces a visible window.
+      const from = d.orig > 0 ? d.orig : MIN_TRANSITION_DUR;
+      onTransitionDur(d.index, from + dx / DUR_PX_PER_SEC);
+    },
+    [onTransitionDur],
+  );
+  const onBoundaryUp = useCallback((e: ReactPointerEvent) => {
+    durDrag.current = null;
+    release(e);
+  }, []);
+
   if (clips.length === 0) return null;
 
   return (
@@ -146,7 +191,30 @@ export default function ClipStrip({
         const outFrac = Math.max(0, Math.min(1, clip.out / max));
         const selected = clip.id === selectedClipId;
         const dragging = dragId === clip.id;
-        return (
+        const tr = i > 0 ? transitionAt(clips, i) : null;
+        const chip = tr ? (
+          <div
+            key={`b-${clip.id}`}
+            onPointerDown={(e) => onBoundaryDown(e, i)}
+            onPointerMove={onBoundaryMove}
+            onPointerUp={onBoundaryUp}
+            title={`${labelOf(tr.kind)}${tr.kind === 'cut' ? '' : ` · ${tr.duration.toFixed(2)}s`} — click to edit · drag sideways for the transition time (max ${maxDurationAt(clips, i).toFixed(1)}s)`}
+            className={`relative shrink-0 self-stretch w-7 rounded-md border flex flex-col items-center justify-center cursor-ew-resize touch-none select-none ${
+              selectedBoundary === i
+                ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]'
+                : 'border-[var(--color-glass-border)] bg-[var(--color-bg-elevated)] hover:border-[var(--color-primary-green)]'
+            }`}
+          >
+            <span className={`text-[13px] leading-none ${tr.kind === 'cut' ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-primary-green)]'}`}>
+              {glyphOf(tr.kind)}
+            </span>
+            {tr.kind !== 'cut' && (
+              <span className="mt-0.5 text-[8px] leading-none text-[var(--color-text-muted)]">{tr.duration.toFixed(1)}</span>
+            )}
+          </div>
+        ) : null;
+        return [
+          chip,
           <div
             key={clip.id}
             style={{
@@ -230,8 +298,8 @@ export default function ClipStrip({
               <span>#{i + 1}</span>
               <span>{fmt(clipLen(clip))}</span>
             </div>
-          </div>
-        );
+          </div>,
+        ];
       })}
 
       {/* add-clip tile */}
@@ -244,6 +312,18 @@ export default function ClipStrip({
         <span className="text-lg leading-none">＋</span>
         <span className="mt-0.5">Clip</span>
       </button>
+
+      {clips.length > 1 && (
+        <button
+          onClick={onRandomizeTransitions}
+          style={{ width: 64 }}
+          className="shrink-0 rounded-md border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-primary-green)] hover:text-[var(--color-primary-green)] flex flex-col items-center justify-center text-xs"
+          title="Roll a random transition onto every boundary"
+        >
+          <span className="text-lg leading-none">🎲</span>
+          <span className="mt-0.5">Random</span>
+        </button>
+      )}
 
       <div className="shrink-0 self-center pl-1 text-[10px] text-[var(--color-text-muted)]">
         {clips.length} clip{clips.length === 1 ? '' : 's'} · {fmt(total)}
