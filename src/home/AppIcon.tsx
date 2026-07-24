@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import Squircle from '../ios/Squircle';
+import AppGlyph from './AppGlyph';
 import type { HomeApp } from './apps';
 
 /**
@@ -51,9 +52,7 @@ export default function AppIcon({
           opacity: launching ? 0 : 1,
         }}
       >
-        <span className="app-icon-glyph" style={{ fontSize: size * 0.46 }}>
-          {app.glyph}
-        </span>
+        <AppGlyph app={app} size={size} />
       </Squircle>
       {showLabel && <span className="app-icon-label">{app.label}</span>}
     </button>
