@@ -12,6 +12,8 @@ export interface HomeApp {
   label: string;
   /** Emoji glyph drawn on the squircle icon. */
   glyph: string;
+  /** Optional built-in vector icon id (e.g. 'instagram'); overrides the emoji glyph. */
+  icon?: 'instagram';
   /** Real, bookmarkable route this icon opens (its own Vite entry point). */
   route: string;
   /** CSS gradient for the icon tile. */
@@ -57,6 +59,16 @@ export const APPS: HomeApp[] = [
     route: '/about/',
     gradient: 'linear-gradient(160deg, #ff9f6b 0%, #ff375f 100%)',
     blurb: 'Who I am, what I write, how to reach me.',
+  },
+  {
+    id: 'instagram',
+    label: 'Instagram',
+    glyph: '📸',
+    icon: 'instagram',
+    route: '/instagram/',
+    gradient:
+      'radial-gradient(circle at 30% 107%, #fdf497 0%, #fdf497 5%, #fd5949 45%, #d6249f 60%, #285aeb 90%)',
+    blurb: 'Track my follower count and daily follows/unfollows.',
   },
 ];
 

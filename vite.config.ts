@@ -27,6 +27,8 @@ export default defineConfig({
         printer: resolve(__dirname, 'printer/index.html'),
         // About Me (served at /about/)
         about: resolve(__dirname, 'about/index.html'),
+        // Instagram Tracker (served at /instagram/)
+        instagram: resolve(__dirname, 'instagram/index.html'),
       },
     },
   },
