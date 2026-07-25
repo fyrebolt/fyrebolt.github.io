@@ -8,7 +8,7 @@ import type { FillMode, RatioKey } from '../types';
  * authoring cadence, distinct from the compositor's 60 fps CAPTURE rate: it
  * matches typical source footage so a single step lands on a source frame.
  */
-export const TIMELINE_FPS = 30;
+const TIMELINE_FPS = 30;
 /** One editing frame, in seconds. */
 export const FRAME_SEC = 1 / TIMELINE_FPS;
 

@@ -74,7 +74,7 @@ import {
 import type { ColorGrade } from './project/grade';
 import { NEUTRAL_GRADE } from './project/grade';
 import { compileWarp, bannerBlockedSpans, fitBannerFreeze, fitBannerHold } from './project/timeMap';
-import { Panel, Field, ChoiceGrid } from './project/ui';
+import { Panel, Field, ChoiceGrid, Slider } from './project/ui';
 import { RATIO_LABELS, FILL_MODES, FRAME_SEC } from './project/constants';
 import CaptionPanel from './project/panels/CaptionPanel';
 import BannerPanel from './project/panels/BannerPanel';
@@ -111,6 +111,12 @@ import {
 } from './project/persist';
 import { hashBlob, makeThumb } from './project/thumbnail';
 import LibraryBrowser from './project/LibraryBrowser';
+
+/** A fresh `prefix-…` id. One generator for every id minted in the editor
+ *  (clips, clip sources, sticker/music media, layer + element clones). */
+function freshId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
 
 /** First non-overlapping gap of ≥0.6s among dramatic layers, else null. */
 function findDramaticGap(spans: Span[], total: number, want: number): { start: number; duration: number } | null {
@@ -308,7 +314,6 @@ export default function VideoEditor() {
   const [downloadName, setDownloadName] = useState('camera.mp4');
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
   const compRef = useRef<Compositor | null>(null);
   const projectRef = useRef<Project>({ clips: [], layers: [], ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration, grade: NEUTRAL_GRADE });
   const objectUrls = useRef<string[]>([]);
@@ -358,6 +363,15 @@ export default function VideoEditor() {
   const duration = useMemo(() => baseDuration(clips), [clips]);
   // Output sizing reference = the first clip's native dimensions.
   const srcDims = useMemo(() => (clips[0] ? { w: clips[0].w, h: clips[0].h } : { w: 0, h: 0 }), [clips]);
+
+  // The output frame size, derived once. Memoised because it feeds the placeable-box
+  // measurement below, which re-measures every text layer against an offscreen
+  // canvas — a fresh object each render would redo that work on every keystroke.
+  // With no clip loaded we still size a nominal 1080×1920 source through the ratio.
+  const out = useMemo(
+    () => (srcDims.w > 0 ? outputSizeFor(ratio, srcDims.w, srcDims.h) : outputSizeFor(ratio, 1080, 1920)),
+    [ratio, srcDims.w, srcDims.h],
+  );
 
   const zoom = zoomLayer(project);
   const timeMachine = timeMachineLayer(project);
@@ -578,7 +592,7 @@ export default function VideoEditor() {
         if (await libraryEntryByHash(hash)) return; // same file already saved — reuse it
         const thumb = await makeThumb(media, blob);
         await addToLibrary({
-          id: `lib-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          id: freshId('lib'),
           name: name || 'Asset',
           media,
           type: blob.type || 'application/octet-stream',
@@ -596,11 +610,6 @@ export default function VideoEditor() {
   );
 
   // ---- media load (append a clip to the base sequence) ----
-  const clipSrcId = useCallback(
-    () => `clipsrc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-    [],
-  );
-
   // Decode a clip source (video / image) from a blob and append it to the base
   // sequence, under a FRESH srcId. No library side effects — reused both by a new
   // upload (onFile) and by inserting a copy from the asset library.
@@ -633,7 +642,7 @@ export default function VideoEditor() {
         // Paint the opening frame as soon as it decodes (metadata alone isn't enough).
         video.addEventListener('loadeddata', () => compRef.current?.renderStatic(), { once: true });
         video.addEventListener('loadedmetadata', () => {
-          const srcId = clipSrcId();
+          const srcId = freshId('clipsrc');
           clipMedia.current.set(srcId, video);
           clipBlobs.current.set(srcId, blob);
           append(
@@ -650,7 +659,7 @@ export default function VideoEditor() {
       } else if (blob.type.startsWith('image')) {
         const image = new Image();
         image.onload = () => {
-          const srcId = clipSrcId();
+          const srcId = freshId('clipsrc');
           clipMedia.current.set(srcId, image);
           clipBlobs.current.set(srcId, blob);
           append(
@@ -663,7 +672,7 @@ export default function VideoEditor() {
         image.src = url;
       }
     },
-    [imageDuration, sealDiscrete, clipSrcId],
+    [imageDuration, sealDiscrete],
   );
 
   const onFile = useCallback(
@@ -859,7 +868,7 @@ export default function VideoEditor() {
     (src: VideoClip): VideoClip | null => {
       const blob = clipBlobs.current.get(src.srcId);
       if (!blob) return null;
-      const newSrcId = clipSrcId();
+      const newSrcId = freshId('clipsrc');
       const url = URL.createObjectURL(blob);
       objectUrls.current.push(url);
       if (src.kind === 'video') {
@@ -877,10 +886,9 @@ export default function VideoEditor() {
         clipMedia.current.set(newSrcId, img);
       }
       clipBlobs.current.set(newSrcId, blob);
-      const freshId = `clip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-      return { ...structuredClone(src), id: freshId, srcId: newSrcId };
+      return { ...structuredClone(src), id: freshId('clip'), srcId: newSrcId };
     },
-    [clipSrcId],
+    [],
   );
 
   /** Insert a copy of `src` right after `afterId` (or at the end), and select it. */
@@ -1004,8 +1012,7 @@ export default function VideoEditor() {
       }
       sealDiscrete();
       const z = nextZ(projectRef.current);
-      const outSize = srcDims.w > 0 ? outputSizeFor(ratio, srcDims.w, srcDims.h) : outputSizeFor(ratio, 1080, 1920);
-      const outAR = outSize.w / outSize.h;
+      const outAR = out.w / out.h;
 
       if (kind === 'banner') {
         // Multi-instance: every "+" adds an independent banner. Default its freeze
@@ -1139,25 +1146,24 @@ export default function VideoEditor() {
       setSelectedAttachmentId(null);
       seekTo(midOfCaption(layer.el));
     },
-    [mediaKind, duration, ratio, srcDims, timelineDuration, currentSec, staggerStart, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime, sealDiscrete, boilPool, normalize],
+    [mediaKind, duration, out, timelineDuration, currentSec, staggerStart, clearZoomEdit, seekTo, midOfCaption, bannerPreviewTime, sealDiscrete, boilPool, normalize],
   );
 
   /** Fit a source-aspect box into ~40% of the frame, centred (out-normalised). */
   const fitStickerBox = useCallback(
     (srcW: number, srcH: number) => {
-      const outSize = srcDims.w > 0 ? outputSizeFor(ratio, srcDims.w, srcDims.h) : outputSizeFor(ratio, 1080, 1920);
       const aspect = srcH > 0 ? srcW / srcH : 1;
-      let wPx = 0.4 * outSize.w;
+      let wPx = 0.4 * out.w;
       let hPx = wPx / aspect;
-      if (hPx > 0.4 * outSize.h) {
-        hPx = 0.4 * outSize.h;
+      if (hPx > 0.4 * out.h) {
+        hPx = 0.4 * out.h;
         wPx = hPx * aspect;
       }
-      const w = wPx / outSize.w;
-      const h = hPx / outSize.h;
+      const w = wPx / out.w;
+      const h = hPx / out.h;
       return { x: 0.5 - w / 2, y: 0.5 - h / 2, w, h };
     },
-    [ratio, srcDims.w, srcDims.h],
+    [out],
   );
 
   /** Register decoded sticker media and add its layer, placed + timed. */
@@ -1187,7 +1193,7 @@ export default function VideoEditor() {
     (blob: Blob, source: 'image' | 'video') => {
       const url = URL.createObjectURL(blob);
       objectUrls.current.push(url);
-      const srcId = `stkmedia-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      const srcId = freshId('stkmedia');
       stickerBlobs.current.set(srcId, blob);
       if (source === 'image') {
         const img = new Image();
@@ -1250,7 +1256,7 @@ export default function VideoEditor() {
     (blob: Blob, name: string) => {
       const url = URL.createObjectURL(blob);
       objectUrls.current.push(url);
-      const srcId = `musmedia-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      const srcId = freshId('musmedia');
       musicBlobs.current.set(srcId, blob);
       const a = new Audio();
       a.src = url;
@@ -1513,7 +1519,6 @@ export default function VideoEditor() {
         setStatus('Zoom and Time Machine are single-track — add another keyframe/point with “+” instead.');
         return;
       }
-      const freshId = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
       if (layer.kind === 'banner') {
         // Banners are multi-instance but their freeze+hold windows must not overlap —
         // drop the copy at the next clear spot after everything currently placed.
@@ -2437,7 +2442,6 @@ export default function VideoEditor() {
     }
   }, []);
 
-  const out = srcDims.w > 0 ? outputSizeFor(ratio, srcDims.w, srcDims.h) : { w: 1080, h: 1920 };
   const selectedZoomRect =
     editingZoom && selectedLayer?.kind === 'zoom' ? selectedLayer.keyframes.find((k) => k.id === selectedZoomKfId)?.rect ?? null : null;
 
@@ -2450,8 +2454,7 @@ export default function VideoEditor() {
       if (b) m[l.id] = b;
     }
     return m;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layers, project, out.w, out.h, currentSec]);
+  }, [layers, out, currentSec]);
   const selBox = selectedLayer && isPlaceable(selectedLayer) ? placeableBoxes[selectedLayer.id] ?? null : null;
   const otherBoxes = useMemo(
     () => Object.entries(placeableBoxes).filter(([id]) => id !== selectedLayerId).map(([, b]) => b),
@@ -2581,12 +2584,13 @@ export default function VideoEditor() {
           const pos = { x: it.x + dx, y: it.y + dy };
           if (layer.kind === 'sketch') updateSketchEl(it.id, pos);
           else if (layer.kind === 'highlighter') updateHighlighterEl(it.id, pos);
+          else if (layer.kind === 'sticker') updateStickerEl(it.id, pos);
           else if (layer.kind === 'caption') updateCaptionEl(it.id, pos);
           else updateDramaticEl(it.id, pos);
         }
       }
     },
-    [normFromPointer, groupBox, effectiveGuides, otherBoxes, layers, updateSketchEl, updateHighlighterEl, updateCaptionEl, updateDramaticEl],
+    [normFromPointer, groupBox, effectiveGuides, otherBoxes, layers, updateSketchEl, updateHighlighterEl, updateStickerEl, updateCaptionEl, updateDramaticEl],
   );
 
   const onCanvasPointerUp = useCallback(
@@ -2811,7 +2815,6 @@ export default function VideoEditor() {
 
               <div className="glass-card p-3">
                 <div
-                  ref={wrapRef}
                   className="relative mx-auto max-w-[420px]"
                   onDragOver={onDragOverFiles}
                   onDragLeave={() => setDragOver(false)}
@@ -3460,9 +3463,7 @@ export default function VideoEditor() {
                   Enable (banner slash, caption riffle/keys, zoom whoosh, sketch pencil)
                 </label>
                 {sfxEnabled && (
-                  <Field label={`SFX volume — ${Math.round(sfxVolume * 100)}%`}>
-                    <input type="range" min={0} max={1} step={0.05} value={sfxVolume} onChange={(e) => setSfxVolume(Number(e.target.value))} className="w-full accent-[var(--color-primary-green)]" />
-                  </Field>
+                  <Slider label={`SFX volume — ${Math.round(sfxVolume * 100)}%`} min={0} max={1} step={0.05} value={sfxVolume} onChange={setSfxVolume} />
                 )}
               </Panel>
             </aside>

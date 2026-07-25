@@ -20,6 +20,41 @@ export function Field({ label, children }: { label: string; children: ReactNode 
   );
 }
 
+/** A labelled range input — the editor's most-repeated control. */
+export function Slider({
+  label,
+  min,
+  max,
+  step,
+  value,
+  hint,
+  onChange,
+}: {
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  /** Optional note rendered under the track. */
+  hint?: string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <Field label={label}>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full accent-[var(--color-primary-green)]"
+      />
+      {hint && <p className="text-[10px] text-[var(--color-text-muted)] mt-1">{hint}</p>}
+    </Field>
+  );
+}
+
 export function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
     <label className="text-xs text-[var(--color-text-secondary)]">

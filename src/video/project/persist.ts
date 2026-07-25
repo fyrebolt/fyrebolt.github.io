@@ -100,17 +100,6 @@ export async function saveMedia(entry: MediaEntry): Promise<void> {
   }
 }
 
-/** srcIds already present in the media store (to skip re-writing big blobs). */
-export async function persistedMediaIds(): Promise<Set<string>> {
-  const db = await openDB();
-  try {
-    const keys = await tx<IDBValidKey[]>(db, MEDIA_STORE, 'readonly', (s) => s.getAllKeys());
-    return new Set(keys.map(String));
-  } finally {
-    db.close();
-  }
-}
-
 /** Drop media entries whose srcId is no longer referenced by the project. */
 export async function pruneMedia(keep: Set<string>): Promise<void> {
   const db = await openDB();

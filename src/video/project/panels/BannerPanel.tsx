@@ -2,7 +2,7 @@
 // Ported from the classic EntranceBannerTool controls; timings are in SECONDS
 // (the unified timeline's unit) rather than the classic tool's milliseconds.
 
-import { Field, ColorField, Toggle } from '../ui';
+import { ColorField, Field, Slider, Toggle } from '../ui';
 import type { BannerPosition, BannerStyle } from '../../types';
 import type { BannerLayer } from '../types';
 
@@ -23,12 +23,8 @@ interface Props {
   onRemove: () => void;
 }
 
-function SecSlider({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void }) {
-  return (
-    <Field label={`${label} — ${value.toFixed(2)}s`}>
-      <input type="range" value={value} min={min} max={max} step={step} onChange={(e) => onChange(Number(e.target.value))} className="w-full accent-[var(--color-primary-green)]" />
-    </Field>
-  );
+function SecSlider(p: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void }) {
+  return <Slider {...p} label={`${p.label} — ${p.value.toFixed(2)}s`} />;
 }
 
 export default function BannerPanel({ layer, duration, conflict, onEdit, onEditStyle, onRemove }: Props) {

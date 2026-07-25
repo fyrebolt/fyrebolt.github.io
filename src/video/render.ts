@@ -14,10 +14,6 @@ import { geometryFor, sampleAt, sketchProgress, totalArc } from './sketch/types'
 
 // ---- easing ----
 
-export function easeOutCubic(x: number): number {
-  return 1 - Math.pow(1 - x, 3);
-}
-
 /** Ease-out with a slight overshoot past the target — gives the banner its snap. */
 export function easeOutBack(x: number): number {
   const c1 = 1.70158;
@@ -33,7 +29,7 @@ export function easeInCubic(x: number): number {
 // ---- colour helpers ----
 
 /** Multiply an #rrggbb colour toward white (f>1) or black (f<1). */
-export function shade(hex: string, f: number): string {
+function shade(hex: string, f: number): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!m) return hex;
   const n = parseInt(m[1], 16);
@@ -47,7 +43,7 @@ export function shade(hex: string, f: number): string {
 // ---- output sizing ----
 
 /** Long-edge cap (4K). Keeps the in-browser encoder within sane time/memory. */
-export const RES_CAP = 3840;
+const RES_CAP = 3840;
 
 const even = (v: number) => Math.max(2, Math.round(v / 2) * 2);
 
@@ -548,7 +544,7 @@ const CAPTION_BASE_FRAC = 0.055; // base font size as a fraction of frame height
 const CAPTION_MAX_WIDTH_FRAC = 0.86; // wrap width relative to frame width
 
 /** Wrap `text` to `maxWidth`, respecting manual line breaks. ctx.font must be set. */
-export function layoutCaptionLines(
+function layoutCaptionLines(
   ctx: CanvasRenderingContext2D,
   text: string,
   maxWidth: number,
@@ -807,7 +803,7 @@ interface WordBoxes {
  * text is drawn (same wrap, alignment and font). Word indices run in reading
  * order across lines — the space attachments select over.
  */
-export function captionWordBoxes(
+function captionWordBoxes(
   ctx: CanvasRenderingContext2D,
   out: OutputSize,
   cap: CaptionTextStyle,
@@ -1228,7 +1224,7 @@ export interface SketchArea {
 }
 
 /** Contain-fit a `padAspect` (w/h) region centred inside `area`, so the sketch never distorts. */
-export function sketchFitBox(area: SketchArea, padAspect: number): { ox: number; oy: number; fw: number; fh: number } {
+function sketchFitBox(area: SketchArea, padAspect: number): { ox: number; oy: number; fw: number; fh: number } {
   const areaAR = area.w / Math.max(1e-6, area.h);
   let fw: number;
   let fh: number;

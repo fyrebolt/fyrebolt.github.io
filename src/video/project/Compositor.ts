@@ -110,13 +110,6 @@ export type MediaKind = 'video' | 'image';
 /** A decoded clip media element resolved from the registry. */
 export type ClipEl = HTMLVideoElement | HTMLImageElement;
 
-export interface CaptionBounds {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
 /** Per-video-clip audio nodes, built lazily for export (see ensureClipAudio). */
 interface ClipAudio {
   node: MediaElementAudioSourceNode;
@@ -1338,26 +1331,6 @@ export class Compositor {
       return { left: L.left, top: L.top, width: L.blockW, height: L.blockH, rotation: layer.el.rotation, pad: L.size * 0.25 };
     }
     return null;
-  }
-
-  /** Placement box (top-left + size) of any placeable overlay in output-NORMALISED coords. */
-  boundsOf(layerId: string): { x: number; y: number; w: number; h: number } | null {
-    const b = this.boundsPx(layerId);
-    if (!b) return null;
-    return { x: b.left / this.out.w, y: b.top / this.out.h, w: b.width / this.out.w, h: b.height / this.out.h };
-  }
-
-  boundsOfCaption(layerId: string): CaptionBounds | null {
-    if (!this.loaded) return null;
-    const p = this.getProject();
-    const layer = p.layers.find((l) => l.id === layerId);
-    if (!layer || layer.kind !== 'caption') return null;
-    const el = layer.el;
-    const outputT = this.currentTimeSec();
-    const font = this.fontFor(el, outputT);
-    const L = measureCaption(this.ctx, this.out, el, font, el.kind === 'boil' && el.normalize);
-    const pad = L.sizePx * 0.25;
-    return { left: L.left - pad, top: L.top - pad, width: L.blockW + pad * 2, height: L.blockH + pad * 2 };
   }
 
   // ---- lifecycle ----

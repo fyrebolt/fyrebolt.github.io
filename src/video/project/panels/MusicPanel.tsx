@@ -7,7 +7,7 @@
 // mute the base clips use — one curve mechanism, no second implementation. The
 // curve time runs across the placed duration (placement-local output seconds).
 
-import { Field, Toggle } from '../ui';
+import { Slider, Toggle } from '../ui';
 import VolumeCurveEditor from './VolumeCurveEditor';
 import type { MusicElement } from '../../music/types';
 import { segLen } from '../../music/types';
@@ -34,48 +34,33 @@ export default function MusicPanel({ el, onEdit }: Props) {
 
       {/* Source trim (in / out within the file). */}
       <div className="grid grid-cols-2 gap-3">
-        <Field label={`Trim in — ${fmt(el.in)}`}>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(0, src - MIN_CLIP_LEN)}
-            step={0.05}
-            value={el.in}
-            onChange={(e) => {
-              const inP = Math.min(Number(e.target.value), el.out - MIN_CLIP_LEN);
-              onEdit({ in: Math.max(0, inP) });
-            }}
-            className="w-full accent-[var(--color-primary-green)]"
-          />
-        </Field>
-        <Field label={`Trim out — ${fmt(el.out)}`}>
-          <input
-            type="range"
-            min={MIN_CLIP_LEN}
-            max={src}
-            step={0.05}
-            value={el.out}
-            onChange={(e) => {
-              const outP = Math.max(Number(e.target.value), el.in + MIN_CLIP_LEN);
-              onEdit({ out: Math.min(src, outP) });
-            }}
-            className="w-full accent-[var(--color-primary-green)]"
-          />
-        </Field>
+        <Slider
+          label={`Trim in — ${fmt(el.in)}`}
+          min={0}
+          max={Math.max(0, src - MIN_CLIP_LEN)}
+          step={0.05}
+          value={el.in}
+          onChange={(v) => onEdit({ in: Math.max(0, Math.min(v, el.out - MIN_CLIP_LEN)) })}
+        />
+        <Slider
+          label={`Trim out — ${fmt(el.out)}`}
+          min={MIN_CLIP_LEN}
+          max={src}
+          step={0.05}
+          value={el.out}
+          onChange={(v) => onEdit({ out: Math.min(src, Math.max(v, el.in + MIN_CLIP_LEN)) })}
+        />
       </div>
 
       {/* Placed duration on the timeline. */}
-      <Field label={`Track length on timeline — ${fmt(el.dur)}`}>
-        <input
-          type="range"
-          min={MIN_CLIP_LEN}
-          max={Math.max(seg, 120)}
-          step={0.1}
-          value={el.dur}
-          onChange={(e) => onEdit({ dur: Math.max(MIN_CLIP_LEN, Number(e.target.value)) })}
-          className="w-full accent-[var(--color-primary-green)]"
-        />
-      </Field>
+      <Slider
+        label={`Track length on timeline — ${fmt(el.dur)}`}
+        min={MIN_CLIP_LEN}
+        max={Math.max(seg, 120)}
+        step={0.1}
+        value={el.dur}
+        onChange={(v) => onEdit({ dur: Math.max(MIN_CLIP_LEN, v) })}
+      />
 
       <Toggle
         label="Loop to fill"

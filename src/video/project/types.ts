@@ -51,7 +51,6 @@ import { createSticker, elementEnd as stickerEnd } from '../sticker/types';
 import type { MusicElement, MusicSeed } from '../music/types';
 import { createMusic, elementEnd as musicEnd } from '../music/types';
 import type { VideoClip } from './clips';
-import { baseDuration } from './clips';
 import type { ColorGrade } from './grade';
 
 export interface LayerBase {
@@ -168,17 +167,6 @@ export interface Project {
 }
 
 // ---- classification helpers ----
-
-/** Total base-sequence duration (sum of trimmed clip lengths), in seconds. */
-export function projectBaseDuration(p: Project): number {
-  return baseDuration(p.clips);
-}
-
-/** The media kind of the sequence: 'video' if any clip is video, else 'image', else null. */
-export function projectMediaKind(p: Project): 'video' | 'image' | null {
-  if (p.clips.length === 0) return null;
-  return p.clips.some((c) => c.kind === 'video') ? 'video' : 'image';
-}
 
 /** Every banner layer, in paint order (banners are multi-instance). */
 export function bannerLayers(p: Project): BannerLayer[] {

@@ -68,7 +68,7 @@ export interface SnapEnv {
 }
 
 /** Snap threshold in normalised units (~1.8% of the frame). */
-export const SNAP_T = 0.018;
+const SNAP_T = 0.018;
 
 interface Candidate {
   src: number; // a control point on the moving box (min / mid / max)
@@ -250,49 +250,6 @@ export function snapResizeFree(box: Box, edges: Edges, env: SnapEnv): { box: Box
   }
 
   return { box: { x: left, y: top, w: right - left, h: bottom - top }, guides };
-}
-
-/**
- * Snap a scale factor for aspect-locked / uniform-scale resize. The box grows or
- * shrinks about a fixed anchor corner; we snap the *moving* corner to borders and
- * object lines, and to full width/height when fit toggles are on. Returns the
- * chosen uniform scale multiplier applied to the original box, plus guides.
- */
-export function snapUniformScale(
-  orig: Box,
-  anchor: { x: number; y: number },
-  scale: number,
-  env: SnapEnv,
-): { scale: number; guides: Guide[] } {
-  const guides: Guide[] = [];
-  // The moving corner is the one diagonally opposite the anchor.
-  const movingX = anchor.x === orig.x ? orig.x + orig.w : orig.x;
-  const movingY = anchor.y === orig.y ? orig.y + orig.h : orig.y;
-  const dirX = movingX - anchor.x; // signed distance from anchor at scale=1
-  const dirY = movingY - anchor.y;
-
-  let best = scale;
-  let bestD = SNAP_T;
-  const consider = (targetVal: number, dir: number, base: number, axis: 'x' | 'y', kind: Guide['kind']) => {
-    if (Math.abs(dir) < 1e-6) return;
-    const s = (targetVal - base) / dir; // scale that lands the moving corner on targetVal
-    if (s <= 0.05) return;
-    const landed = base + dir * scale;
-    const d = Math.abs(landed - targetVal);
-    if (d < bestD) {
-      bestD = d;
-      best = s;
-      guides.length = 0;
-      guides.push({ axis, at: targetVal, kind });
-    }
-  };
-
-  const lx = axisLines(env, 'x');
-  for (const l of lx) if (l.kind !== 'center' && l.kind !== 'cursor') consider(l.tgt, dirX, anchor.x, 'x', l.kind);
-  const ly = axisLines(env, 'y');
-  for (const l of ly) if (l.kind !== 'center' && l.kind !== 'cursor') consider(l.tgt, dirY, anchor.y, 'y', l.kind);
-
-  return { scale: best, guides };
 }
 
 // ===== Temporal (timeline) snapping — the time-domain twin of the spatial locks =====
