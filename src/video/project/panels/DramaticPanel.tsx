@@ -4,7 +4,7 @@
 // is set by dragging the word on the preview (caption-style). Words never
 // overlap in time — the timeline drag clamps to neighbours.
 
-import { Field } from '../ui';
+import { Field, Slider } from '../ui';
 import type { WordMode } from '../../dramatic/types';
 import type { DramaticLayer } from '../types';
 
@@ -67,34 +67,26 @@ export default function DramaticPanel({ layer, duration, onEdit, onRemove }: Pro
             />
           </Field>
         )}
-        <Field
+        <Slider
           label={`${w.mode === 'inverse' ? 'Dim' : w.mode === 'reflection' ? 'Inversion strength' : 'Word'} ${
             w.mode === 'reflection' ? '' : 'opacity '
           }— ${Math.round(w.opacity * 100)}%`}
-        >
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={w.opacity}
-            onChange={(e) => onEdit({ opacity: Number(e.target.value) })}
-            className="w-full accent-[var(--color-primary-green)]"
-          />
-        </Field>
+          min={0}
+          max={1}
+          step={0.05}
+          value={w.opacity}
+          onChange={(v) => onEdit({ opacity: v })}
+        />
       </div>
 
-      <Field label={`Size — ${w.sizeScale.toFixed(1)}×`}>
-        <input
-          type="range"
-          min={0.4}
-          max={2.5}
-          step={0.1}
-          value={w.sizeScale}
-          onChange={(e) => onEdit({ sizeScale: Number(e.target.value) })}
-          className="w-full accent-[var(--color-primary-green)]"
-        />
-      </Field>
+      <Slider
+        label={`Size — ${w.sizeScale.toFixed(1)}×`}
+        min={0.4}
+        max={2.5}
+        step={0.1}
+        value={w.sizeScale}
+        onChange={(v) => onEdit({ sizeScale: v })}
+      />
 
       <div className="grid grid-cols-2 gap-3">
         <Field label={`Start — ${round2(w.start)}s`}>

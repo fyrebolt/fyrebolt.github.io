@@ -264,7 +264,7 @@ export function staticWindowOf(el: CaptionEl): { start: number; end: number } | 
 }
 
 /** Smooth acceleration/deceleration for the sweep ends. */
-export function easeInOutCubic(x: number): number {
+function easeInOutCubic(x: number): number {
   return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 }
 

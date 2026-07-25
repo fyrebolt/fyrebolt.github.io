@@ -2,7 +2,7 @@
 // Ported from the classic HighlighterTool controls. Placement is on-canvas (the
 // HighlightRectEditor); this panel owns colour / opacity / size / sweep timing.
 
-import { Field } from '../ui';
+import { Field, Slider } from '../ui';
 import type { HighlighterLayer } from '../types';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -33,42 +33,33 @@ export default function HighlighterPanel({ layer, duration, onEdit, onRemove }: 
             className="w-full h-9 rounded-md bg-transparent border border-[var(--color-glass-border)] p-0.5"
           />
         </Field>
-        <Field label={`Opacity — ${Math.round(h.opacity * 100)}%`}>
-          <input
-            type="range"
-            min={0.05}
-            max={1}
-            step={0.05}
-            value={h.opacity}
-            onChange={(e) => onEdit({ opacity: Number(e.target.value) })}
-            className="w-full accent-[var(--color-primary-green)]"
-          />
-        </Field>
+        <Slider
+          label={`Opacity — ${Math.round(h.opacity * 100)}%`}
+          min={0.05}
+          max={1}
+          step={0.05}
+          value={h.opacity}
+          onChange={(v) => onEdit({ opacity: v })}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label={`Width — ${Math.round(h.w * 100)}%`}>
-          <input
-            type="range"
-            min={0.02}
-            max={1}
-            step={0.01}
-            value={h.w}
-            onChange={(e) => onEdit({ w: Math.min(Number(e.target.value), 1 - h.x) })}
-            className="w-full accent-[var(--color-primary-green)]"
-          />
-        </Field>
-        <Field label={`Height — ${Math.round(h.h * 100)}%`}>
-          <input
-            type="range"
-            min={0.02}
-            max={1}
-            step={0.01}
-            value={h.h}
-            onChange={(e) => onEdit({ h: Math.min(Number(e.target.value), 1 - h.y) })}
-            className="w-full accent-[var(--color-primary-green)]"
-          />
-        </Field>
+        <Slider
+          label={`Width — ${Math.round(h.w * 100)}%`}
+          min={0.02}
+          max={1}
+          step={0.01}
+          value={h.w}
+          onChange={(v) => onEdit({ w: Math.min(v, 1 - h.x) })}
+        />
+        <Slider
+          label={`Height — ${Math.round(h.h * 100)}%`}
+          min={0.02}
+          max={1}
+          step={0.01}
+          value={h.h}
+          onChange={(v) => onEdit({ h: Math.min(v, 1 - h.y) })}
+        />
       </div>
 
       <Field label={`Duration — ${round2(h.duration)}s`}>

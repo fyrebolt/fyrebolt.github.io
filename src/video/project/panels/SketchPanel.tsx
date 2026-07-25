@@ -3,7 +3,7 @@
 // layer IS the drawing: the pad stays editable (draw / undo / clear strokes),
 // placement happens via the on-canvas SketchRectEditor, and timing lives here.
 
-import { Field } from '../ui';
+import { Field, Slider } from '../ui';
 import SketchPad from '../../sketch/SketchPad';
 import type { SketchStroke } from '../../sketch/types';
 import type { SketchLayer } from '../types';
@@ -83,30 +83,24 @@ export default function SketchPanel({
               className="w-full h-9 rounded-md bg-transparent border border-[var(--color-glass-border)] p-0.5"
             />
           </Field>
-          <Field label={`Pen width — ${Math.round(pen.width * 1000)}`}>
-            <input
-              type="range"
-              min={0.006}
-              max={0.06}
-              step={0.002}
-              value={pen.width}
-              onChange={(e) => onPen({ width: Number(e.target.value) })}
-              className="w-full accent-[var(--color-primary-green)]"
-            />
-          </Field>
-        </div>
-        <Field label={`Pixelated ↔ Smooth — ${Math.round(pen.smoothness * 100)}%`}>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={pen.smoothness}
-            onChange={(e) => onPen({ smoothness: Number(e.target.value) })}
-            className="w-full accent-[var(--color-primary-green)]"
+          <Slider
+            label={`Pen width — ${Math.round(pen.width * 1000)}`}
+            min={0.006}
+            max={0.06}
+            step={0.002}
+            value={pen.width}
+            onChange={(v) => onPen({ width: v })}
           />
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-1">Applies to the next stroke — each stroke keeps its own style.</p>
-        </Field>
+        </div>
+        <Slider
+          label={`Pixelated ↔ Smooth — ${Math.round(pen.smoothness * 100)}%`}
+          min={0}
+          max={1}
+          step={0.01}
+          value={pen.smoothness}
+          hint="Applies to the next stroke — each stroke keeps its own style."
+          onChange={(v) => onPen({ smoothness: v })}
+        />
       </div>
 
       <div className="pt-3 border-t border-[var(--color-glass-border)] space-y-4">

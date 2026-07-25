@@ -37,13 +37,13 @@ export interface FreezeSpec {
   hold: number;
 }
 
-export function freezeSpecOf(banner: BannerLayer | null): FreezeSpec | null {
+function freezeSpecOf(banner: BannerLayer | null): FreezeSpec | null {
   if (!banner || banner.hold <= 0) return null;
   return { freeze: Math.max(0, banner.freeze), hold: Math.max(0, banner.hold) };
 }
 
 /** Every banner's freeze span, sorted by freeze source-second (holds skipped). */
-export function freezeSpecsOf(banners: BannerLayer[]): FreezeSpec[] {
+function freezeSpecsOf(banners: BannerLayer[]): FreezeSpec[] {
   return banners
     .map((b) => freezeSpecOf(b))
     .filter((s): s is FreezeSpec => s !== null)
@@ -234,7 +234,7 @@ export function crossedLock(banner: BannerLayer, prevT: number, curT: number): b
 const SPEED_OFF = 1e-3;
 
 /** Merge a set of spans into sorted, non-overlapping intervals. */
-export function mergeSpans(spans: Span[]): Span[] {
+function mergeSpans(spans: Span[]): Span[] {
   const sorted = spans.filter((s) => s.end > s.start + 1e-9).sort((a, b) => a.start - b.start);
   const out: Span[] = [];
   for (const s of sorted) {
@@ -246,7 +246,7 @@ export function mergeSpans(spans: Span[]): Span[] {
 }
 
 /** Output-second spans where the Time Machine speed curve is not ~1× (a warp). */
-export function timeMachineWarpSpans(tm: TimeMachineLayer | null): Span[] {
+function timeMachineWarpSpans(tm: TimeMachineLayer | null): Span[] {
   if (!tm || tm.points.length === 0) return [];
   const pts = sortedSpeeds(tm.points);
   const off = (s: number): boolean => Math.abs(s - NORMAL_SPEED) > SPEED_OFF;
@@ -263,7 +263,7 @@ export function timeMachineWarpSpans(tm: TimeMachineLayer | null): Span[] {
 }
 
 /** The freeze+hold window [freeze, freeze+hold] of a banner, in timeline seconds. */
-export function bannerWindow(b: BannerLayer): Span {
+function bannerWindow(b: BannerLayer): Span {
   const freeze = Math.max(0, b.freeze);
   return { start: freeze, end: freeze + Math.max(0, b.hold) };
 }

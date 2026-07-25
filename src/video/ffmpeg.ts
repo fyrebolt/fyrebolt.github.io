@@ -34,10 +34,6 @@ export async function ensureFFmpeg(): Promise<FFmpeg> {
   return loadPromise;
 }
 
-export function isFFmpegLoaded(): boolean {
-  return ffmpeg !== null;
-}
-
 /**
  * Transcode a recorded WebM blob to an H.264/AAC MP4 that uploads cleanly to
  * Shorts / Reels / TikTok. `onProgress` reports 0..1 during encoding.

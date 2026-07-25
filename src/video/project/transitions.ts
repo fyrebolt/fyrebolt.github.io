@@ -53,12 +53,12 @@ export interface Transition {
   sfx?: boolean;
 }
 
-export const DEFAULT_TRANSITION_DUR = 0.5;
+const DEFAULT_TRANSITION_DUR = 0.5;
 export const MIN_TRANSITION_DUR = 0.1;
-export const MAX_TRANSITION_DUR = 2;
+const MAX_TRANSITION_DUR = 2;
 
 /** The default a boundary has until it is edited: today's hard cut. */
-export const CUT: Transition = { kind: 'cut', duration: 0 };
+const CUT: Transition = { kind: 'cut', duration: 0 };
 
 /** Kinds that show BOTH clips at once (need a real overlap + an audio crossfade). */
 const OVERLAPPING: ReadonlySet<TransitionKind> = new Set<TransitionKind>([
@@ -75,7 +75,7 @@ export function isOverlapping(kind: TransitionKind): boolean {
 }
 
 /** Kinds that occupy a window at all (everything except the instant cut). */
-export function hasWindow(tr: Transition): boolean {
+function hasWindow(tr: Transition): boolean {
   return tr.kind !== 'cut' && tr.duration > 1e-3;
 }
 
@@ -253,7 +253,7 @@ function pick<T>(arr: T[]): T {
 }
 
 /** A fresh random transition for boundary `index` (never a cut). */
-export function randomTransition(clips: VideoClip[], index: number): Transition {
+function randomTransition(clips: VideoClip[], index: number): Transition {
   const kind = pick(RANDOM_KINDS);
   const dur = clampDuration(clips, index, 0.3 + Math.random() * 0.5);
   const tr: Transition = { kind, duration: dur };

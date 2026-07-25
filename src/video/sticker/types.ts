@@ -29,7 +29,7 @@ export interface CropRect {
   h: number;
 }
 
-export const FULL_CROP: CropRect = { x: 0, y: 0, w: 1, h: 1 };
+const FULL_CROP: CropRect = { x: 0, y: 0, w: 1, h: 1 };
 
 export interface StickerElement {
   id: string;
@@ -60,13 +60,6 @@ export interface StickerElement {
 /** End time of a sticker on the timeline (start + hold). */
 export function elementEnd(el: StickerElement): number {
   return el.start + Math.max(0, el.hold);
-}
-
-/** Pixel aspect ratio (w/h) of the current crop region — the frame box is locked to this. */
-export function cropAspect(el: StickerElement): number {
-  const w = el.crop.w * el.srcW;
-  const h = el.crop.h * el.srcH;
-  return h > 0 ? w / h : el.srcW / Math.max(1, el.srcH);
 }
 
 let uid = 0;

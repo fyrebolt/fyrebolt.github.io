@@ -3,7 +3,7 @@
 // CaptionLayer via patch callbacks.
 
 import { useState } from 'react';
-import { Field } from '../ui';
+import { Field, Slider } from '../ui';
 import { ALL_FONTS, FONT_POOLS, poolById } from '../../captions/fonts';
 import { captionWords, staticWindowOf } from '../../captions/types';
 import type {
@@ -209,9 +209,7 @@ export default function CaptionPanel({
         <Field label="Color">
           <input type="color" value={el.color} onChange={(e) => onEdit({ color: e.target.value })} className="w-full h-9 rounded-md bg-transparent border border-[var(--color-glass-border)] p-0.5" />
         </Field>
-        <Field label={`Size — ${el.sizeScale.toFixed(1)}×`}>
-          <input type="range" min={0.5} max={2.5} step={0.1} value={el.sizeScale} onChange={(e) => onEdit({ sizeScale: Number(e.target.value) })} className="w-full accent-[var(--color-primary-green)]" />
-        </Field>
+        <Slider label={`Size — ${el.sizeScale.toFixed(1)}×`} min={0.5} max={2.5} step={0.1} value={el.sizeScale} onChange={(v) => onEdit({ sizeScale: v })} />
       </div>
 
       <Field label="Alignment">
@@ -402,9 +400,7 @@ function AttachmentEditor({
           <input type="color" value={att.color} onChange={(e) => patch({ color: e.target.value })} className="w-full h-9 rounded-md bg-transparent border border-[var(--color-glass-border)] p-0.5" />
         </Field>
         {att.type === 'highlight' && (
-          <Field label={`Opacity — ${Math.round(att.opacity * 100)}%`}>
-            <input type="range" min={0.05} max={1} step={0.05} value={att.opacity} onChange={(e) => patch({ opacity: Number(e.target.value) })} className="w-full accent-[var(--color-primary-green)]" />
-          </Field>
+          <Slider label={`Opacity — ${Math.round(att.opacity * 100)}%`} min={0.05} max={1} step={0.05} value={att.opacity} onChange={(v) => patch({ opacity: v })} />
         )}
       </div>
 
@@ -437,12 +433,8 @@ function AttachmentEditor({
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label={`Sweep in — ${Math.round(att.inFrac * 100)}%`}>
-          <input type="range" min={0} max={0.9} step={0.05} value={att.inFrac} onChange={(e) => patch({ inFrac: Math.min(Number(e.target.value), 1 - att.outFrac) })} className="w-full accent-[var(--color-primary-green)]" />
-        </Field>
-        <Field label={`Sweep out — ${Math.round(att.outFrac * 100)}%`}>
-          <input type="range" min={0} max={0.9} step={0.05} value={att.outFrac} onChange={(e) => patch({ outFrac: Math.min(Number(e.target.value), 1 - att.inFrac) })} className="w-full accent-[var(--color-primary-green)]" />
-        </Field>
+        <Slider label={`Sweep in — ${Math.round(att.inFrac * 100)}%`} min={0} max={0.9} step={0.05} value={att.inFrac} onChange={(v) => patch({ inFrac: Math.min(v, 1 - att.outFrac) })} />
+        <Slider label={`Sweep out — ${Math.round(att.outFrac * 100)}%`} min={0} max={0.9} step={0.05} value={att.outFrac} onChange={(v) => patch({ outFrac: Math.min(v, 1 - att.inFrac) })} />
       </div>
 
       <div className="text-[10px] text-[var(--color-text-muted)]">Hold {holdPct}%. Drag the marker on the timeline to move it; scrub to preview the sweep.</div>

@@ -45,7 +45,7 @@ function lerp(a: number, b: number, p: number): number {
   return a + (b - a) * p;
 }
 
-export function lerpRect(a: ZoomRect, b: ZoomRect, p: number): ZoomRect {
+function lerpRect(a: ZoomRect, b: ZoomRect, p: number): ZoomRect {
   return { x: lerp(a.x, b.x, p), y: lerp(a.y, b.y, p), w: lerp(a.w, b.w, p), h: lerp(a.h, b.h, p) };
 }
 

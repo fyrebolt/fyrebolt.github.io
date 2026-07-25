@@ -134,9 +134,6 @@ export function poolById(id: BoilPoolId): FontPool {
   return FONT_POOLS.find((p) => p.id === id) ?? FONT_POOLS[0];
 }
 
-/** Back-compat alias: the default pool's fonts. */
-export const BOIL_FONTS = DEFAULT_FONTS;
-
 /** A single font referenced across pools (for the typewriter's one-font pick). */
 export interface FontRef extends BoilFont {
   /** Stable id "poolId:index". */

@@ -6,7 +6,7 @@
 // Slider drags coalesce into one undo entry (non-discrete); preset picks and
 // reset are discrete one-shot entries.
 
-import { Field } from '../ui';
+import { Field, Slider } from '../ui';
 import type { ColorGrade } from '../grade';
 import {
   GRADE_PRESETS,
@@ -57,17 +57,15 @@ export default function GradePanel({ grade, onChange }: Props) {
       </Field>
 
       {channels.map((ch) => (
-        <Field key={ch.key} label={`${ch.label} — ${pct(grade[ch.key])}`}>
-          <input
-            type="range"
-            min={GRADE_MIN}
-            max={GRADE_MAX}
-            step={0.01}
-            value={grade[ch.key]}
-            onChange={(e) => set({ [ch.key]: clampGrade(Number(e.target.value)) })}
-            className="w-full accent-[var(--color-primary-green)]"
-          />
-        </Field>
+        <Slider
+          key={ch.key}
+          label={`${ch.label} — ${pct(grade[ch.key])}`}
+          min={GRADE_MIN}
+          max={GRADE_MAX}
+          step={0.01}
+          value={grade[ch.key]}
+          onChange={(v) => set({ [ch.key]: clampGrade(v) })}
+        />
       ))}
 
       {!isNeutralGrade(grade) && (
