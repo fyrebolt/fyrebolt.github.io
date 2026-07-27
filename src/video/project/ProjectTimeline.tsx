@@ -9,6 +9,11 @@
 //                            freeze marker; body-drag moves the freeze point.
 //   - zoom:                  the single keyframe track (transition + holding
 //                            segments), each keyframe selectable/draggable.
+//
+// Every row is drawn for every layer, hidden ones included — the row is how you
+// find a hidden layer again. Hidden rows are dimmed; LOCKED rows still select
+// (so you can reach the panel and unlock) but refuse every drag: the guard sits
+// in the `on*Down` handlers, which are the only way a row edit starts.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
@@ -65,6 +70,36 @@ function fmt(sec: number): string {
 
 function clamp(min: number, max: number, v: number): number {
   return Math.max(min, Math.min(Math.max(min, max), v));
+}
+
+/**
+ * Shared opening move for every row drag: select the layer, and report whether
+ * the drag may proceed. A locked layer selects but never drags — returning false
+ * here (before any capture or drag-ref is set) is what makes the lock airtight
+ * across all six drag handlers.
+ */
+function beginRowDrag(layer: Layer, onSelectLayer: (id: string) => void): boolean {
+  onSelectLayer(layer.id);
+  return !layer.locked;
+}
+
+/** Row chrome for a layer's state: dimmed when hidden, no grab cursor when locked. */
+function rowClasses(layer: Layer): string {
+  return `${layer.hidden ? 'opacity-40' : ''} ${layer.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`;
+}
+
+/** State marker pinned to the right of a row — why it won't drag / won't render. */
+function RowBadge({ layer }: { layer: Layer }) {
+  if (!layer.locked && !layer.hidden) return null;
+  return (
+    <span
+      className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 text-[10px] leading-none z-30"
+      title={layer.locked ? 'Locked' : 'Hidden from the output'}
+      aria-hidden
+    >
+      {layer.locked ? '🔒' : '🚫'}
+    </span>
+  );
 }
 
 interface Props {
@@ -315,12 +350,12 @@ export default function ProjectTimeline({
   const onCapDown = useCallback(
     (e: ReactPointerEvent, layer: CaptionLayer, mode: CaptionDragMode) => {
       e.stopPropagation();
+      if (!beginRowDrag(layer, onSelectLayer)) return;
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
       } catch {
         /* ignore */
       }
-      onSelectLayer(layer.id);
       capDrag.current = { layerId: layer.id, mode, startX: e.clientX, orig: layer.el };
     },
     [onSelectLayer],
@@ -373,12 +408,13 @@ export default function ProjectTimeline({
   const onAttachDown = useCallback(
     (e: ReactPointerEvent, layer: CaptionLayer, att: Attachment, mode: 'move' | 'resize') => {
       e.stopPropagation();
+      onSelectAttachment(layer.id, att.id);
+      if (layer.locked) return; // the lock covers the caption's attachments too
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
       } catch {
         /* ignore */
       }
-      onSelectAttachment(layer.id, att.id);
       const sw = staticWindowOf(layer.el);
       attachDrag.current = {
         layerId: layer.id,
@@ -413,12 +449,12 @@ export default function ProjectTimeline({
   const onBannerDown = useCallback(
     (e: ReactPointerEvent, layer: BannerLayer) => {
       e.stopPropagation();
+      if (!beginRowDrag(layer, onSelectLayer)) return;
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
       } catch {
         /* ignore */
       }
-      onSelectLayer(layer.id);
       bannerDrag.current = { layerId: layer.id, startX: e.clientX, origFreeze: layer.freeze };
     },
     [onSelectLayer],
@@ -437,12 +473,13 @@ export default function ProjectTimeline({
   const onZoomDown = useCallback(
     (e: ReactPointerEvent, layer: ZoomLayer, kf: ZoomKeyframe, mode: 'start' | 'dur') => {
       e.stopPropagation();
+      onSelectZoomKf(layer.id, kf.id);
+      if (layer.locked) return;
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
       } catch {
         /* ignore */
       }
-      onSelectZoomKf(layer.id, kf.id);
       zoomDrag.current = { layerId: layer.id, kfId: kf.id, mode, startX: e.clientX, orig: kf };
     },
     [onSelectZoomKf],
@@ -462,12 +499,12 @@ export default function ProjectTimeline({
   const onRangeDown = useCallback(
     (e: ReactPointerEvent, layer: SketchLayer | HighlighterLayer | DramaticLayer | StickerLayer | MusicLayer, mode: 'move' | 'end') => {
       e.stopPropagation();
+      if (!beginRowDrag(layer, onSelectLayer)) return;
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
       } catch {
         /* ignore */
       }
-      onSelectLayer(layer.id);
       // Sketch resizes trailing FREEZE; sticker resizes HOLD; music resizes DUR;
       // others resize DURATION.
       const origStart = layer.el.start;
@@ -620,12 +657,15 @@ export default function ProjectTimeline({
         {layers.map((layer, i) => {
           const selected = layer.id === selectedLayerId;
           const ring = selected ? 'ring-2 ring-[var(--color-primary-green)]' : '';
+          // Shared bar chrome: hidden rows dim, locked rows lose the grab cursor.
+          const bar = `absolute top-0 bottom-0 rounded-md flex items-center px-2 touch-none overflow-hidden ${rowClasses(layer)} ${ring}`;
 
           if (layer.kind === 'zoom') {
             const sorted = sortedZooms(layer.keyframes);
             return (
-              <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)] overflow-hidden">
+              <div key={layer.id} className={`relative h-10 rounded-md bg-[var(--color-bg-elevated)] overflow-hidden ${layer.hidden ? 'opacity-40' : ''}`}>
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-30" style={{ left: playLeft }} />
+                <RowBadge layer={layer} />
                 {sorted.length === 0 && (
                   <button
                     onClick={() => onSelectLayer(layer.id)}
@@ -657,9 +697,9 @@ export default function ProjectTimeline({
                         onPointerDown={(e) => onZoomDown(e, layer, kf, 'start')}
                         onPointerMove={onZoomMove}
                         onPointerUp={onUp}
-                        className={`absolute top-1 bottom-1 rounded-sm flex items-center px-1.5 overflow-hidden cursor-grab active:cursor-grabbing touch-none ${
-                          kfSel ? 'ring-2 ring-[var(--color-primary-green)] z-20' : 'z-10'
-                        }`}
+                        className={`absolute top-1 bottom-1 rounded-sm flex items-center px-1.5 overflow-hidden touch-none ${
+                          layer.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'
+                        } ${kfSel ? 'ring-2 ring-[var(--color-primary-green)] z-20' : 'z-10'}`}
                         style={{ left: `${startPct}%`, width: `${Math.max(2, transPct)}%`, background: ZOOM_TRANSITION }}
                         title="Drag to move · drag the right edge for the transition time"
                       >
@@ -688,6 +728,8 @@ export default function ProjectTimeline({
                 currentSec={currentSec}
                 selected={selected}
                 selectedIdx={selectedSpeedIdx}
+                locked={layer.locked}
+                hidden={layer.hidden}
                 onSelectLayer={() => onSelectLayer(layer.id)}
                 onAddPoint={(t, speed) => onAddSpeedPoint(layer.id, t, speed)}
                 onMovePoint={(idx, t, speed) => onMoveSpeedPoint(layer.id, idx, t, speed)}
@@ -705,11 +747,12 @@ export default function ProjectTimeline({
             return (
               <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                <RowBadge layer={layer} />
                 <div
                   onPointerDown={(e) => onBannerDown(e, layer)}
                   onPointerMove={onBannerMove}
                   onPointerUp={onUp}
-                  className={`absolute top-0 bottom-0 rounded-md flex items-center px-2 cursor-grab active:cursor-grabbing touch-none overflow-hidden ${ring}`}
+                  className={bar}
                   style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: BANNER_COLOR }}
                   title="Drag to move the freeze point"
                 >
@@ -736,11 +779,12 @@ export default function ProjectTimeline({
             return (
               <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                <RowBadge layer={layer} />
                 <div
                   onPointerDown={(e) => onRangeDown(e, layer, 'move')}
                   onPointerMove={onRangeMove}
                   onPointerUp={onUp}
-                  className={`absolute top-0 bottom-0 rounded-md flex items-center px-2 cursor-grab active:cursor-grabbing touch-none overflow-hidden ${ring}`}
+                  className={bar}
                   style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: SKETCH_COLOR }}
                   title="Drag to move · drag the right edge for the freeze time"
                 >
@@ -763,12 +807,14 @@ export default function ProjectTimeline({
             return (
               <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                <RowBadge layer={layer} />
                 <div
                   onPointerDown={(e) => onRangeDown(e, layer, 'move')}
                   onPointerMove={onRangeMove}
                   onPointerUp={onUp}
-                  className={`absolute top-0 bottom-0 rounded-md flex items-center px-2 cursor-grab active:cursor-grabbing touch-none overflow-hidden ${ring}`}
-                  style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: h.color, opacity: 0.85 }}
+                  className={bar}
+                  // Inline opacity would beat the dim class, so fold `hidden` into it.
+                  style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: h.color, opacity: layer.hidden ? 0.34 : 0.85 }}
                   title="Drag to move · drag the right edge for the duration"
                 >
                   <div className="absolute inset-y-0 left-0 pointer-events-none bg-white/45" style={{ width: `${inF * 100}%` }} />
@@ -792,11 +838,12 @@ export default function ProjectTimeline({
             return (
               <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                <RowBadge layer={layer} />
                 <div
                   onPointerDown={(e) => onRangeDown(e, layer, 'move')}
                   onPointerMove={onRangeMove}
                   onPointerUp={onUp}
-                  className={`absolute top-0 bottom-0 rounded-md flex items-center px-2 cursor-grab active:cursor-grabbing touch-none overflow-hidden ${ring}`}
+                  className={bar}
                   style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: bg }}
                   title="Drag to move (clamped between neighbours) · drag the right edge for the hold"
                 >
@@ -817,11 +864,12 @@ export default function ProjectTimeline({
             return (
               <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                <RowBadge layer={layer} />
                 <div
                   onPointerDown={(e) => onRangeDown(e, layer, 'move')}
                   onPointerMove={onRangeMove}
                   onPointerUp={onUp}
-                  className={`absolute top-0 bottom-0 rounded-md flex items-center px-2 cursor-grab active:cursor-grabbing touch-none overflow-hidden ${ring}`}
+                  className={bar}
                   style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: STICKER_COLOR }}
                   title="Drag to move · drag the right edge for the hold time"
                 >
@@ -839,11 +887,12 @@ export default function ProjectTimeline({
             return (
               <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                <RowBadge layer={layer} />
                 <div
                   onPointerDown={(e) => onRangeDown(e, layer, 'move')}
                   onPointerMove={onRangeMove}
                   onPointerUp={onUp}
-                  className={`absolute top-0 bottom-0 rounded-md flex items-center px-2 cursor-grab active:cursor-grabbing touch-none overflow-hidden ${ring}`}
+                  className={bar}
                   style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: MUSIC_COLOR }}
                   title="Drag to move · drag the right edge for the track length"
                 >
@@ -874,11 +923,12 @@ export default function ProjectTimeline({
           return (
             <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
               <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                <RowBadge layer={layer} />
               <div
                 onPointerDown={(e) => onCapDown(e, layer, 'body')}
                 onPointerMove={onCapMove}
                 onPointerUp={onUp}
-                className={`absolute top-0 bottom-0 rounded-md flex items-center px-2 cursor-grab active:cursor-grabbing touch-none overflow-hidden ${ring}`}
+                className={bar}
                 style={{
                   left: `${leftPct}%`,
                   width: `${Math.max(1.5, widthPct)}%`,

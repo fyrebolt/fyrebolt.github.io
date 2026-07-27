@@ -492,6 +492,16 @@ export default function VideoEditor() {
     return () => urls.forEach((u) => URL.revokeObjectURL(u));
   }, []);
 
+  /** Ask to delete a layer. Locked layers refuse — deletion is the one destructive
+   *  edit a lock must stop, so it is checked before the dialog even opens. */
+  const requestDelete = useCallback((id: string) => {
+    if (projectRef.current.layers.find((l) => l.id === id)?.locked) {
+      setStatus('That layer is locked — unlock it in Layers (🔒) to delete it.');
+      return;
+    }
+    setConfirmDeleteId(id);
+  }, []);
+
   // ---- keyboard: undo / redo + delete the selected layer ----
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -529,12 +539,12 @@ export default function VideoEditor() {
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && !editable && selectedLayerId) {
         e.preventDefault();
-        setConfirmDeleteId(selectedLayerId);
+        requestDelete(selectedLayerId);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, selectedLayerId, confirmDeleteId, croppingId]);
+  }, [undo, redo, selectedLayerId, confirmDeleteId, croppingId, requestDelete]);
 
   const setEditingZoomBoth = (v: boolean) => {
     editingRef.current = v;
@@ -1038,6 +1048,15 @@ export default function VideoEditor() {
         setLibraryOpen('music');
         return;
       }
+      // Zoom / Time Machine are single-track: a repeat "+" edits the EXISTING
+      // track, so a lock on it has to refuse here as well as on its row.
+      if (kind === 'zoom' || kind === 'timemachine') {
+        const track = kind === 'zoom' ? zoomLayer(projectRef.current) : timeMachineLayer(projectRef.current);
+        if (track?.locked) {
+          setStatus(`${track.name} is locked — unlock it in Layers (🔒) to add to it.`);
+          return;
+        }
+      }
       sealDiscrete();
       const z = nextZ(projectRef.current);
       const outAR = out.w / out.h;
@@ -1496,8 +1515,27 @@ export default function VideoEditor() {
     setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'dramatic' ? { ...l, el: { ...l.el, ...patch } } : l)));
   }, []);
 
+  /**
+   * Toggle a layer's `hidden` / `locked` flag as its own undo entry. Written as
+   * two explicit spreads rather than a computed key so each spread keeps its
+   * layer variant (a computed key would collapse the discriminated union).
+   */
+  const toggleLayerFlag = useCallback(
+    (id: string, flag: 'hidden' | 'locked') => {
+      sealDiscrete();
+      setLayers((ls) =>
+        ls.map((l): Layer => {
+          if (l.id !== id) return l;
+          return flag === 'hidden' ? { ...l, hidden: !l.hidden } : { ...l, locked: !l.locked };
+        }),
+      );
+    },
+    [sealDiscrete],
+  );
+
   const removeLayer = useCallback(
     (id: string) => {
+      if (projectRef.current.layers.find((l) => l.id === id)?.locked) return;
       sealDiscrete();
       setLayers((ls) => ls.filter((l) => l.id !== id));
       setSelectedLayerId((s) => (s === id ? null : s));
@@ -2101,7 +2139,7 @@ export default function VideoEditor() {
         !mod
       ) {
         if (!mediaKind) return;
-        if (isPlaceable(selectedLayer)) {
+        if (isPlaceable(selectedLayer) && !selectedLayer.locked) {
           e.preventDefault();
           const s = e.shiftKey ? 0.02 : 0.004; // normalised nudge step
           if (e.key === 'ArrowLeft') nudgeSelected(-s, 0);
@@ -2189,7 +2227,7 @@ export default function VideoEditor() {
       const target = hit ?? (selectedLayer?.kind === 'sticker' ? selectedLayer.id : null);
       if (!target) return;
       const layer = layers.find((l) => l.id === target);
-      if (!layer || layer.kind !== 'sticker') return;
+      if (!layer || layer.kind !== 'sticker' || layer.locked || layer.hidden) return;
       setSelectedLayerId(target);
       setSelectedAttachmentId(null);
       setCroppingId((cur) => (cur === target ? null : target));
@@ -2468,14 +2506,19 @@ export default function VideoEditor() {
     }
   }, []);
 
+  // The draggable crop rect — withheld while the zoom track is locked or hidden.
   const selectedZoomRect =
-    editingZoom && selectedLayer?.kind === 'zoom' ? selectedLayer.keyframes.find((k) => k.id === selectedZoomKfId)?.rect ?? null : null;
+    editingZoom && selectedLayer?.kind === 'zoom' && !selectedLayer.locked && !selectedLayer.hidden
+      ? selectedLayer.keyframes.find((k) => k.id === selectedZoomKfId)?.rect ?? null
+      : null;
 
   // Measured placement boxes for every placeable layer (pure — no compositor ref).
+  // Hidden layers are excluded (nothing is on screen to point at); locked ones stay
+  // in, so they still serve as snap targets for the layers you can move.
   const placeableBoxes = useMemo(() => {
     const m: Record<string, Box> = {};
     for (const l of layers) {
-      if (!isPlaceable(l)) continue;
+      if (!isPlaceable(l) || l.hidden) continue;
       const b = measurePlaceableBox(l, out, currentSec);
       if (b) m[l.id] = b;
     }
@@ -2487,14 +2530,18 @@ export default function VideoEditor() {
     [placeableBoxes, selectedLayerId],
   );
 
+  /** Locked layer ids — a set, because the pointer paths test membership per event. */
+  const lockedIds = useMemo(() => new Set(layers.filter((l) => l.locked).map((l) => l.id)), [layers]);
+
   // Effective group selection: the raw group only counts when it still holds the
   // primary and has >1 member; otherwise selection is just the primary layer.
+  // Locked members drop out, so a group move never drags a protected layer.
   const groupSel = useMemo(() => {
     if (selectedLayerId && groupIds.length > 1 && groupIds.includes(selectedLayerId)) {
-      return groupIds.filter((id) => placeableBoxes[id]);
+      return groupIds.filter((id) => placeableBoxes[id] && !lockedIds.has(id));
     }
     return selectedLayerId ? [selectedLayerId] : [];
-  }, [groupIds, selectedLayerId, placeableBoxes]);
+  }, [groupIds, selectedLayerId, placeableBoxes, lockedIds]);
   const isGroup = groupSel.length > 1;
 
   /** Union box of the group selection (output-normalised), for its outline. */
@@ -2627,10 +2674,11 @@ export default function VideoEditor() {
         /* ignore */
       }
       if (marqueeStart.current && marquee) {
-        // Commit the marquee: select every placeable box it intersects.
+        // Commit the marquee: select every UNLOCKED placeable box it intersects.
         const m = marquee;
         const hit: string[] = [];
         for (const [id, b] of Object.entries(placeableBoxes)) {
+          if (lockedIds.has(id)) continue;
           if (b.x < m.x + m.w && b.x + b.w > m.x && b.y < m.y + m.h && b.y + b.h > m.y) hit.push(id);
         }
         setGroupIds(hit);
@@ -2641,7 +2689,7 @@ export default function VideoEditor() {
       setMarquee(null);
       setGuideLines([]);
     },
-    [marquee, placeableBoxes],
+    [marquee, placeableBoxes, lockedIds],
   );
 
   const editorBody = (
@@ -2894,12 +2942,16 @@ export default function VideoEditor() {
                       />
                     )}
 
-                  {/* unified transform widget for the single selected placeable layer */}
+                  {/* unified transform widget for the single selected placeable layer.
+                      Suppressed while it is hidden (nothing on screen to line up
+                      against) or locked (the widget's whole job is to move it). */}
                   {!editingZoom &&
                     !isGroup &&
                     mediaKind &&
                     srcDims.w > 0 &&
                     isPlaceable(selectedLayer) &&
+                    !selectedLayer.hidden &&
+                    !selectedLayer.locked &&
                     selBox &&
                     !(selectedLayer.kind === 'sticker' && selectedLayer.id === croppingId) &&
                     !(selectedLayer.kind === 'sketch' && selectedLayer.el.strokes.length === 0) &&
@@ -3201,12 +3253,17 @@ export default function VideoEditor() {
                             : l.kind === 'music'
                               ? l.el.name || l.name
                               : l.name;
-                      const canMove = l.kind !== 'zoom' && l.kind !== 'timemachine' && l.kind !== 'music';
+                      // Reordering is itself a positional edit, so a lock stops it too.
+                      const canMove =
+                        l.kind !== 'zoom' && l.kind !== 'timemachine' && l.kind !== 'music' && !l.locked;
                       return (
                         <div key={l.id} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md border ${isSel ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]' : 'border-[var(--color-glass-border)]'}`}>
-                          <button onClick={() => selectLayer(l.id)} className="flex items-center gap-2 text-left text-[13px] min-w-0 flex-1">
+                          <button
+                            onClick={() => selectLayer(l.id)}
+                            className={`flex items-center gap-2 text-left text-[13px] min-w-0 flex-1 ${l.hidden ? 'opacity-45' : ''}`}
+                          >
                             <span aria-hidden>{icon}</span>
-                            <span className="truncate">{label}</span>
+                            <span className={`truncate ${l.hidden ? 'line-through decoration-[var(--color-text-muted)]' : ''}`}>{label}</span>
                             {(l.kind === 'zoom' || l.kind === 'timemachine') && <span className="text-[10px] text-[var(--color-text-muted)]">base</span>}
                           </button>
                           {canMove && (
@@ -3215,6 +3272,24 @@ export default function VideoEditor() {
                               <button onClick={() => moveLayer(l.id, -1)} title="Send backward" className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-1">↓</button>
                             </>
                           )}
+                          <button
+                            onClick={() => toggleLayerFlag(l.id, 'hidden')}
+                            title={l.hidden ? 'Show this layer' : 'Hide from the output (preview and export)'}
+                            aria-label={l.hidden ? `Show ${label}` : `Hide ${label}`}
+                            aria-pressed={!!l.hidden}
+                            className={`px-1 text-[13px] leading-none ${l.hidden ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-primary-green)]'} hover:opacity-80`}
+                          >
+                            <span aria-hidden>{l.hidden ? '🚫' : '👁'}</span>
+                          </button>
+                          <button
+                            onClick={() => toggleLayerFlag(l.id, 'locked')}
+                            title={l.locked ? 'Unlock — allow moving, resizing, retiming and deleting' : 'Lock against moving, resizing, retiming and deleting'}
+                            aria-label={l.locked ? `Unlock ${label}` : `Lock ${label}`}
+                            aria-pressed={!!l.locked}
+                            className={`px-1 text-[13px] leading-none ${l.locked ? 'text-[var(--color-primary-blue)]' : 'text-[var(--color-text-muted)]'} hover:opacity-80`}
+                          >
+                            <span aria-hidden>{l.locked ? '🔒' : '🔓'}</span>
+                          </button>
                         </div>
                       );
                     })}
@@ -3263,7 +3338,7 @@ export default function VideoEditor() {
                       onSelectAttachment={(attId) => selectAttachment(selectedLayer.id, attId)}
                       onEditAttachment={(attId, patch) => updateAttachment(selectedLayer.id, attId, patch)}
                       onRemoveAttachment={(attId) => removeAttachment(selectedLayer.id, attId)}
-                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemove={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'banner' && (
@@ -3273,7 +3348,7 @@ export default function VideoEditor() {
                       conflict={bannerConflict}
                       onEdit={(patch) => updateBanner(selectedLayer.id, patch)}
                       onEditStyle={(patch) => updateBannerStyle(selectedLayer.id, patch)}
-                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemove={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'zoom' && (
@@ -3287,7 +3362,7 @@ export default function VideoEditor() {
                       onSelectKf={(kfId) => selectZoomKf(selectedLayer.id, kfId)}
                       onEditKf={(kfId, patch) => updateZoomKf(selectedLayer.id, kfId, patch)}
                       onRemoveKf={(kfId) => removeZoomKf(selectedLayer.id, kfId)}
-                      onRemoveLayer={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemoveLayer={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'timemachine' && (
@@ -3299,7 +3374,7 @@ export default function VideoEditor() {
                       onRemovePoint={(idx) => removeSpeedPoint(selectedLayer.id, idx)}
                       onClear={clearSpeedCurve}
                       onEditLayer={(patch) => updateTimeMachine(selectedLayer.id, patch)}
-                      onRemoveLayer={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemoveLayer={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'sketch' && (
@@ -3311,7 +3386,7 @@ export default function VideoEditor() {
                       onUndoStroke={() => undoSketchStroke(selectedLayer.id)}
                       onClearStrokes={() => clearSketchStrokes(selectedLayer.id)}
                       onEdit={(patch) => updateSketchEl(selectedLayer.id, patch)}
-                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemove={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'highlighter' && (
@@ -3319,7 +3394,7 @@ export default function VideoEditor() {
                       layer={selectedLayer as HighlighterLayer}
                       duration={timelineDuration}
                       onEdit={(patch) => updateHighlighterEl(selectedLayer.id, patch)}
-                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemove={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'dramatic' && (
@@ -3327,7 +3402,7 @@ export default function VideoEditor() {
                       layer={selectedLayer as DramaticLayer}
                       duration={timelineDuration}
                       onEdit={(patch) => updateDramaticEl(selectedLayer.id, patch)}
-                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemove={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'sticker' && (
@@ -3337,7 +3412,7 @@ export default function VideoEditor() {
                       cropping={croppingId === selectedLayer.id}
                       onEdit={(patch) => updateStickerEl(selectedLayer.id, patch)}
                       onToggleCrop={() => setCroppingId((c) => (c === selectedLayer.id ? null : selectedLayer.id))}
-                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemove={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'music' && (

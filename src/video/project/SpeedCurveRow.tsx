@@ -22,6 +22,10 @@ interface Props {
   currentSec: number;
   selected: boolean;
   selectedIdx: number | null;
+  /** Layer state: `locked` refuses every point edit (the lane still selects the
+   *  layer, so its panel stays reachable); `hidden` only dims the lane. */
+  locked?: boolean;
+  hidden?: boolean;
   onSelectLayer: () => void;
   onAddPoint: (t: number, speed: number) => void;
   onMovePoint: (idx: number, t: number, speed: number) => void;
@@ -42,6 +46,8 @@ export default function SpeedCurveRow({
   currentSec,
   selected,
   selectedIdx,
+  locked = false,
+  hidden = false,
   onSelectLayer,
   onAddPoint,
   onMovePoint,
@@ -77,10 +83,11 @@ export default function SpeedCurveRow({
       // bubbling to the timeline's press-drag scrub — this row is a full editor.
       e.stopPropagation();
       onSelectLayer();
+      if (locked) return;
       const p = toData(e.clientX, e.clientY);
       onAddPoint(p.t, p.speed);
     },
-    [toData, onAddPoint, onSelectLayer],
+    [toData, onAddPoint, onSelectLayer, locked],
   );
 
   const onPointDown = useCallback(
@@ -88,6 +95,7 @@ export default function SpeedCurveRow({
       e.stopPropagation();
       onSelectLayer();
       onSelectPoint(idx);
+      if (locked) return;
       dragRef.current = { idx };
       try {
         svgRef.current?.setPointerCapture(e.pointerId);
@@ -95,7 +103,7 @@ export default function SpeedCurveRow({
         /* ignore */
       }
     },
-    [onSelectLayer, onSelectPoint],
+    [onSelectLayer, onSelectPoint, locked],
   );
 
   const onMove = useCallback(
@@ -132,7 +140,10 @@ export default function SpeedCurveRow({
   const playX = (Math.min(dur, Math.max(0, currentSec)) / dur) * VW;
 
   return (
-    <div className={`relative rounded-md bg-[var(--color-bg-elevated)] overflow-hidden ${selected ? 'ring-2 ring-[var(--color-primary-green)]' : ''}`} style={{ height: H }}>
+    <div
+      className={`relative rounded-md bg-[var(--color-bg-elevated)] overflow-hidden ${selected ? 'ring-2 ring-[var(--color-primary-green)]' : ''} ${hidden ? 'opacity-40' : ''}`}
+      style={{ height: H }}
+    >
       <svg
         ref={svgRef}
         viewBox={`0 0 ${VW} ${H}`}
@@ -159,7 +170,7 @@ export default function SpeedCurveRow({
         ))}
 
         {/* click target for adding points (behind the point handles) */}
-        <rect x={0} y={0} width={VW} height={H} fill="transparent" onPointerDown={onLaneDown} style={{ cursor: 'copy' }} />
+        <rect x={0} y={0} width={VW} height={H} fill="transparent" onPointerDown={onLaneDown} style={{ cursor: locked ? 'not-allowed' : 'copy' }} />
 
         {/* curve */}
         <polyline points={lineStr} fill="none" stroke="var(--color-primary-blue)" strokeWidth={2} vectorEffect="non-scaling-stroke" />
@@ -181,9 +192,9 @@ export default function SpeedCurveRow({
             onPointerDown={(e) => onPointDown(e, i)}
             onContextMenu={(e) => {
               e.preventDefault();
-              onRemovePoint(i);
+              if (!locked) onRemovePoint(i);
             }}
-            style={{ cursor: 'grab' }}
+            style={{ cursor: locked ? 'not-allowed' : 'grab' }}
           />
         ))}
       </svg>
@@ -193,8 +204,13 @@ export default function SpeedCurveRow({
       <div className="pointer-events-none absolute left-1 bottom-0.5 text-[9px] font-mono text-[var(--color-text-muted)]">0×</div>
       {points.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[10px] text-[var(--color-text-muted)]">
-          Time Machine — click to add a speed point
+          {locked ? 'Time Machine — locked' : 'Time Machine — click to add a speed point'}
         </div>
+      )}
+      {(locked || hidden) && (
+        <span className="pointer-events-none absolute right-1 top-1 text-[10px] leading-none" title={locked ? 'Locked' : 'Hidden from the output'} aria-hidden>
+          {locked ? '🔒' : '🚫'}
+        </span>
       )}
     </div>
   );
