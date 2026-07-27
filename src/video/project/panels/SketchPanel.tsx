@@ -3,7 +3,8 @@
 // layer IS the drawing: the pad stays editable (draw / undo / clear strokes),
 // placement happens via the on-canvas SketchRectEditor, and timing lives here.
 
-import { Field, Slider } from '../ui';
+import { DangerButton, Field, NumberField, Slider } from '../ui';
+import { round2 } from '../constants';
 import SketchPad from '../../sketch/SketchPad';
 import type { SketchStroke } from '../../sketch/types';
 import type { SketchLayer } from '../types';
@@ -36,8 +37,8 @@ export default function SketchPanel({
   onRemove,
 }: Props) {
   const el = layer.el;
-  const animDur = Math.round(el.animationDur * 100) / 100;
-  const freezeDur = Math.round(el.freezeDur * 100) / 100;
+  const animDur = round2(el.animationDur);
+  const freezeDur = round2(el.freezeDur);
   const hasStrokes = el.strokes.length > 0;
 
   return (
@@ -105,28 +106,22 @@ export default function SketchPanel({
 
       <div className="pt-3 border-t border-[var(--color-glass-border)] space-y-4">
         <div className="grid grid-cols-2 gap-3">
-          <Field label={`Animation — ${animDur}s`}>
-            <input
-              type="number"
-              min={0}
-              max={60}
-              step={0.1}
-              value={animDur}
-              onChange={(e) => onEdit({ animationDur: Math.max(0, Number(e.target.value) || 0) })}
-              className="input"
-            />
-          </Field>
-          <Field label={`Freeze — ${freezeDur}s`}>
-            <input
-              type="number"
-              min={0.2}
-              max={60}
-              step={0.1}
-              value={freezeDur}
-              onChange={(e) => onEdit({ freezeDur: Math.max(0.2, Number(e.target.value) || 0.2) })}
-              className="input"
-            />
-          </Field>
+          <NumberField
+            label={`Animation — ${animDur}s`}
+            min={0}
+            max={60}
+            step={0.1}
+            value={animDur}
+            onChange={(v) => onEdit({ animationDur: v })}
+          />
+          <NumberField
+            label={`Freeze — ${freezeDur}s`}
+            min={0.2}
+            max={60}
+            step={0.1}
+            value={freezeDur}
+            onChange={(v) => onEdit({ freezeDur: v })}
+          />
         </div>
         {el.animationDur === 0 && (
           <p className="text-[10px] text-[var(--color-text-muted)]">
@@ -143,12 +138,7 @@ export default function SketchPanel({
         </label>
       </div>
 
-      <button
-        onClick={onRemove}
-        className="w-full mt-1 px-3 py-2 rounded-md border border-[rgba(255,80,80,0.4)] text-[rgba(255,120,120,0.9)] text-xs font-medium hover:bg-[rgba(255,80,80,0.08)]"
-      >
-        Remove sketch
-      </button>
+      <DangerButton onClick={onRemove} className="mt-1">Remove sketch</DangerButton>
     </>
   );
 }

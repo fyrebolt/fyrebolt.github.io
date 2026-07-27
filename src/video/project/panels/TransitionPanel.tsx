@@ -3,7 +3,7 @@
 // The boundary itself is picked on the clip strip; the duration is editable here
 // and by dragging the chip sideways, mirroring the zoom track's duration handle.
 
-import { ChoiceGrid, Field, Toggle } from '../ui';
+import { ChoiceGrid, Field, NumberInput, Toggle } from '../ui';
 import type { VideoClip } from '../clips';
 import type { Transition, TransitionDir, TransitionKind } from '../transitions';
 import {
@@ -68,13 +68,12 @@ export default function TransitionPanel({ clips, index, onEdit, onRandomizeAll }
                 onChange={(e) => patch({ duration: Number(e.target.value) }, false)}
                 className="flex-1 accent-[var(--color-primary-green)]"
               />
-              <input
-                type="number"
+              <NumberInput
                 min={MIN_TRANSITION_DUR}
                 max={maxDur}
                 step={0.01}
                 value={Number(tr.duration.toFixed(2))}
-                onChange={(e) => patch({ duration: Number(e.target.value) }, false)}
+                onChange={(v) => patch({ duration: v }, false)}
                 className="w-20 px-2 py-1 rounded-md bg-[var(--color-bg-elevated)] border border-[var(--color-glass-border)] text-xs"
               />
             </div>

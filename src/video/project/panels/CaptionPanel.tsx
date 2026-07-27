@@ -3,7 +3,8 @@
 // CaptionLayer via patch callbacks.
 
 import { useState } from 'react';
-import { Field, Slider } from '../ui';
+import { DangerButton, Field, NumberField, NumberInput, Slider } from '../ui';
+import { round2 } from '../constants';
 import { ALL_FONTS, FONT_POOLS, poolById } from '../../captions/fonts';
 import { captionWords, staticWindowOf } from '../../captions/types';
 import type {
@@ -19,7 +20,6 @@ import type {
 } from '../../captions/types';
 import type { CaptionLayer } from '../types';
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
 const ATTACH_MIN = 0.2;
 
 type CaptionPatch = Partial<Caption> | Partial<TypewriterCaption>;
@@ -59,20 +59,14 @@ export default function CaptionPanel({
 
       {el.kind === 'boil' ? (
         <>
-          <Field label={`Duration — ${round2(el.end - el.start)}s`}>
-            <input
-              type="number"
-              min={0.2}
-              max={Math.max(0.2, duration || 60)}
-              step={0.1}
-              value={round2(el.end - el.start)}
-              onChange={(e) => {
-                const d = Math.max(0.2, Number(e.target.value) || 0.2);
-                onEdit({ end: el.start + d });
-              }}
-              className="input"
-            />
-          </Field>
+          <NumberField
+            label={`Duration — ${round2(el.end - el.start)}s`}
+            min={0.2}
+            max={Math.max(0.2, duration || 60)}
+            step={0.1}
+            value={round2(el.end - el.start)}
+            onChange={(v) => onEdit({ end: el.start + v })}
+          />
 
           <Field label="Font boil">
             <div className="grid grid-cols-3 gap-1.5">
@@ -140,28 +134,22 @@ export default function CaptionPanel({
           </Field>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label={`Typing — ${el.typingDur.toFixed(1)}s`}>
-              <input
-                type="number"
-                min={0.2}
-                max={Math.max(0.2, duration || 60)}
-                step={0.1}
-                value={round2(el.typingDur)}
-                onChange={(e) => onEdit({ typingDur: Math.max(0.2, Number(e.target.value) || 0.2) })}
-                className="input"
-              />
-            </Field>
-            <Field label={`Hold — ${el.holdDur.toFixed(1)}s`}>
-              <input
-                type="number"
-                min={0.2}
-                max={Math.max(0.2, duration || 60)}
-                step={0.1}
-                value={round2(el.holdDur)}
-                onChange={(e) => onEdit({ holdDur: Math.max(0.2, Number(e.target.value) || 0.2) })}
-                className="input"
-              />
-            </Field>
+            <NumberField
+              label={`Typing — ${el.typingDur.toFixed(1)}s`}
+              min={0.2}
+              max={Math.max(0.2, duration || 60)}
+              step={0.1}
+              value={round2(el.typingDur)}
+              onChange={(v) => onEdit({ typingDur: v })}
+            />
+            <NumberField
+              label={`Hold — ${el.holdDur.toFixed(1)}s`}
+              min={0.2}
+              max={Math.max(0.2, duration || 60)}
+              step={0.1}
+              value={round2(el.holdDur)}
+              onChange={(v) => onEdit({ holdDur: v })}
+            />
           </div>
 
           <Field label="Deletion">
@@ -184,14 +172,12 @@ export default function CaptionPanel({
                     </button>
                   ))}
                 </div>
-                <input
-                  type="number"
+                <NumberInput
                   min={0.2}
                   max={Math.max(0.2, duration || 60)}
                   step={0.1}
                   value={round2(el.deleteDur)}
-                  onChange={(e) => onEdit({ deleteDur: Math.max(0.2, Number(e.target.value) || 0.2) })}
-                  className="input"
+                  onChange={(v) => onEdit({ deleteDur: v })}
                 />
                 <div className="text-[10px] text-[var(--color-text-muted)] mt-1">Deletion duration (s)</div>
               </>
@@ -254,12 +240,9 @@ export default function CaptionPanel({
         onRemove={onRemoveAttachment}
       />
 
-      <button
-        onClick={onRemove}
-        className="w-full mt-1 px-3 py-2 rounded-md border border-[rgba(255,80,80,0.4)] text-[rgba(255,120,120,0.9)] text-xs font-medium hover:bg-[rgba(255,80,80,0.08)]"
-      >
+      <DangerButton onClick={onRemove} className="mt-1">
         Remove {el.kind === 'typewriter' ? 'typewriter' : 'caption'}
-      </button>
+      </DangerButton>
     </>
   );
 }
@@ -405,31 +388,22 @@ function AttachmentEditor({
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label={`Start — ${att.startInStatic.toFixed(2)}s`}>
-          <input
-            type="number"
-            min={0}
-            max={round2(maxStart)}
-            step={0.05}
-            value={round2(att.startInStatic)}
-            onChange={(e) => {
-              const v = Math.max(0, Math.min(maxStart, Number(e.target.value) || 0));
-              patch({ startInStatic: v, duration: Math.min(att.duration, Math.max(ATTACH_MIN, swLen - v)) });
-            }}
-            className="input"
-          />
-        </Field>
-        <Field label={`Time — ${att.duration.toFixed(2)}s`}>
-          <input
-            type="number"
-            min={ATTACH_MIN}
-            max={round2(maxDur)}
-            step={0.05}
-            value={round2(att.duration)}
-            onChange={(e) => patch({ duration: Math.max(ATTACH_MIN, Math.min(maxDur, Number(e.target.value) || ATTACH_MIN)) })}
-            className="input"
-          />
-        </Field>
+        <NumberField
+          label={`Start — ${att.startInStatic.toFixed(2)}s`}
+          min={0}
+          max={round2(maxStart)}
+          step={0.05}
+          value={round2(att.startInStatic)}
+          onChange={(v) => patch({ startInStatic: v, duration: Math.min(att.duration, Math.max(ATTACH_MIN, swLen - v)) })}
+        />
+        <NumberField
+          label={`Time — ${att.duration.toFixed(2)}s`}
+          min={ATTACH_MIN}
+          max={round2(maxDur)}
+          step={0.05}
+          value={round2(att.duration)}
+          onChange={(v) => patch({ duration: v })}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -439,9 +413,7 @@ function AttachmentEditor({
 
       <div className="text-[10px] text-[var(--color-text-muted)]">Hold {holdPct}%. Drag the marker on the timeline to move it; scrub to preview the sweep.</div>
 
-      <button onClick={() => onRemove(att.id)} className="w-full px-3 py-2 rounded-md border border-[rgba(255,80,80,0.4)] text-[rgba(255,120,120,0.9)] text-[11px] font-medium hover:bg-[rgba(255,80,80,0.08)]">
-        Remove attachment
-      </button>
+      <DangerButton onClick={() => onRemove(att.id)} small>Remove attachment</DangerButton>
     </div>
   );
 }

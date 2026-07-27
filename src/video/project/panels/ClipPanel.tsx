@@ -13,7 +13,7 @@
 // muted the editor greys out but keeps every point for a lossless un-mute.
 
 import { useCallback, useMemo, useState } from 'react';
-import { Field, Toggle } from '../ui';
+import { NumberField, Toggle } from '../ui';
 import VolumeCurveEditor from './VolumeCurveEditor';
 import type { VideoClip } from '../clips';
 import { clipLen, applyOscillation } from '../clips';
@@ -76,24 +76,49 @@ export default function ClipPanel({ clip, onEdit }: Props) {
         <Toggle label="Whole clip" checked={whole} onChange={setWhole} />
         {!whole && (
           <div className="grid grid-cols-2 gap-2">
-            <Field label={`Start — ${rangeStart.toFixed(2)}s`}>
-              <input type="number" min={0} max={len} step={0.05} value={Number(rangeStart.toFixed(2))} onChange={(e) => setRangeStart(Math.max(0, Math.min(len, Number(e.target.value) || 0)))} className="input" />
-            </Field>
-            <Field label={`End — ${rangeEnd.toFixed(2)}s`}>
-              <input type="number" min={0} max={len} step={0.05} value={Number(rangeEnd.toFixed(2))} onChange={(e) => setRangeEnd(Math.max(0, Math.min(len, Number(e.target.value) || 0)))} className="input" />
-            </Field>
+            <NumberField
+              label={`Start — ${rangeStart.toFixed(2)}s`}
+              min={0}
+              max={len}
+              step={0.05}
+              value={Number(rangeStart.toFixed(2))}
+              onChange={(v) => setRangeStart(v)}
+            />
+            <NumberField
+              label={`End — ${rangeEnd.toFixed(2)}s`}
+              min={0}
+              max={len}
+              step={0.05}
+              value={Number(rangeEnd.toFixed(2))}
+              onChange={(v) => setRangeEnd(v)}
+            />
           </div>
         )}
         <div className="grid grid-cols-3 gap-2">
-          <Field label={`Freq — ${freq}/s`}>
-            <input type="number" min={0.1} max={20} step={0.1} value={freq} onChange={(e) => setFreq(Math.max(0.1, Math.min(20, Number(e.target.value) || 0.1)))} className="input" />
-          </Field>
-          <Field label={`Depth — ${depthPct}%`}>
-            <input type="number" min={0} max={100} step={5} value={depthPct} onChange={(e) => setDepthPct(Math.max(0, Math.min(100, Number(e.target.value) || 0)))} className="input" />
-          </Field>
-          <Field label={`Center — ${centerPct}%`}>
-            <input type="number" min={0} max={200} step={5} value={centerPct} onChange={(e) => setCenterPct(Math.max(0, Math.min(200, Number(e.target.value) || 0)))} className="input" />
-          </Field>
+          <NumberField
+            label={`Freq — ${freq}/s`}
+            min={0.1}
+            max={20}
+            step={0.1}
+            value={freq}
+            onChange={(v) => setFreq(v)}
+          />
+          <NumberField
+            label={`Depth — ${depthPct}%`}
+            min={0}
+            max={100}
+            step={5}
+            value={depthPct}
+            onChange={(v) => setDepthPct(v)}
+          />
+          <NumberField
+            label={`Center — ${centerPct}%`}
+            min={0}
+            max={200}
+            step={5}
+            value={centerPct}
+            onChange={(v) => setCenterPct(v)}
+          />
         </div>
         <button
           onClick={generate}

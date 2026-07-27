@@ -74,7 +74,7 @@ import {
 import type { ColorGrade } from './project/grade';
 import { NEUTRAL_GRADE } from './project/grade';
 import { compileWarp, bannerBlockedSpans, fitBannerFreeze, fitBannerHold } from './project/timeMap';
-import { Panel, Field, ChoiceGrid, Slider } from './project/ui';
+import { Panel, Field, ChoiceGrid, Slider, NumberInput } from './project/ui';
 import { RATIO_LABELS, FILL_MODES, FRAME_SEC } from './project/constants';
 import CaptionPanel from './project/panels/CaptionPanel';
 import BannerPanel from './project/panels/BannerPanel';
@@ -118,6 +118,16 @@ function freshId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/** True when the key event is aimed at a text field, so editor shortcuts must
+ *  stand down and let the browser's native text handling win. */
+function isEditableTarget(e: KeyboardEvent): boolean {
+  const t = e.target as HTMLElement | null;
+  return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+}
+
+/** Cmd (macOS) or Ctrl (elsewhere) — the editor treats them interchangeably. */
+const hasMod = (e: KeyboardEvent): boolean => e.metaKey || e.ctrlKey;
+
 /** First non-overlapping gap of ≥0.6s among dramatic layers, else null. */
 function findDramaticGap(spans: Span[], total: number, want: number): { start: number; duration: number } | null {
   const sorted = [...spans].sort((a, b) => a.start - b.start);
@@ -157,9 +167,6 @@ function isPlaceable(l: Layer | null | undefined): l is PlaceableLayer {
     !!l &&
     (l.kind === 'sketch' || l.kind === 'highlighter' || l.kind === 'caption' || l.kind === 'dramatic' || l.kind === 'sticker')
   );
-}
-function rotationOf(l: PlaceableLayer): number {
-  return l.el.rotation;
 }
 
 const GUIDE_TOGGLES: { key: keyof GuideSettings; label: string }[] = [
@@ -472,10 +479,8 @@ export default function VideoEditor() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (confirmDeleteId) return; // the delete-confirm dialog owns the keyboard
-      const t = e.target as HTMLElement | null;
-      const editable =
-        !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
-      const mod = e.metaKey || e.ctrlKey;
+      const editable = isEditableTarget(e);
+      const mod = hasMod(e);
 
       if (e.key === 'Escape' && croppingId) {
         e.preventDefault();
@@ -563,7 +568,12 @@ export default function VideoEditor() {
     [],
   );
   const history = useHistory<EditorSnapshot>({ live: snapshot, restore: restoreSnapshot, equal: snapshotEqual });
-  historyRef.current = history;
+  // Published after commit rather than during render: the stable undo/redo/seal
+  // wrappers above read this ref, and every caller is an event handler or effect,
+  // which always runs after the effect below has published the current engine.
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
 
   // ---- cross-project asset library ----
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
@@ -741,6 +751,7 @@ export default function VideoEditor() {
 
   // ---- clip sequence management ----
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const selectedClip = clips.find((c) => c.id === selectedClipId) ?? null;
   /** Selected clip BOUNDARY (index of the incoming clip) whose transition is being edited. */
   const [selectedBoundary, setSelectedBoundary] = useState<number | null>(null);
 
@@ -2026,10 +2037,8 @@ export default function VideoEditor() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (confirmDeleteId) return;
-      const t = e.target as HTMLElement | null;
-      const editable =
-        !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
-      const mod = e.metaKey || e.ctrlKey;
+      const editable = isEditableTarget(e);
+      const mod = hasMod(e);
 
       // Spacebar toggles preview — but never while typing in a field.
       if ((e.key === ' ' || e.code === 'Space') && !editable && !mod) {
@@ -2880,7 +2889,7 @@ export default function VideoEditor() {
                     (() => {
                       const sel: PlaceableLayer = selectedLayer;
                       const box = selBox;
-                      const t: Transform = { ...box, rotation: rotationOf(sel) };
+                      const t: Transform = { ...box, rotation: sel.el.rotation };
                       const locked = sel.kind !== 'highlighter';
                       let lockedAspectPx: number | undefined;
                       if (sel.kind === 'sketch') lockedAspectPx = sel.el.padAspect;
@@ -3340,31 +3349,27 @@ export default function VideoEditor() {
                 </Panel>
               )}
 
-              {/* Selected base clip: original-audio volume automation + mute */}
-              {(() => {
-                const sc = clips.find((c) => c.id === selectedClipId);
-                if (!sc || sc.kind !== 'video') return null;
-                return (
-                  <Panel title="Clip audio">
-                    <ClipPanel key={sc.id} clip={sc} onEdit={(patch, discrete) => editClip(sc.id, patch, discrete)} />
-                  </Panel>
-                );
-              })()}
+              {/* Selected base clip: original-audio volume automation + mute (video only) */}
+              {selectedClip && selectedClip.kind === 'video' && (
+                <Panel title="Clip audio">
+                  <ClipPanel
+                    key={selectedClip.id}
+                    clip={selectedClip}
+                    onEdit={(patch, discrete) => editClip(selectedClip.id, patch, discrete)}
+                  />
+                </Panel>
+              )}
 
               {/* Selected base clip: per-clip colour grade (video or image) */}
-              {(() => {
-                const sc = clips.find((c) => c.id === selectedClipId);
-                if (!sc) return null;
-                return (
-                  <Panel title="Clip colour">
-                    <GradePanel
-                      key={sc.id}
-                      grade={sc.grade ?? NEUTRAL_GRADE}
-                      onChange={(g, discrete) => editClip(sc.id, { grade: g }, discrete)}
-                    />
-                  </Panel>
-                );
-              })()}
+              {selectedClip && (
+                <Panel title="Clip colour">
+                  <GradePanel
+                    key={selectedClip.id}
+                    grade={selectedClip.grade ?? NEUTRAL_GRADE}
+                    onChange={(g, discrete) => editClip(selectedClip.id, { grade: g }, discrete)}
+                  />
+                </Panel>
+              )}
 
               {/* Project-wide colour grade over the whole composited output */}
               {mediaKind && (
@@ -3408,13 +3413,12 @@ export default function VideoEditor() {
                   <Field label="Clip length">
                     <div className="flex items-center gap-2">
                       <input type="range" min={0.5} max={20} step={0.1} value={Math.min(20, len)} onChange={(e) => setLen(Number(e.target.value))} className="flex-1 accent-[var(--color-primary-green)]" />
-                      <input
-                        type="number"
+                      <NumberInput
                         min={MIN_CLIP_LEN}
                         max={IMAGE_CLIP_MAX}
                         step={0.01}
                         value={Number(len.toFixed(2))}
-                        onChange={(e) => setLen(Number(e.target.value))}
+                        onChange={setLen}
                         className="w-20 px-2 py-1 rounded-md bg-[var(--color-bg-elevated)] border border-[var(--color-glass-border)] text-sm text-right tabular-nums"
                       />
                       <span className="text-xs text-[var(--color-text-muted)]">s</span>
