@@ -1,6 +1,9 @@
-// ===== Shared option lists for the editor's project-settings controls =====
+// ===== Shared option lists + small helpers for the editor's controls =====
 
 import type { FillMode, RatioKey } from '../types';
+
+/** Round to 2dp — the editor's standard precision for seconds shown in a field. */
+export const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * Editing/timeline frame rate — the granularity of keyboard frame-stepping

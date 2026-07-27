@@ -3,10 +3,9 @@
 // panel owns timeline timing (start + hold) and the crop-mode toggle. Cropping
 // is also entered by double-clicking the sticker on the preview.
 
-import { Field } from '../ui';
+import { DangerButton, NumberField } from '../ui';
+import { round2 } from '../constants';
 import type { StickerLayer } from '../types';
-
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 interface Props {
   layer: StickerLayer;
@@ -29,28 +28,22 @@ export default function StickerPanel({ layer, duration, cropping, onEdit, onTogg
       </p>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label={`Start — ${round2(s.start)}s`}>
-          <input
-            type="number"
-            min={0}
-            max={round2(maxStart)}
-            step={0.1}
-            value={round2(s.start)}
-            onChange={(e) => onEdit({ start: Math.max(0, Math.min(maxStart, Number(e.target.value) || 0)) })}
-            className="input"
-          />
-        </Field>
-        <Field label={`Hold — ${round2(s.hold)}s`}>
-          <input
-            type="number"
-            min={0.1}
-            max={Math.max(0.1, duration || 60)}
-            step={0.1}
-            value={round2(s.hold)}
-            onChange={(e) => onEdit({ hold: Math.max(0.1, Number(e.target.value) || 0.1) })}
-            className="input"
-          />
-        </Field>
+        <NumberField
+          label={`Start — ${round2(s.start)}s`}
+          min={0}
+          max={round2(maxStart)}
+          step={0.1}
+          value={round2(s.start)}
+          onChange={(v) => onEdit({ start: v })}
+        />
+        <NumberField
+          label={`Hold — ${round2(s.hold)}s`}
+          min={0.1}
+          max={Math.max(0.1, duration || 60)}
+          step={0.1}
+          value={round2(s.hold)}
+          onChange={(v) => onEdit({ hold: v })}
+        />
       </div>
 
       {isVideo && (
@@ -74,12 +67,9 @@ export default function StickerPanel({ layer, duration, cropping, onEdit, onTogg
         Cropping sets which part of the source shows inside the frame — the frame keeps the crop's shape.
       </div>
 
-      <button
-        onClick={onRemove}
-        className="w-full mt-1 px-3 py-2 rounded-md border border-[rgba(255,80,80,0.4)] text-[rgba(255,120,120,0.9)] text-xs font-medium hover:bg-[rgba(255,80,80,0.08)]"
-      >
+      <DangerButton onClick={onRemove} className="mt-1">
         Remove sticker
-      </button>
+      </DangerButton>
     </>
   );
 }

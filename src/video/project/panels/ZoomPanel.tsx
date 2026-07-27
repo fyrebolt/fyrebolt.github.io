@@ -1,7 +1,8 @@
 // ===== Zoom layer property panel (add keyframes + edit the selected keyframe) =====
 // Ported from the classic ZoomTool controls.
 
-import { Field } from '../ui';
+import { DangerButton, Field, NumberField } from '../ui';
+import { round2 } from '../constants';
 import { outputSizeFor } from '../../render';
 import type { RatioKey } from '../../types';
 import type { ZoomKeyframe, ZoomRect } from '../../zoom/types';
@@ -89,28 +90,22 @@ export default function ZoomPanel({
       {selected && (
         <div className="pt-3 border-t border-[var(--color-glass-border)] space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <Field label={`Start — ${(Math.round(selected.start * 100) / 100).toFixed(2)}s`}>
-              <input
-                type="number"
-                min={0}
-                max={Math.max(0, duration)}
-                step={0.1}
-                value={Math.round(selected.start * 100) / 100}
-                onChange={(e) => onEditKf(selected.id, { start: Math.max(0, Number(e.target.value) || 0) })}
-                className="input"
-              />
-            </Field>
-            <Field label={`Transition — ${(Math.round(selected.duration * 100) / 100).toFixed(2)}s`}>
-              <input
-                type="number"
-                min={0.1}
-                max={Math.max(0.1, duration)}
-                step={0.1}
-                value={Math.round(selected.duration * 100) / 100}
-                onChange={(e) => onEditKf(selected.id, { duration: Math.max(0.1, Number(e.target.value) || 0.1) })}
-                className="input"
-              />
-            </Field>
+            <NumberField
+              label={`Start — ${round2(selected.start).toFixed(2)}s`}
+              min={0}
+              max={Math.max(0, duration)}
+              step={0.1}
+              value={round2(selected.start)}
+              onChange={(v) => onEditKf(selected.id, { start: v })}
+            />
+            <NumberField
+              label={`Transition — ${round2(selected.duration).toFixed(2)}s`}
+              min={0.1}
+              max={Math.max(0.1, duration)}
+              step={0.1}
+              value={round2(selected.duration)}
+              onChange={(v) => onEditKf(selected.id, { duration: v })}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -127,9 +122,7 @@ export default function ZoomPanel({
             Whoosh at this transition
           </label>
 
-          <button onClick={() => onRemoveKf(selected.id)} className="w-full px-3 py-2 rounded-md border border-[rgba(255,80,80,0.4)] text-[rgba(255,120,120,0.9)] text-xs font-medium hover:bg-[rgba(255,80,80,0.08)]">
-            Remove keyframe
-          </button>
+          <DangerButton onClick={() => onRemoveKf(selected.id)}>Remove keyframe</DangerButton>
         </div>
       )}
 

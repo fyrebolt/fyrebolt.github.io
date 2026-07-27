@@ -4,11 +4,10 @@
 // is set by dragging the word on the preview (caption-style). Words never
 // overlap in time — the timeline drag clamps to neighbours.
 
-import { Field, Slider } from '../ui';
+import { DangerButton, Field, NumberField, Slider } from '../ui';
+import { round2 } from '../constants';
 import type { WordMode } from '../../dramatic/types';
 import type { DramaticLayer } from '../types';
-
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 const MODES: [WordMode, string][] = [
   ['normal', 'Word'],
@@ -89,62 +88,45 @@ export default function DramaticPanel({ layer, duration, onEdit, onRemove }: Pro
       />
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label={`Start — ${round2(w.start)}s`}>
-          <input
-            type="number"
-            min={0}
-            max={Math.max(0, duration)}
-            step={0.1}
-            value={round2(w.start)}
-            onChange={(e) => onEdit({ start: Math.max(0, Number(e.target.value) || 0) })}
-            className="input"
-          />
-        </Field>
-        <Field label={`Hold — ${round2(w.duration)}s`}>
-          <input
-            type="number"
-            min={0.2}
-            max={Math.max(0.2, duration)}
-            step={0.1}
-            value={round2(w.duration)}
-            onChange={(e) => onEdit({ duration: Math.max(0.2, Number(e.target.value) || 0.2) })}
-            className="input"
-          />
-        </Field>
+        <NumberField
+          label={`Start — ${round2(w.start)}s`}
+          min={0}
+          max={Math.max(0, duration)}
+          step={0.1}
+          value={round2(w.start)}
+          onChange={(v) => onEdit({ start: v })}
+        />
+        <NumberField
+          label={`Hold — ${round2(w.duration)}s`}
+          min={0.2}
+          max={Math.max(0.2, duration)}
+          step={0.1}
+          value={round2(w.duration)}
+          onChange={(v) => onEdit({ duration: v })}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label={`Fade in — ${round2(w.fadeIn)}s`}>
-          <input
-            type="number"
-            min={0}
-            max={Math.max(0, w.duration)}
-            step={0.05}
-            value={round2(w.fadeIn)}
-            onChange={(e) => onEdit({ fadeIn: Math.max(0, Math.min(w.duration, Number(e.target.value) || 0)) })}
-            className="input"
-          />
-        </Field>
-        <Field label={`Fade out — ${round2(w.fadeOut)}s`}>
-          <input
-            type="number"
-            min={0}
-            max={Math.max(0, w.duration)}
-            step={0.05}
-            value={round2(w.fadeOut)}
-            onChange={(e) => onEdit({ fadeOut: Math.max(0, Math.min(w.duration, Number(e.target.value) || 0)) })}
-            className="input"
-          />
-        </Field>
+        <NumberField
+          label={`Fade in — ${round2(w.fadeIn)}s`}
+          min={0}
+          max={Math.max(0, w.duration)}
+          step={0.05}
+          value={round2(w.fadeIn)}
+          onChange={(v) => onEdit({ fadeIn: v })}
+        />
+        <NumberField
+          label={`Fade out — ${round2(w.fadeOut)}s`}
+          min={0}
+          max={Math.max(0, w.duration)}
+          step={0.05}
+          value={round2(w.fadeOut)}
+          onChange={(v) => onEdit({ fadeOut: v })}
+        />
       </div>
       <p className="text-[10px] text-[var(--color-text-muted)]">Drag the word on the preview to move it (snaps to centre / thirds). Words never overlap in time.</p>
 
-      <button
-        onClick={onRemove}
-        className="w-full mt-1 px-3 py-2 rounded-md border border-[rgba(255,80,80,0.4)] text-[rgba(255,120,120,0.9)] text-xs font-medium hover:bg-[rgba(255,80,80,0.08)]"
-      >
-        Remove word
-      </button>
+      <DangerButton onClick={onRemove} className="mt-1">Remove word</DangerButton>
     </>
   );
 }

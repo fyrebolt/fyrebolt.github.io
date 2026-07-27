@@ -5,14 +5,15 @@
 // convenience: presets that drop a localised speed region at the playhead, a
 // fine slider for the selected point, a whoosh toggle, and clear / remove.
 
-import { Field } from '../ui';
+import { DangerButton, Field } from '../ui';
+import { round2 } from '../constants';
 import { FREEZE_EPS, MAX_SPEED, sortedSpeeds } from '../../timemachine/types';
 import type { TimeMachineLayer } from '../types';
 
 function speedLabel(speed: number): string {
   if (speed <= FREEZE_EPS) return 'Freeze';
   if (Math.abs(speed - 1) < 0.02) return '1× normal';
-  return `${(Math.round(speed * 100) / 100).toString()}× ${speed < 1 ? 'slow-mo' : 'fast'}`;
+  return `${round2(speed).toString()}× ${speed < 1 ? 'slow-mo' : 'fast'}`;
 }
 
 interface Props {
@@ -93,9 +94,7 @@ export default function TimeMachinePanel({
               Normal (1×)
             </button>
           </div>
-          <button onClick={() => onRemovePoint(selectedIdx!)} className="w-full px-3 py-2 rounded-md border border-[rgba(255,80,80,0.4)] text-[rgba(255,120,120,0.9)] text-xs font-medium hover:bg-[rgba(255,80,80,0.08)]">
-            Remove point
-          </button>
+          <DangerButton onClick={() => onRemovePoint(selectedIdx!)}>Remove point</DangerButton>
         </div>
       )}
 
