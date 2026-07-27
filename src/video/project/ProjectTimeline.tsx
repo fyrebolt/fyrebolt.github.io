@@ -329,8 +329,14 @@ export default function ProjectTimeline({
   }, []);
 
   // ---- temporal snapping (time-domain twin of the spatial guide locks) ----
+  //
+  // `exceptLayerId` / `exceptMarkerId` drop the thing being dragged from its own
+  // anchor list. Excluding a dragged MARKER matters as much as excluding a layer:
+  // its `t` updates live as the drag streams, so leaving it in would make each
+  // frame snap the pin back onto where the previous frame put it, freezing it in
+  // place after the first step.
   const snapT = useCallback(
-    (value: number, exceptLayerId: string | null): number => {
+    (value: number, exceptLayerId: string | null, exceptMarkerId: string | null = null): number => {
       const el = trackRef.current;
       if (!el) return value;
       const w = el.getBoundingClientRect().width || 1;
@@ -343,7 +349,7 @@ export default function ProjectTimeline({
         targets.push({ t: s.start, kind: 'element' }, { t: s.end, kind: 'element' });
       }
       targets.push({ t: currentSec, kind: 'playhead' });
-      for (const m of markers) targets.push({ t: m.t, kind: 'marker' });
+      for (const m of markers) if (m.id !== exceptMarkerId) targets.push({ t: m.t, kind: 'marker' });
       const r = snapTime(value, targets, threshold, guideSettings);
       setSnapGuide(r.hit ? r.t : null);
       return r.t;
@@ -596,9 +602,6 @@ export default function ProjectTimeline({
   );
 
   // ---- marker pin drag (moves the marker along the output clock) ----
-  // Markers snap to the same anchors layers do, but with themselves excluded —
-  // `exceptLayerId` only filters LAYER anchors, so a pin would otherwise lock to
-  // its own position and never move.
   const onMarkerDown = useCallback(
     (e: ReactPointerEvent, m: Marker) => {
       e.stopPropagation();
@@ -617,7 +620,7 @@ export default function ProjectTimeline({
       const d = markerDrag.current;
       if (!d || e.buttons === 0) return;
       const delta = (fracFromClientX(e.clientX) - fracFromClientX(d.startX)) * dur;
-      onMoveMarker(d.id, clamp(0, dur, snapT(d.origT + delta, null)));
+      onMoveMarker(d.id, clamp(0, dur, snapT(d.origT + delta, null, d.id)));
     },
     [dur, fracFromClientX, onMoveMarker, snapT],
   );
