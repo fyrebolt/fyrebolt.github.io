@@ -52,6 +52,7 @@ import type { MusicElement, MusicSeed } from '../music/types';
 import { createMusic, elementEnd as musicEnd } from '../music/types';
 import type { VideoClip } from './clips';
 import type { ColorGrade } from './grade';
+import type { Marker } from './markers';
 
 export interface LayerBase {
   id: string;
@@ -59,6 +60,23 @@ export interface LayerBase {
   z: number;
   /** Human label shown in the layers list and its timeline row. */
   name: string;
+  /**
+   * Muted from the OUTPUT entirely: the layer draws nothing, plays no audio, and
+   * contributes no time distortion (a hidden banner does not freeze; a hidden
+   * Time Machine does not warp). It keeps its row and panel so it can be edited
+   * and switched back on. Enforced in ONE place — `activeProject` below strips
+   * hidden layers from the project the compositor and the warp ever see.
+   * Absent/false == visible, so projects saved before this are unchanged.
+   */
+  hidden?: boolean;
+  /**
+   * Protected from POSITIONAL edits: canvas drag / resize / rotate, group move,
+   * marquee pick-up, timeline drag, arrow-nudge, and delete. Its property panel
+   * stays live — that is deliberately the escape hatch, both for unlocking and
+   * for precise numeric edits that can't be made by accident.
+   * Absent/false == unlocked.
+   */
+  locked?: boolean;
 }
 
 /** Entrance banner: styling + the freeze sequence. All times in seconds. */
@@ -164,6 +182,31 @@ export interface Project {
    *  applied as a final pass. Absent == neutral. Composes on top of any per-clip
    *  grade. */
   grade?: ColorGrade;
+  /** Labelled instants on the OUTPUT clock — an editing aid only, never drawn
+   *  into the video (see project/markers.ts). Absent == none, so projects saved
+   *  before markers existed are unchanged. */
+  markers?: Marker[];
+}
+
+// ---- hidden layers: one authoritative filter ----
+
+/**
+ * The project as it RENDERS: hidden layers removed outright. Every consumer that
+ * produces output — the compositor's draw loop, its audio graph, its hit-test,
+ * and the time-warp compiler — reads the project through this, so "hidden" is
+ * enforced once here instead of being re-checked at a dozen draw sites.
+ *
+ * Editor-side consumers (the layers list, the timeline rows, the property panels)
+ * deliberately use the RAW project, so a hidden layer stays visible as a row you
+ * can select, edit, and un-hide.
+ *
+ * Returns the input object untouched when nothing is hidden, which is the common
+ * case — identity matters because the compositor caches its compiled warp by
+ * project identity and would otherwise recompile every frame.
+ */
+export function activeProject(p: Project): Project {
+  if (!p.layers.some((l) => l.hidden)) return p;
+  return { ...p, layers: p.layers.filter((l) => !l.hidden) };
 }
 
 // ---- classification helpers ----

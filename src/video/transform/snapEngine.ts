@@ -36,6 +36,8 @@ export interface GuideSettings {
   snapElements: boolean;
   /** Snap a dragged element's start/end to the playhead. */
   snapPlayhead: boolean;
+  /** Snap a dragged element's start/end to a timeline marker. */
+  snapMarkers: boolean;
 }
 
 export const DEFAULT_GUIDES: GuideSettings = {
@@ -49,6 +51,7 @@ export const DEFAULT_GUIDES: GuideSettings = {
   snapClips: true,
   snapElements: true,
   snapPlayhead: true,
+  snapMarkers: true,
 };
 
 /** A single alignment line to draw while a snap is active. */
@@ -259,7 +262,7 @@ export function snapResizeFree(box: Box, edges: Edges, env: SnapEnv): { box: Box
 // boundaries, other elements' start/end, and the playhead. Which anchors are live
 // is governed by the same GuideSettings surfaced in the gear popover.
 
-export type TimeSnapKind = 'clip' | 'element' | 'playhead';
+export type TimeSnapKind = 'clip' | 'element' | 'playhead' | 'marker';
 
 export interface TimeSnapTarget {
   /** Anchor time in OUTPUT seconds. */
@@ -276,7 +279,7 @@ export function snapTime(
   t: number,
   targets: TimeSnapTarget[],
   threshold: number,
-  settings: Pick<GuideSettings, 'snapClips' | 'snapElements' | 'snapPlayhead'>,
+  settings: Pick<GuideSettings, 'snapClips' | 'snapElements' | 'snapPlayhead' | 'snapMarkers'>,
 ): { t: number; hit: TimeSnapTarget | null } {
   let best: TimeSnapTarget | null = null;
   let bestD = threshold;
@@ -284,6 +287,7 @@ export function snapTime(
     if (tg.kind === 'clip' && !settings.snapClips) continue;
     if (tg.kind === 'element' && !settings.snapElements) continue;
     if (tg.kind === 'playhead' && !settings.snapPlayhead) continue;
+    if (tg.kind === 'marker' && !settings.snapMarkers) continue;
     const d = Math.abs(t - tg.t);
     if (d < bestD) {
       bestD = d;

@@ -1279,7 +1279,9 @@ export class Compositor {
 
   // ---- caption pointer helpers (normalised 0..1 coords) ----
 
-  /** Top-most draggable overlay (any placeable kind) under a normalised point. */
+  /** Top-most draggable overlay (any placeable kind) under a normalised point.
+   *  Hidden layers are already absent from the project this sees; locked ones are
+   *  skipped here so a click falls through to whatever sits under them. */
   hitTestDraggable(nx: number, ny: number): string | null {
     if (!this.loaded) return null;
     const px = nx * this.out.w;
@@ -1288,6 +1290,7 @@ export class Compositor {
     const overlays = overlayLayers(p);
     for (let i = overlays.length - 1; i >= 0; i--) {
       const layer = overlays[i];
+      if (layer.locked) continue;
       const b = this.boundsPx(layer.id);
       if (!b) continue;
       // Transform the point into the box's local (unrotated) frame about its centre.

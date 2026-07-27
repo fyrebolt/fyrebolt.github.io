@@ -45,6 +45,7 @@ import type {
   ZoomLayer,
 } from './project/types';
 import {
+  activeProject,
   bannerLayers,
   zoomLayer,
   timeMachineLayer,
@@ -73,6 +74,9 @@ import {
 } from './project/transitions';
 import type { ColorGrade } from './project/grade';
 import { NEUTRAL_GRADE } from './project/grade';
+import type { Marker } from './project/markers';
+import { createMarker, markerAt, stepMarker } from './project/markers';
+import MarkerPanel from './project/panels/MarkerPanel';
 import { compileWarp, bannerBlockedSpans, fitBannerFreeze, fitBannerHold } from './project/timeMap';
 import { Panel, Field, ChoiceGrid, Slider, NumberInput } from './project/ui';
 import { RATIO_LABELS, FILL_MODES, FRAME_SEC } from './project/constants';
@@ -157,6 +161,7 @@ interface EditorSnapshot {
   sfxVolume: number;
   imageDuration: number;
   globalGrade: ColorGrade;
+  markers: Marker[];
   pen: Pen;
 }
 
@@ -190,12 +195,14 @@ const GUIDES_OFF: GuideSettings = {
   snapClips: false,
   snapElements: false,
   snapPlayhead: false,
+  snapMarkers: false,
 };
 
 const TIME_GUIDE_TOGGLES: { key: keyof GuideSettings; label: string }[] = [
   { key: 'snapClips', label: 'Snap to clip edges' },
   { key: 'snapElements', label: 'Snap to other elements' },
   { key: 'snapPlayhead', label: 'Snap to playhead' },
+  { key: 'snapMarkers', label: 'Snap to markers' },
 ];
 
 type AddKind =
@@ -269,6 +276,8 @@ export default function VideoEditor() {
   const [imageDuration, setImageDuration] = useState(6);
   /** Global colour grade over the whole composited output (per-clip grades live on each clip). */
   const [globalGrade, setGlobalGrade] = useState<ColorGrade>(NEUTRAL_GRADE);
+  /** Timeline markers — labelled instants on the output clock (editing aid only). */
+  const [markers, setMarkers] = useState<Marker[]>([]);
 
   // Drawing-pad pen (shared tool state for sketch layers).
   const [pen, setPen] = useState<Pen>({ color: '#ff4d4d', width: 0.02, smoothness: 0.8 });
@@ -280,6 +289,7 @@ export default function VideoEditor() {
   const [groupIds, setGroupIds] = useState<string[]>([]);
   /** Marquee rect (output-normalised) while drag-selecting, else null. */
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [selectedMarkerId, setSelectedMarkerId] = useState<string | null>(null);
   const [selectedZoomKfId, setSelectedZoomKfId] = useState<string | null>(null);
   const [selectedSpeedIdx, setSelectedSpeedIdx] = useState<number | null>(null);
   const [editingZoom, setEditingZoom] = useState(false);
@@ -323,6 +333,11 @@ export default function VideoEditor() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const compRef = useRef<Compositor | null>(null);
   const projectRef = useRef<Project>({ clips: [], layers: [], ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration, grade: NEUTRAL_GRADE });
+  /** The project MINUS hidden layers — what the compositor draws, sounds, and warps.
+   *  Kept apart from `projectRef` (the full project) because editor-side reads must
+   *  still see hidden layers: `setLayers(projectRef.current.layers)` call sites would
+   *  otherwise delete them. See activeProject() in project/types.ts. */
+  const renderRef = useRef<Project>(projectRef.current);
   const objectUrls = useRef<string[]>([]);
   /** Decoded clip media (video / image), keyed by clip srcId, kept out of the project. */
   const clipMedia = useRef<Map<string, ClipEl>>(new Map());
@@ -356,9 +371,12 @@ export default function VideoEditor() {
   const editingRef = useRef(false);
 
   const project: Project = useMemo(
-    () => ({ clips, layers, ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration, grade: globalGrade }),
-    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade],
+    () => ({ clips, layers, ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration, grade: globalGrade, markers }),
+    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, markers],
   );
+  /** Memoised so its identity is stable per edit — the compositor caches its
+   *  compiled warp against it. */
+  const renderProject = useMemo(() => activeProject(project), [project]);
 
   // ---- media facts DERIVED from the clip sequence ----
   // 'video' if any clip is video, else 'image', else null (nothing loaded).
@@ -395,12 +413,19 @@ export default function VideoEditor() {
 
   // Output→source time-warp (video only). Drives the timeline length AND where
   // each clip boundary lands on the OUTPUT axis (for the clip lane + snapping).
-  const warp = useMemo(() => (mediaKind === 'video' ? compileWarp(project, duration, true) : null), [project, mediaKind, duration]);
+  // Compiled from the RENDER project so hiding a banner or the Time Machine drops
+  // its distortion from the timeline exactly as it drops from the output.
+  const warp = useMemo(
+    () => (mediaKind === 'video' ? compileWarp(renderProject, duration, true) : null),
+    [renderProject, mediaKind, duration],
+  );
 
   // Timeline / output duration (seconds). For video this is the warped output
   // length (speed track + banner freeze can stretch or shrink it).
   const timelineDuration = useMemo(() => {
     if (mediaKind === 'video' && warp) return Math.max(0.1, warp.totalOutput);
+    // Stills: measured over ALL layers, hidden included, so a hidden layer's row
+    // stays on-screen and reachable for editing / un-hiding.
     const ends = layers.map((l) => layerSpan(l).end);
     return Math.max(3, duration, ...ends);
   }, [warp, mediaKind, duration, layers]);
@@ -439,17 +464,18 @@ export default function VideoEditor() {
   // Keep the compositor's project source current + redraw on edits.
   useEffect(() => {
     projectRef.current = project;
+    renderRef.current = renderProject;
     const c = compRef.current;
     if (!c) return;
     if (editingRef.current) c.redrawEditZoom();
     else c.renderStatic();
-  }, [project]);
+  }, [project, renderProject]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
     const c = new Compositor(
       canvasRef.current,
-      () => projectRef.current,
+      () => renderRef.current,
       (srcId) => clipMedia.current.get(srcId),
       (sec) => setCurrentSec(sec),
       (srcId) => stickerMedia.current.get(srcId),
@@ -473,6 +499,16 @@ export default function VideoEditor() {
   useEffect(() => {
     const urls = objectUrls.current;
     return () => urls.forEach((u) => URL.revokeObjectURL(u));
+  }, []);
+
+  /** Ask to delete a layer. Locked layers refuse — deletion is the one destructive
+   *  edit a lock must stop, so it is checked before the dialog even opens. */
+  const requestDelete = useCallback((id: string) => {
+    if (projectRef.current.layers.find((l) => l.id === id)?.locked) {
+      setStatus('That layer is locked — unlock it in Layers (🔒) to delete it.');
+      return;
+    }
+    setConfirmDeleteId(id);
   }, []);
 
   // ---- keyboard: undo / redo + delete the selected layer ----
@@ -512,12 +548,12 @@ export default function VideoEditor() {
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && !editable && selectedLayerId) {
         e.preventDefault();
-        setConfirmDeleteId(selectedLayerId);
+        requestDelete(selectedLayerId);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, selectedLayerId, confirmDeleteId, croppingId]);
+  }, [undo, redo, selectedLayerId, confirmDeleteId, croppingId, requestDelete]);
 
   const setEditingZoomBoth = (v: boolean) => {
     editingRef.current = v;
@@ -526,8 +562,8 @@ export default function VideoEditor() {
 
   // ---- undo / redo engine (whole-project snapshots) ----
   const snapshot: EditorSnapshot = useMemo(
-    () => ({ clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, pen }),
-    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, pen],
+    () => ({ clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, markers, pen }),
+    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, markers, pen],
   );
   const restoreSnapshot = useCallback((s: EditorSnapshot) => {
     setClips(s.clips);
@@ -540,6 +576,7 @@ export default function VideoEditor() {
     setSfxVolume(s.sfxVolume);
     setImageDuration(s.imageDuration);
     setGlobalGrade(s.globalGrade);
+    setMarkers(s.markers);
     setPen(s.pen);
     // Reset transient editing state and clamp selection to layers that survive.
     editingRef.current = false;
@@ -549,6 +586,7 @@ export default function VideoEditor() {
     compRef.current?.exitEdit();
     setSelectedAttachmentId(null);
     setGroupIds((g) => g.filter((id) => s.layers.some((l) => l.id === id)));
+    setSelectedMarkerId((cur) => (cur && s.markers.some((m) => m.id === cur) ? cur : null));
     setSelectedLayerId((cur) => (cur && s.layers.some((l) => l.id === cur) ? cur : null));
     setCroppingId((cur) => (cur && s.layers.some((l) => l.id === cur) ? cur : null));
   }, []);
@@ -564,6 +602,7 @@ export default function VideoEditor() {
       a.sfxVolume === b.sfxVolume &&
       a.imageDuration === b.imageDuration &&
       a.globalGrade === b.globalGrade &&
+      a.markers === b.markers &&
       a.pen === b.pen,
     [],
   );
@@ -1020,6 +1059,15 @@ export default function VideoEditor() {
       if (kind === 'music') {
         setLibraryOpen('music');
         return;
+      }
+      // Zoom / Time Machine are single-track: a repeat "+" edits the EXISTING
+      // track, so a lock on it has to refuse here as well as on its row.
+      if (kind === 'zoom' || kind === 'timemachine') {
+        const track = kind === 'zoom' ? zoomLayer(projectRef.current) : timeMachineLayer(projectRef.current);
+        if (track?.locked) {
+          setStatus(`${track.name} is locked — unlock it in Layers (🔒) to add to it.`);
+          return;
+        }
       }
       sealDiscrete();
       const z = nextZ(projectRef.current);
@@ -1479,8 +1527,27 @@ export default function VideoEditor() {
     setLayers((ls) => ls.map((l) => (l.id === id && l.kind === 'dramatic' ? { ...l, el: { ...l.el, ...patch } } : l)));
   }, []);
 
+  /**
+   * Toggle a layer's `hidden` / `locked` flag as its own undo entry. Written as
+   * two explicit spreads rather than a computed key so each spread keeps its
+   * layer variant (a computed key would collapse the discriminated union).
+   */
+  const toggleLayerFlag = useCallback(
+    (id: string, flag: 'hidden' | 'locked') => {
+      sealDiscrete();
+      setLayers((ls) =>
+        ls.map((l): Layer => {
+          if (l.id !== id) return l;
+          return flag === 'hidden' ? { ...l, hidden: !l.hidden } : { ...l, locked: !l.locked };
+        }),
+      );
+    },
+    [sealDiscrete],
+  );
+
   const removeLayer = useCallback(
     (id: string) => {
+      if (projectRef.current.layers.find((l) => l.id === id)?.locked) return;
       sealDiscrete();
       setLayers((ls) => ls.filter((l) => l.id !== id));
       setSelectedLayerId((s) => (s === id ? null : s));
@@ -1982,6 +2049,87 @@ export default function VideoEditor() {
     [haltTransport, currentSec, timelineDuration, seekTo],
   );
 
+  // ---- timeline markers (labelled instants on the output clock) ----
+  //
+  // Markers are project data like everything else, so every mutation goes through
+  // the same snapshot history: label / colour / time-field edits seal their own
+  // undo entry, while a pin DRAG streams unsealed so the history debounce
+  // coalesces the burst into one step (the pattern the speed curve and volume
+  // curves already use).
+
+  /** Drop a marker at the playhead. Refuses a second marker at the same instant. */
+  const addMarkerAt = useCallback(
+    (t: number) => {
+      if (!mediaKind) return;
+      const at = Math.max(0, Math.min(t, timelineDuration));
+      const existing = markerAt(markers, at);
+      if (existing) {
+        setSelectedMarkerId(existing.id);
+        setStatus('There is already a marker here.');
+        return;
+      }
+      sealDiscrete();
+      const m = createMarker(at, markers.length);
+      setMarkers((ms) => [...ms, m]);
+      setSelectedMarkerId(m.id);
+      setStatus(`Marker at ${at.toFixed(2)}s. Rename it in the Markers panel.`);
+    },
+    [mediaKind, timelineDuration, markers, sealDiscrete],
+  );
+
+  const addMarkerAtPlayhead = useCallback(() => {
+    addMarkerAt(compRef.current?.currentTimeSec() ?? currentSec);
+  }, [addMarkerAt, currentSec]);
+
+  const editMarker = useCallback(
+    (id: string, patch: Partial<Marker>, discrete = false) => {
+      if (discrete) sealDiscrete();
+      setMarkers((ms) => ms.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+    },
+    [sealDiscrete],
+  );
+
+  /** Streamed pin drag — clamped to the timeline, no seal (see the note above). */
+  const moveMarker = useCallback((id: string, t: number) => {
+    setMarkers((ms) => ms.map((m) => (m.id === id ? { ...m, t: Math.max(0, t) } : m)));
+    setSelectedMarkerId(id);
+  }, []);
+
+  const removeMarker = useCallback(
+    (id: string) => {
+      sealDiscrete();
+      setMarkers((ms) => ms.filter((m) => m.id !== id));
+      setSelectedMarkerId((cur) => (cur === id ? null : cur));
+    },
+    [sealDiscrete],
+  );
+
+  /** Select a marker and park the playhead on it. */
+  const selectMarker = useCallback(
+    (id: string) => {
+      setSelectedMarkerId(id);
+      const m = markers.find((x) => x.id === id);
+      if (m) seekTo(Math.max(0, Math.min(m.t, timelineDuration)));
+    },
+    [markers, seekTo, timelineDuration],
+  );
+
+  /** ⌥← / ⌥→ : walk the playhead to the previous / next marker. */
+  const jumpMarker = useCallback(
+    (dir: 1 | -1) => {
+      const from = compRef.current?.currentTimeSec() ?? currentSec;
+      const m = stepMarker(markers, from, dir);
+      if (!m) {
+        setStatus(dir === 1 ? 'No marker after the playhead.' : 'No marker before the playhead.');
+        return;
+      }
+      haltTransport();
+      setSelectedMarkerId(m.id);
+      seekTo(Math.max(0, Math.min(m.t, timelineDuration)));
+    },
+    [markers, currentSec, haltTransport, seekTo, timelineDuration],
+  );
+
   /**
    * Nudge the selected placeable overlay's on-canvas position (normalised).
    * Applies the delta inside a functional setLayers updater — NOT from a captured
@@ -2075,6 +2223,21 @@ export default function VideoEditor() {
         splitAtPlayhead();
         return;
       }
+      // 'M' drops a marker at the playhead (the NLE convention).
+      if ((e.key === 'm' || e.key === 'M') && !editable && !mod && !e.altKey) {
+        if (!mediaKind) return;
+        e.preventDefault();
+        addMarkerAtPlayhead();
+        return;
+      }
+      // ⌥←/⌥→ walks the playhead between markers. Checked BEFORE the plain-arrow
+      // branch below, which would otherwise swallow it (Alt isn't part of `mod`).
+      if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && e.altKey && !editable && !mod) {
+        if (!mediaKind) return;
+        e.preventDefault();
+        jumpMarker(e.key === 'ArrowRight' ? 1 : -1);
+        return;
+      }
       // Arrows: selection-aware. A placeable element selected → nudge its
       // on-canvas position (Shift = bigger jump); otherwise Left/Right frame-step
       // the playhead by one editing frame (Up/Down ignored — the playhead is 1-D).
@@ -2084,7 +2247,7 @@ export default function VideoEditor() {
         !mod
       ) {
         if (!mediaKind) return;
-        if (isPlaceable(selectedLayer)) {
+        if (isPlaceable(selectedLayer) && !selectedLayer.locked) {
           e.preventDefault();
           const s = e.shiftKey ? 0.02 : 0.004; // normalised nudge step
           if (e.key === 'ArrowLeft') nudgeSelected(-s, 0);
@@ -2128,7 +2291,7 @@ export default function VideoEditor() {
   }, [
     togglePlay, duplicateLayer, selectedLayerId, fullscreen, croppingId, confirmDeleteId, mediaKind,
     splitAtPlayhead, selectedLayer, nudgeSelected, stepFrame, shuttleBackward, shuttleForward, haltTransport,
-    selectedClipId, duplicateClip, copyClip, pasteClip,
+    selectedClipId, duplicateClip, copyClip, pasteClip, addMarkerAtPlayhead, jumpMarker,
   ]);
 
   // ---- canvas selection (single-layer transforms are owned by TransformBox) ----
@@ -2172,7 +2335,7 @@ export default function VideoEditor() {
       const target = hit ?? (selectedLayer?.kind === 'sticker' ? selectedLayer.id : null);
       if (!target) return;
       const layer = layers.find((l) => l.id === target);
-      if (!layer || layer.kind !== 'sticker') return;
+      if (!layer || layer.kind !== 'sticker' || layer.locked || layer.hidden) return;
       setSelectedLayerId(target);
       setSelectedAttachmentId(null);
       setCroppingId((cur) => (cur === target ? null : target));
@@ -2257,8 +2420,9 @@ export default function VideoEditor() {
       sfxVolume,
       imageDuration,
       grade: globalGrade,
+      markers,
     }),
-    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade],
+    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, markers],
   );
 
   const blobForSrc = useCallback(
@@ -2351,6 +2515,8 @@ export default function VideoEditor() {
     setSfxVolume(s.sfxVolume);
     setImageDuration(s.imageDuration);
     setGlobalGrade(s.grade ?? NEUTRAL_GRADE);
+    setMarkers(s.markers ?? []);
+    setSelectedMarkerId(null);
     setSelectedLayerId(null);
     setSelectedClipId(null);
     setSelectedAttachmentId(null);
@@ -2408,7 +2574,7 @@ export default function VideoEditor() {
       })();
     }, 800);
     return () => window.clearTimeout(id);
-  }, [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, currentSnapshot, blobForSrc]);
+  }, [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, markers, currentSnapshot, blobForSrc]);
 
   const saveProjectFile = useCallback(async () => {
     const snapshot = currentSnapshot();
@@ -2451,14 +2617,19 @@ export default function VideoEditor() {
     }
   }, []);
 
+  // The draggable crop rect — withheld while the zoom track is locked or hidden.
   const selectedZoomRect =
-    editingZoom && selectedLayer?.kind === 'zoom' ? selectedLayer.keyframes.find((k) => k.id === selectedZoomKfId)?.rect ?? null : null;
+    editingZoom && selectedLayer?.kind === 'zoom' && !selectedLayer.locked && !selectedLayer.hidden
+      ? selectedLayer.keyframes.find((k) => k.id === selectedZoomKfId)?.rect ?? null
+      : null;
 
   // Measured placement boxes for every placeable layer (pure — no compositor ref).
+  // Hidden layers are excluded (nothing is on screen to point at); locked ones stay
+  // in, so they still serve as snap targets for the layers you can move.
   const placeableBoxes = useMemo(() => {
     const m: Record<string, Box> = {};
     for (const l of layers) {
-      if (!isPlaceable(l)) continue;
+      if (!isPlaceable(l) || l.hidden) continue;
       const b = measurePlaceableBox(l, out, currentSec);
       if (b) m[l.id] = b;
     }
@@ -2470,14 +2641,18 @@ export default function VideoEditor() {
     [placeableBoxes, selectedLayerId],
   );
 
+  /** Locked layer ids — a set, because the pointer paths test membership per event. */
+  const lockedIds = useMemo(() => new Set(layers.filter((l) => l.locked).map((l) => l.id)), [layers]);
+
   // Effective group selection: the raw group only counts when it still holds the
   // primary and has >1 member; otherwise selection is just the primary layer.
+  // Locked members drop out, so a group move never drags a protected layer.
   const groupSel = useMemo(() => {
     if (selectedLayerId && groupIds.length > 1 && groupIds.includes(selectedLayerId)) {
-      return groupIds.filter((id) => placeableBoxes[id]);
+      return groupIds.filter((id) => placeableBoxes[id] && !lockedIds.has(id));
     }
     return selectedLayerId ? [selectedLayerId] : [];
-  }, [groupIds, selectedLayerId, placeableBoxes]);
+  }, [groupIds, selectedLayerId, placeableBoxes, lockedIds]);
   const isGroup = groupSel.length > 1;
 
   /** Union box of the group selection (output-normalised), for its outline. */
@@ -2610,10 +2785,11 @@ export default function VideoEditor() {
         /* ignore */
       }
       if (marqueeStart.current && marquee) {
-        // Commit the marquee: select every placeable box it intersects.
+        // Commit the marquee: select every UNLOCKED placeable box it intersects.
         const m = marquee;
         const hit: string[] = [];
         for (const [id, b] of Object.entries(placeableBoxes)) {
+          if (lockedIds.has(id)) continue;
           if (b.x < m.x + m.w && b.x + b.w > m.x && b.y < m.y + m.h && b.y + b.h > m.y) hit.push(id);
         }
         setGroupIds(hit);
@@ -2624,7 +2800,7 @@ export default function VideoEditor() {
       setMarquee(null);
       setGuideLines([]);
     },
-    [marquee, placeableBoxes],
+    [marquee, placeableBoxes, lockedIds],
   );
 
   const editorBody = (
@@ -2877,12 +3053,16 @@ export default function VideoEditor() {
                       />
                     )}
 
-                  {/* unified transform widget for the single selected placeable layer */}
+                  {/* unified transform widget for the single selected placeable layer.
+                      Suppressed while it is hidden (nothing on screen to line up
+                      against) or locked (the widget's whole job is to move it). */}
                   {!editingZoom &&
                     !isGroup &&
                     mediaKind &&
                     srcDims.w > 0 &&
                     isPlaceable(selectedLayer) &&
+                    !selectedLayer.hidden &&
+                    !selectedLayer.locked &&
                     selBox &&
                     !(selectedLayer.kind === 'sticker' && selectedLayer.id === croppingId) &&
                     !(selectedLayer.kind === 'sketch' && selectedLayer.el.strokes.length === 0) &&
@@ -3076,6 +3256,12 @@ export default function VideoEditor() {
                     selectedClipId={selectedClipId}
                     getClipBlob={getClipBlob}
                     onSelectClip={selectClip}
+                    markers={markers}
+                    selectedMarkerId={selectedMarkerId}
+                    onSelectMarker={selectMarker}
+                    onMoveMarker={moveMarker}
+                    onRemoveMarker={removeMarker}
+                    onAddMarkerAt={addMarkerAt}
                     guideSettings={effectiveGuides}
                     onScrub={onScrub}
                     onSelectLayer={selectLayer}
@@ -3184,12 +3370,17 @@ export default function VideoEditor() {
                             : l.kind === 'music'
                               ? l.el.name || l.name
                               : l.name;
-                      const canMove = l.kind !== 'zoom' && l.kind !== 'timemachine' && l.kind !== 'music';
+                      // Reordering is itself a positional edit, so a lock stops it too.
+                      const canMove =
+                        l.kind !== 'zoom' && l.kind !== 'timemachine' && l.kind !== 'music' && !l.locked;
                       return (
                         <div key={l.id} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md border ${isSel ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]' : 'border-[var(--color-glass-border)]'}`}>
-                          <button onClick={() => selectLayer(l.id)} className="flex items-center gap-2 text-left text-[13px] min-w-0 flex-1">
+                          <button
+                            onClick={() => selectLayer(l.id)}
+                            className={`flex items-center gap-2 text-left text-[13px] min-w-0 flex-1 ${l.hidden ? 'opacity-45' : ''}`}
+                          >
                             <span aria-hidden>{icon}</span>
-                            <span className="truncate">{label}</span>
+                            <span className={`truncate ${l.hidden ? 'line-through decoration-[var(--color-text-muted)]' : ''}`}>{label}</span>
                             {(l.kind === 'zoom' || l.kind === 'timemachine') && <span className="text-[10px] text-[var(--color-text-muted)]">base</span>}
                           </button>
                           {canMove && (
@@ -3198,6 +3389,24 @@ export default function VideoEditor() {
                               <button onClick={() => moveLayer(l.id, -1)} title="Send backward" className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-1">↓</button>
                             </>
                           )}
+                          <button
+                            onClick={() => toggleLayerFlag(l.id, 'hidden')}
+                            title={l.hidden ? 'Show this layer' : 'Hide from the output (preview and export)'}
+                            aria-label={l.hidden ? `Show ${label}` : `Hide ${label}`}
+                            aria-pressed={!!l.hidden}
+                            className={`px-1 text-[13px] leading-none ${l.hidden ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-primary-green)]'} hover:opacity-80`}
+                          >
+                            <span aria-hidden>{l.hidden ? '🚫' : '👁'}</span>
+                          </button>
+                          <button
+                            onClick={() => toggleLayerFlag(l.id, 'locked')}
+                            title={l.locked ? 'Unlock — allow moving, resizing, retiming and deleting' : 'Lock against moving, resizing, retiming and deleting'}
+                            aria-label={l.locked ? `Unlock ${label}` : `Lock ${label}`}
+                            aria-pressed={!!l.locked}
+                            className={`px-1 text-[13px] leading-none ${l.locked ? 'text-[var(--color-primary-blue)]' : 'text-[var(--color-text-muted)]'} hover:opacity-80`}
+                          >
+                            <span aria-hidden>{l.locked ? '🔒' : '🔓'}</span>
+                          </button>
                         </div>
                       );
                     })}
@@ -3246,7 +3455,7 @@ export default function VideoEditor() {
                       onSelectAttachment={(attId) => selectAttachment(selectedLayer.id, attId)}
                       onEditAttachment={(attId, patch) => updateAttachment(selectedLayer.id, attId, patch)}
                       onRemoveAttachment={(attId) => removeAttachment(selectedLayer.id, attId)}
-                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemove={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'banner' && (
@@ -3256,7 +3465,7 @@ export default function VideoEditor() {
                       conflict={bannerConflict}
                       onEdit={(patch) => updateBanner(selectedLayer.id, patch)}
                       onEditStyle={(patch) => updateBannerStyle(selectedLayer.id, patch)}
-                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemove={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'zoom' && (
@@ -3270,7 +3479,7 @@ export default function VideoEditor() {
                       onSelectKf={(kfId) => selectZoomKf(selectedLayer.id, kfId)}
                       onEditKf={(kfId, patch) => updateZoomKf(selectedLayer.id, kfId, patch)}
                       onRemoveKf={(kfId) => removeZoomKf(selectedLayer.id, kfId)}
-                      onRemoveLayer={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemoveLayer={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'timemachine' && (
@@ -3282,7 +3491,7 @@ export default function VideoEditor() {
                       onRemovePoint={(idx) => removeSpeedPoint(selectedLayer.id, idx)}
                       onClear={clearSpeedCurve}
                       onEditLayer={(patch) => updateTimeMachine(selectedLayer.id, patch)}
-                      onRemoveLayer={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemoveLayer={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'sketch' && (
@@ -3294,7 +3503,7 @@ export default function VideoEditor() {
                       onUndoStroke={() => undoSketchStroke(selectedLayer.id)}
                       onClearStrokes={() => clearSketchStrokes(selectedLayer.id)}
                       onEdit={(patch) => updateSketchEl(selectedLayer.id, patch)}
-                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemove={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'highlighter' && (
@@ -3302,7 +3511,7 @@ export default function VideoEditor() {
                       layer={selectedLayer as HighlighterLayer}
                       duration={timelineDuration}
                       onEdit={(patch) => updateHighlighterEl(selectedLayer.id, patch)}
-                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemove={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'dramatic' && (
@@ -3310,7 +3519,7 @@ export default function VideoEditor() {
                       layer={selectedLayer as DramaticLayer}
                       duration={timelineDuration}
                       onEdit={(patch) => updateDramaticEl(selectedLayer.id, patch)}
-                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemove={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'sticker' && (
@@ -3320,7 +3529,7 @@ export default function VideoEditor() {
                       cropping={croppingId === selectedLayer.id}
                       onEdit={(patch) => updateStickerEl(selectedLayer.id, patch)}
                       onToggleCrop={() => setCroppingId((c) => (c === selectedLayer.id ? null : selectedLayer.id))}
-                      onRemove={() => setConfirmDeleteId(selectedLayer.id)}
+                      onRemove={() => requestDelete(selectedLayer.id)}
                     />
                   )}
                   {selectedLayer.kind === 'music' && (
@@ -3383,6 +3592,21 @@ export default function VideoEditor() {
                       if (discrete) sealDiscrete();
                       setGlobalGrade(g);
                     }}
+                  />
+                </Panel>
+              )}
+
+              {/* Timeline markers — an editing aid; nothing here is rendered. */}
+              {mediaKind && (
+                <Panel title={markers.length > 0 ? `Markers (${markers.length})` : 'Markers'}>
+                  <MarkerPanel
+                    markers={markers}
+                    duration={timelineDuration}
+                    selectedId={selectedMarkerId}
+                    onSelect={selectMarker}
+                    onEdit={editMarker}
+                    onRemove={removeMarker}
+                    onAdd={addMarkerAtPlayhead}
                   />
                 </Panel>
               )}
