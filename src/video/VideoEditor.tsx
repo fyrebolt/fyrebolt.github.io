@@ -45,6 +45,7 @@ import type {
   ZoomLayer,
 } from './project/types';
 import {
+  activeProject,
   bannerLayers,
   zoomLayer,
   timeMachineLayer,
@@ -323,6 +324,11 @@ export default function VideoEditor() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const compRef = useRef<Compositor | null>(null);
   const projectRef = useRef<Project>({ clips: [], layers: [], ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration, grade: NEUTRAL_GRADE });
+  /** The project MINUS hidden layers — what the compositor draws, sounds, and warps.
+   *  Kept apart from `projectRef` (the full project) because editor-side reads must
+   *  still see hidden layers: `setLayers(projectRef.current.layers)` call sites would
+   *  otherwise delete them. See activeProject() in project/types.ts. */
+  const renderRef = useRef<Project>(projectRef.current);
   const objectUrls = useRef<string[]>([]);
   /** Decoded clip media (video / image), keyed by clip srcId, kept out of the project. */
   const clipMedia = useRef<Map<string, ClipEl>>(new Map());
@@ -359,6 +365,9 @@ export default function VideoEditor() {
     () => ({ clips, layers, ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration, grade: globalGrade }),
     [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade],
   );
+  /** Memoised so its identity is stable per edit — the compositor caches its
+   *  compiled warp against it. */
+  const renderProject = useMemo(() => activeProject(project), [project]);
 
   // ---- media facts DERIVED from the clip sequence ----
   // 'video' if any clip is video, else 'image', else null (nothing loaded).
@@ -395,12 +404,19 @@ export default function VideoEditor() {
 
   // Output→source time-warp (video only). Drives the timeline length AND where
   // each clip boundary lands on the OUTPUT axis (for the clip lane + snapping).
-  const warp = useMemo(() => (mediaKind === 'video' ? compileWarp(project, duration, true) : null), [project, mediaKind, duration]);
+  // Compiled from the RENDER project so hiding a banner or the Time Machine drops
+  // its distortion from the timeline exactly as it drops from the output.
+  const warp = useMemo(
+    () => (mediaKind === 'video' ? compileWarp(renderProject, duration, true) : null),
+    [renderProject, mediaKind, duration],
+  );
 
   // Timeline / output duration (seconds). For video this is the warped output
   // length (speed track + banner freeze can stretch or shrink it).
   const timelineDuration = useMemo(() => {
     if (mediaKind === 'video' && warp) return Math.max(0.1, warp.totalOutput);
+    // Stills: measured over ALL layers, hidden included, so a hidden layer's row
+    // stays on-screen and reachable for editing / un-hiding.
     const ends = layers.map((l) => layerSpan(l).end);
     return Math.max(3, duration, ...ends);
   }, [warp, mediaKind, duration, layers]);
@@ -439,17 +455,18 @@ export default function VideoEditor() {
   // Keep the compositor's project source current + redraw on edits.
   useEffect(() => {
     projectRef.current = project;
+    renderRef.current = renderProject;
     const c = compRef.current;
     if (!c) return;
     if (editingRef.current) c.redrawEditZoom();
     else c.renderStatic();
-  }, [project]);
+  }, [project, renderProject]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
     const c = new Compositor(
       canvasRef.current,
-      () => projectRef.current,
+      () => renderRef.current,
       (srcId) => clipMedia.current.get(srcId),
       (sec) => setCurrentSec(sec),
       (srcId) => stickerMedia.current.get(srcId),
