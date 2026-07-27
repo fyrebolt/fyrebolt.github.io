@@ -52,6 +52,7 @@ import type { MusicElement, MusicSeed } from '../music/types';
 import { createMusic, elementEnd as musicEnd } from '../music/types';
 import type { VideoClip } from './clips';
 import type { ColorGrade } from './grade';
+import type { Marker } from './markers';
 
 export interface LayerBase {
   id: string;
@@ -181,6 +182,10 @@ export interface Project {
    *  applied as a final pass. Absent == neutral. Composes on top of any per-clip
    *  grade. */
   grade?: ColorGrade;
+  /** Labelled instants on the OUTPUT clock — an editing aid only, never drawn
+   *  into the video (see project/markers.ts). Absent == none, so projects saved
+   *  before markers existed are unchanged. */
+  markers?: Marker[];
 }
 
 // ---- hidden layers: one authoritative filter ----

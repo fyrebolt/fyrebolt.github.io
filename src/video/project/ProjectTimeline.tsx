@@ -1,6 +1,7 @@
 // ===== Generalised multi-track timeline: one row per layer, any mix of kinds =====
 //
-// Ruler + one row per layer. Rows dispatch by kind:
+// Ruler, a marker lane, the base clip lane, then one row per layer. Rows dispatch
+// by kind:
 //   - caption (boil):        a draggable range with start/end handles.
 //   - caption (typewriter):  a range subdivided typing / hold / (delete) with two
 //                            internal dividers.
@@ -23,6 +24,7 @@ import type { ZoomKeyframe } from '../zoom/types';
 import { sortedZooms } from '../zoom/types';
 import type { GuideSettings, TimeSnapTarget } from '../transform/snapEngine';
 import { snapTime } from '../transform/snapEngine';
+import type { Marker } from './markers';
 import SpeedCurveRow from './SpeedCurveRow';
 import ClipLane from './ClipLane';
 import type { ClipExtent } from './ClipLane';
@@ -117,6 +119,15 @@ interface Props {
   selectedClipId: string | null;
   getClipBlob: (srcId: string) => Blob | undefined;
   onSelectClip: (id: string) => void;
+  /** Timeline markers: pins in their own lane + a guide line down the whole stack. */
+  markers: Marker[];
+  selectedMarkerId: string | null;
+  onSelectMarker: (id: string) => void;
+  /** Streamed while a pin is dragged (the history debounce coalesces the burst). */
+  onMoveMarker: (id: string, t: number) => void;
+  onRemoveMarker: (id: string) => void;
+  /** Double-click on empty lane — a plain click still scrubs. */
+  onAddMarkerAt: (t: number) => void;
   /** Guide/snap settings (temporal toggles live here too). */
   guideSettings: GuideSettings;
   onScrub: (sec: number) => void;
@@ -197,6 +208,12 @@ export default function ProjectTimeline({
   selectedClipId,
   getClipBlob,
   onSelectClip,
+  markers,
+  selectedMarkerId,
+  onSelectMarker,
+  onMoveMarker,
+  onRemoveMarker,
+  onAddMarkerAt,
   guideSettings,
   onScrub,
   onSelectLayer,
@@ -223,6 +240,7 @@ export default function ProjectTimeline({
   const bannerDrag = useRef<BannerDrag | null>(null);
   const zoomDrag = useRef<ZoomDrag | null>(null);
   const rangeDrag = useRef<RangeDrag | null>(null);
+  const markerDrag = useRef<{ id: string; startX: number; origT: number } | null>(null);
 
   // Horizontal zoom is transient VIEW state (not project data): 1 = fit-to-width,
   // higher = more pixels/second with the lane scrolling horizontally.
@@ -325,11 +343,12 @@ export default function ProjectTimeline({
         targets.push({ t: s.start, kind: 'element' }, { t: s.end, kind: 'element' });
       }
       targets.push({ t: currentSec, kind: 'playhead' });
+      for (const m of markers) targets.push({ t: m.t, kind: 'marker' });
       const r = snapTime(value, targets, threshold, guideSettings);
       setSnapGuide(r.hit ? r.t : null);
       return r.t;
     },
-    [dur, clipEdges, layers, currentSec, guideSettings],
+    [dur, clipEdges, layers, currentSec, markers, guideSettings],
   );
 
   // Keep the playhead in view as it moves or the zoom changes.
@@ -576,6 +595,33 @@ export default function ProjectTimeline({
     [dur, fracFromClientX, onEditSketch, onEditHighlighter, onEditDramatic, onEditSticker, onEditMusic, snapT],
   );
 
+  // ---- marker pin drag (moves the marker along the output clock) ----
+  // Markers snap to the same anchors layers do, but with themselves excluded —
+  // `exceptLayerId` only filters LAYER anchors, so a pin would otherwise lock to
+  // its own position and never move.
+  const onMarkerDown = useCallback(
+    (e: ReactPointerEvent, m: Marker) => {
+      e.stopPropagation();
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      onSelectMarker(m.id);
+      markerDrag.current = { id: m.id, startX: e.clientX, origT: m.t };
+    },
+    [onSelectMarker],
+  );
+  const onMarkerMove = useCallback(
+    (e: ReactPointerEvent) => {
+      const d = markerDrag.current;
+      if (!d || e.buttons === 0) return;
+      const delta = (fracFromClientX(e.clientX) - fracFromClientX(d.startX)) * dur;
+      onMoveMarker(d.id, clamp(0, dur, snapT(d.origT + delta, null)));
+    },
+    [dur, fracFromClientX, onMoveMarker, snapT],
+  );
+
   const onUp = useCallback((e: ReactPointerEvent) => {
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
@@ -587,6 +633,7 @@ export default function ProjectTimeline({
     bannerDrag.current = null;
     zoomDrag.current = null;
     rangeDrag.current = null;
+    markerDrag.current = null;
     setSnapGuide(null);
   }, []);
 
@@ -627,6 +674,56 @@ export default function ProjectTimeline({
             <div className="absolute inset-y-0 left-0 rounded-l-md bg-[rgba(116,185,255,0.18)]" style={{ width: playLeft }} />
             <div className="absolute top-0 bottom-0 w-[2px] bg-[var(--color-primary-blue)]" style={{ left: playLeft }} />
           </div>
+
+          {/* marker lane: draggable pins. A plain press still bubbles to the scrub
+              container; a DOUBLE-click on empty lane drops a new marker there. */}
+          <div
+            onDoubleClick={(e) => {
+              if (e.target !== e.currentTarget) return; // hit a pin, not the lane
+              onAddMarkerAt(secFromClientX(e.clientX));
+            }}
+            title="Double-click to add a marker"
+            className="relative h-4 rounded-md bg-[var(--color-bg-elevated)] mb-1.5"
+          >
+            {markers.map((m) => {
+              const sel = m.id === selectedMarkerId;
+              return (
+                <div
+                  key={m.id}
+                  onPointerDown={(e) => onMarkerDown(e, m)}
+                  onPointerMove={onMarkerMove}
+                  onPointerUp={onUp}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    onRemoveMarker(m.id);
+                  }}
+                  title={`${m.label || 'Marker'} · ${m.t.toFixed(2)}s — drag to move, right-click to remove`}
+                  className={`absolute top-0 bottom-0 flex items-center pl-1 pr-1.5 rounded-[3px] cursor-grab active:cursor-grabbing touch-none whitespace-nowrap ${
+                    sel ? 'ring-1 ring-white z-20' : 'z-10'
+                  }`}
+                  style={{ left: pct(m.t), background: m.color }}
+                >
+                  <span className="text-[9px] font-semibold text-black/75 pointer-events-none max-w-[80px] overflow-hidden text-ellipsis">
+                    {m.label || '•'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* marker guide lines down the whole stack — what makes a marker usable
+              as an alignment reference, not just a bookmark. */}
+          {markers.map((m) => (
+            <div
+              key={m.id}
+              className="pointer-events-none absolute top-0 bottom-0 w-px z-20"
+              style={{
+                left: pct(m.t),
+                background: m.color,
+                opacity: m.id === selectedMarkerId ? 0.85 : 0.35,
+              }}
+            />
+          ))}
 
           {/* base clips as a lane (boundaries + waveform) */}
           {clipExtents.length > 0 && (

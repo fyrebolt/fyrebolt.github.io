@@ -74,6 +74,9 @@ import {
 } from './project/transitions';
 import type { ColorGrade } from './project/grade';
 import { NEUTRAL_GRADE } from './project/grade';
+import type { Marker } from './project/markers';
+import { createMarker, markerAt, stepMarker } from './project/markers';
+import MarkerPanel from './project/panels/MarkerPanel';
 import { compileWarp, bannerBlockedSpans, fitBannerFreeze, fitBannerHold } from './project/timeMap';
 import { Panel, Field, ChoiceGrid, Slider, NumberInput } from './project/ui';
 import { RATIO_LABELS, FILL_MODES, FRAME_SEC } from './project/constants';
@@ -158,6 +161,7 @@ interface EditorSnapshot {
   sfxVolume: number;
   imageDuration: number;
   globalGrade: ColorGrade;
+  markers: Marker[];
   pen: Pen;
 }
 
@@ -191,12 +195,14 @@ const GUIDES_OFF: GuideSettings = {
   snapClips: false,
   snapElements: false,
   snapPlayhead: false,
+  snapMarkers: false,
 };
 
 const TIME_GUIDE_TOGGLES: { key: keyof GuideSettings; label: string }[] = [
   { key: 'snapClips', label: 'Snap to clip edges' },
   { key: 'snapElements', label: 'Snap to other elements' },
   { key: 'snapPlayhead', label: 'Snap to playhead' },
+  { key: 'snapMarkers', label: 'Snap to markers' },
 ];
 
 type AddKind =
@@ -270,6 +276,8 @@ export default function VideoEditor() {
   const [imageDuration, setImageDuration] = useState(6);
   /** Global colour grade over the whole composited output (per-clip grades live on each clip). */
   const [globalGrade, setGlobalGrade] = useState<ColorGrade>(NEUTRAL_GRADE);
+  /** Timeline markers — labelled instants on the output clock (editing aid only). */
+  const [markers, setMarkers] = useState<Marker[]>([]);
 
   // Drawing-pad pen (shared tool state for sketch layers).
   const [pen, setPen] = useState<Pen>({ color: '#ff4d4d', width: 0.02, smoothness: 0.8 });
@@ -281,6 +289,7 @@ export default function VideoEditor() {
   const [groupIds, setGroupIds] = useState<string[]>([]);
   /** Marquee rect (output-normalised) while drag-selecting, else null. */
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [selectedMarkerId, setSelectedMarkerId] = useState<string | null>(null);
   const [selectedZoomKfId, setSelectedZoomKfId] = useState<string | null>(null);
   const [selectedSpeedIdx, setSelectedSpeedIdx] = useState<number | null>(null);
   const [editingZoom, setEditingZoom] = useState(false);
@@ -362,8 +371,8 @@ export default function VideoEditor() {
   const editingRef = useRef(false);
 
   const project: Project = useMemo(
-    () => ({ clips, layers, ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration, grade: globalGrade }),
-    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade],
+    () => ({ clips, layers, ratio, fillMode, defaultBoilPool: boilPool, defaultNormalize: normalize, sfxEnabled, sfxVolume, imageDuration, grade: globalGrade, markers }),
+    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, markers],
   );
   /** Memoised so its identity is stable per edit — the compositor caches its
    *  compiled warp against it. */
@@ -553,8 +562,8 @@ export default function VideoEditor() {
 
   // ---- undo / redo engine (whole-project snapshots) ----
   const snapshot: EditorSnapshot = useMemo(
-    () => ({ clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, pen }),
-    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, pen],
+    () => ({ clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, markers, pen }),
+    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, markers, pen],
   );
   const restoreSnapshot = useCallback((s: EditorSnapshot) => {
     setClips(s.clips);
@@ -567,6 +576,7 @@ export default function VideoEditor() {
     setSfxVolume(s.sfxVolume);
     setImageDuration(s.imageDuration);
     setGlobalGrade(s.globalGrade);
+    setMarkers(s.markers);
     setPen(s.pen);
     // Reset transient editing state and clamp selection to layers that survive.
     editingRef.current = false;
@@ -576,6 +586,7 @@ export default function VideoEditor() {
     compRef.current?.exitEdit();
     setSelectedAttachmentId(null);
     setGroupIds((g) => g.filter((id) => s.layers.some((l) => l.id === id)));
+    setSelectedMarkerId((cur) => (cur && s.markers.some((m) => m.id === cur) ? cur : null));
     setSelectedLayerId((cur) => (cur && s.layers.some((l) => l.id === cur) ? cur : null));
     setCroppingId((cur) => (cur && s.layers.some((l) => l.id === cur) ? cur : null));
   }, []);
@@ -591,6 +602,7 @@ export default function VideoEditor() {
       a.sfxVolume === b.sfxVolume &&
       a.imageDuration === b.imageDuration &&
       a.globalGrade === b.globalGrade &&
+      a.markers === b.markers &&
       a.pen === b.pen,
     [],
   );
@@ -2037,6 +2049,87 @@ export default function VideoEditor() {
     [haltTransport, currentSec, timelineDuration, seekTo],
   );
 
+  // ---- timeline markers (labelled instants on the output clock) ----
+  //
+  // Markers are project data like everything else, so every mutation goes through
+  // the same snapshot history: label / colour / time-field edits seal their own
+  // undo entry, while a pin DRAG streams unsealed so the history debounce
+  // coalesces the burst into one step (the pattern the speed curve and volume
+  // curves already use).
+
+  /** Drop a marker at the playhead. Refuses a second marker at the same instant. */
+  const addMarkerAt = useCallback(
+    (t: number) => {
+      if (!mediaKind) return;
+      const at = Math.max(0, Math.min(t, timelineDuration));
+      const existing = markerAt(markers, at);
+      if (existing) {
+        setSelectedMarkerId(existing.id);
+        setStatus('There is already a marker here.');
+        return;
+      }
+      sealDiscrete();
+      const m = createMarker(at, markers.length);
+      setMarkers((ms) => [...ms, m]);
+      setSelectedMarkerId(m.id);
+      setStatus(`Marker at ${at.toFixed(2)}s. Rename it in the Markers panel.`);
+    },
+    [mediaKind, timelineDuration, markers, sealDiscrete],
+  );
+
+  const addMarkerAtPlayhead = useCallback(() => {
+    addMarkerAt(compRef.current?.currentTimeSec() ?? currentSec);
+  }, [addMarkerAt, currentSec]);
+
+  const editMarker = useCallback(
+    (id: string, patch: Partial<Marker>, discrete = false) => {
+      if (discrete) sealDiscrete();
+      setMarkers((ms) => ms.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+    },
+    [sealDiscrete],
+  );
+
+  /** Streamed pin drag — clamped to the timeline, no seal (see the note above). */
+  const moveMarker = useCallback((id: string, t: number) => {
+    setMarkers((ms) => ms.map((m) => (m.id === id ? { ...m, t: Math.max(0, t) } : m)));
+    setSelectedMarkerId(id);
+  }, []);
+
+  const removeMarker = useCallback(
+    (id: string) => {
+      sealDiscrete();
+      setMarkers((ms) => ms.filter((m) => m.id !== id));
+      setSelectedMarkerId((cur) => (cur === id ? null : cur));
+    },
+    [sealDiscrete],
+  );
+
+  /** Select a marker and park the playhead on it. */
+  const selectMarker = useCallback(
+    (id: string) => {
+      setSelectedMarkerId(id);
+      const m = markers.find((x) => x.id === id);
+      if (m) seekTo(Math.max(0, Math.min(m.t, timelineDuration)));
+    },
+    [markers, seekTo, timelineDuration],
+  );
+
+  /** ⌥← / ⌥→ : walk the playhead to the previous / next marker. */
+  const jumpMarker = useCallback(
+    (dir: 1 | -1) => {
+      const from = compRef.current?.currentTimeSec() ?? currentSec;
+      const m = stepMarker(markers, from, dir);
+      if (!m) {
+        setStatus(dir === 1 ? 'No marker after the playhead.' : 'No marker before the playhead.');
+        return;
+      }
+      haltTransport();
+      setSelectedMarkerId(m.id);
+      seekTo(Math.max(0, Math.min(m.t, timelineDuration)));
+    },
+    [markers, currentSec, haltTransport, seekTo, timelineDuration],
+  );
+
   /**
    * Nudge the selected placeable overlay's on-canvas position (normalised).
    * Applies the delta inside a functional setLayers updater — NOT from a captured
@@ -2130,6 +2223,21 @@ export default function VideoEditor() {
         splitAtPlayhead();
         return;
       }
+      // 'M' drops a marker at the playhead (the NLE convention).
+      if ((e.key === 'm' || e.key === 'M') && !editable && !mod && !e.altKey) {
+        if (!mediaKind) return;
+        e.preventDefault();
+        addMarkerAtPlayhead();
+        return;
+      }
+      // ⌥←/⌥→ walks the playhead between markers. Checked BEFORE the plain-arrow
+      // branch below, which would otherwise swallow it (Alt isn't part of `mod`).
+      if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && e.altKey && !editable && !mod) {
+        if (!mediaKind) return;
+        e.preventDefault();
+        jumpMarker(e.key === 'ArrowRight' ? 1 : -1);
+        return;
+      }
       // Arrows: selection-aware. A placeable element selected → nudge its
       // on-canvas position (Shift = bigger jump); otherwise Left/Right frame-step
       // the playhead by one editing frame (Up/Down ignored — the playhead is 1-D).
@@ -2183,7 +2291,7 @@ export default function VideoEditor() {
   }, [
     togglePlay, duplicateLayer, selectedLayerId, fullscreen, croppingId, confirmDeleteId, mediaKind,
     splitAtPlayhead, selectedLayer, nudgeSelected, stepFrame, shuttleBackward, shuttleForward, haltTransport,
-    selectedClipId, duplicateClip, copyClip, pasteClip,
+    selectedClipId, duplicateClip, copyClip, pasteClip, addMarkerAtPlayhead, jumpMarker,
   ]);
 
   // ---- canvas selection (single-layer transforms are owned by TransformBox) ----
@@ -2312,8 +2420,9 @@ export default function VideoEditor() {
       sfxVolume,
       imageDuration,
       grade: globalGrade,
+      markers,
     }),
-    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade],
+    [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, globalGrade, markers],
   );
 
   const blobForSrc = useCallback(
@@ -2406,6 +2515,8 @@ export default function VideoEditor() {
     setSfxVolume(s.sfxVolume);
     setImageDuration(s.imageDuration);
     setGlobalGrade(s.grade ?? NEUTRAL_GRADE);
+    setMarkers(s.markers ?? []);
+    setSelectedMarkerId(null);
     setSelectedLayerId(null);
     setSelectedClipId(null);
     setSelectedAttachmentId(null);
@@ -2463,7 +2574,7 @@ export default function VideoEditor() {
       })();
     }, 800);
     return () => window.clearTimeout(id);
-  }, [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, currentSnapshot, blobForSrc]);
+  }, [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, markers, currentSnapshot, blobForSrc]);
 
   const saveProjectFile = useCallback(async () => {
     const snapshot = currentSnapshot();
@@ -3145,6 +3256,12 @@ export default function VideoEditor() {
                     selectedClipId={selectedClipId}
                     getClipBlob={getClipBlob}
                     onSelectClip={selectClip}
+                    markers={markers}
+                    selectedMarkerId={selectedMarkerId}
+                    onSelectMarker={selectMarker}
+                    onMoveMarker={moveMarker}
+                    onRemoveMarker={removeMarker}
+                    onAddMarkerAt={addMarkerAt}
                     guideSettings={effectiveGuides}
                     onScrub={onScrub}
                     onSelectLayer={selectLayer}
@@ -3475,6 +3592,21 @@ export default function VideoEditor() {
                       if (discrete) sealDiscrete();
                       setGlobalGrade(g);
                     }}
+                  />
+                </Panel>
+              )}
+
+              {/* Timeline markers — an editing aid; nothing here is rendered. */}
+              {mediaKind && (
+                <Panel title={markers.length > 0 ? `Markers (${markers.length})` : 'Markers'}>
+                  <MarkerPanel
+                    markers={markers}
+                    duration={timelineDuration}
+                    selectedId={selectedMarkerId}
+                    onSelect={selectMarker}
+                    onEdit={editMarker}
+                    onRemove={removeMarker}
+                    onAdd={addMarkerAtPlayhead}
                   />
                 </Panel>
               )}
