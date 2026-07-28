@@ -94,7 +94,7 @@ import type { Marker } from './project/markers';
 import { createMarker, markerAt, stepMarker } from './project/markers';
 import MarkerPanel from './project/panels/MarkerPanel';
 import { compileWarp, bannerBlockedSpans, fitBannerFreeze, fitBannerHold } from './project/timeMap';
-import { Panel, Field, ChoiceGrid, Slider, NumberInput } from './project/ui';
+import { Panel, Section, Field, ChoiceGrid, Slider, NumberInput } from './project/ui';
 import { RATIO_LABELS, FILL_MODES, FRAME_SEC } from './project/constants';
 import CaptionPanel from './project/panels/CaptionPanel';
 import BannerPanel from './project/panels/BannerPanel';
@@ -137,6 +137,41 @@ import LibraryBrowser from './project/LibraryBrowser';
  *  (clips, clip sources, sticker/music media, layer + element clones). */
 function freshId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** Icon-only button in the transport bar. Labelled via title + aria-label. */
+const TOOL_BTN = 'tool-btn px-2.5 py-1.5 rounded-md text-sm min-w-[34px]';
+
+/** One row in a toolbar dropdown (project menu, add-layer menu). */
+function MenuItem({
+  onClick,
+  disabled,
+  icon,
+  label,
+  hint,
+  danger,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  icon: string;
+  label: string;
+  /** Trailing note — why a row is unavailable, or what it will actually do. */
+  hint?: string;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-[13px] hover:bg-[var(--color-glass-hover)] disabled:opacity-35 disabled:cursor-not-allowed ${
+        danger ? 'text-[rgba(255,120,120,0.95)]' : ''
+      }`}
+    >
+      <span className="w-4 text-center" aria-hidden>{icon}</span>
+      <span className="truncate">{label}</span>
+      {hint && <span className="ml-auto pl-2 shrink-0 text-[10px] text-[var(--color-text-muted)]">{hint}</span>}
+    </button>
+  );
 }
 
 /** True when the key event is aimed at a text field, so editor shortcuts must
@@ -237,20 +272,41 @@ type AddKind =
   | 'sticker-video'
   | 'music';
 
-const ADD_ITEMS: { kind: AddKind; label: string; icon: string }[] = [
-  { kind: 'banner', label: 'Entrance Banner', icon: '⚔️' },
-  { kind: 'boil', label: 'Caption', icon: '💬' },
-  { kind: 'typewriter', label: 'Typewriter', icon: '⌨️' },
-  { kind: 'zoom', label: 'Zoom', icon: '🔍' },
-  { kind: 'timemachine', label: 'Time Machine', icon: '⏱️' },
-  { kind: 'sketch', label: 'Sketch', icon: '✏️' },
-  { kind: 'highlighter', label: 'Highlighter', icon: '🖍️' },
-  { kind: 'sticker-image', label: 'Image sticker', icon: '🖼️' },
-  { kind: 'sticker-video', label: 'Video sticker', icon: '🎬' },
-  { kind: 'music', label: 'Music track', icon: '🎵' },
-  { kind: 'dramatic-normal', label: 'Dramatic word', icon: '🔠' },
-  { kind: 'dramatic-inverse', label: 'Inverse word', icon: '◱' },
-  { kind: 'dramatic-reflection', label: 'Reflection word', icon: '🔃' },
+/** The add menu, grouped — thirteen flat rows of emoji were unscannable. */
+const ADD_GROUPS: { group: string; items: { kind: AddKind; label: string; icon: string }[] }[] = [
+  {
+    group: 'Text',
+    items: [
+      { kind: 'boil', label: 'Caption', icon: '💬' },
+      { kind: 'typewriter', label: 'Typewriter', icon: '⌨️' },
+      { kind: 'dramatic-normal', label: 'Dramatic word', icon: '🔠' },
+      { kind: 'dramatic-inverse', label: 'Inverse word', icon: '◱' },
+      { kind: 'dramatic-reflection', label: 'Reflection word', icon: '🔃' },
+      { kind: 'banner', label: 'Entrance banner', icon: '⚔️' },
+    ],
+  },
+  {
+    group: 'Media',
+    items: [
+      { kind: 'sticker-image', label: 'Image sticker', icon: '🖼️' },
+      { kind: 'sticker-video', label: 'Video sticker', icon: '🎬' },
+      { kind: 'music', label: 'Music track', icon: '🎵' },
+    ],
+  },
+  {
+    group: 'Motion',
+    items: [
+      { kind: 'zoom', label: 'Zoom', icon: '🔍' },
+      { kind: 'timemachine', label: 'Time Machine', icon: '⏱️' },
+    ],
+  },
+  {
+    group: 'Drawing',
+    items: [
+      { kind: 'sketch', label: 'Sketch', icon: '✏️' },
+      { kind: 'highlighter', label: 'Highlighter', icon: '🖍️' },
+    ],
+  },
 ];
 
 /** Where an asset from the library is being inserted (decides filter + decode). */
@@ -326,6 +382,36 @@ export default function VideoEditor() {
   const [guideSettings, setGuideSettings] = useState<GuideSettings>(DEFAULT_GUIDES);
   const [gearOpen, setGearOpen] = useState(false);
   const [guideLines, setGuideLines] = useState<Guide[]>([]);
+  /** Header "Project" menu (save / load / clear the autosave). */
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  /** True while any toolbar dropdown is open. A ref because the other keyboard
+   *  handlers must see the CURRENT value: this effect's Escape runs first and
+   *  clears the state, and a stale closure would let Escape both close the menu
+   *  and (say) drop out of full screen in one press. */
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = addOpen || gearOpen || projectMenuOpen;
+
+  // One outside-click rule for every toolbar dropdown: a pointerdown that lands
+  // outside any [data-menu] wrapper closes them all. Escape does the same.
+  useEffect(() => {
+    const closeAll = () => {
+      setAddOpen(false);
+      setGearOpen(false);
+      setProjectMenuOpen(false);
+    };
+    const onDown = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement | null)?.closest?.('[data-menu]')) closeAll();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeAll();
+    };
+    window.addEventListener('pointerdown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
 
   // ---- undo / redo history (stable wrappers; the engine is created below) ----
   const historyRef = useRef<HistoryApi | null>(null);
@@ -341,7 +427,7 @@ export default function VideoEditor() {
   // ---- export ----
   const [stage, setStage] = useState<ExportStage>('idle');
   const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState('Upload a photo or video, then add layers with “+”.');
+  const [status, setStatus] = useState('Upload a photo or video, then add layers with “+ Add”.');
   // Transient note when a banner edit was clamped to avoid a freeze/warp overlap.
   const [bannerConflict, setBannerConflict] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
@@ -547,7 +633,8 @@ export default function VideoEditor() {
       const editable = isEditableTarget(e);
       const mod = hasMod(e);
 
-      if (e.key === 'Escape' && (croppingId || cropClipId)) {
+      // An open toolbar menu owns the first Escape; crop mode gets the next one.
+      if (e.key === 'Escape' && (croppingId || cropClipId) && !menuOpenRef.current) {
         e.preventDefault();
         setCroppingId(null);
         setCropClipId(null);
@@ -1820,7 +1907,7 @@ export default function VideoEditor() {
       if (layer.kind === 'music') {
         // A music layer owns a single <audio> element by srcId; two layers can't
         // share it. Add another track instead.
-        setStatus('Add another music track with “+ Add layer” rather than duplicating.');
+        setStatus('Add another music track with “+ Add” rather than duplicating.');
         return;
       }
       const clone = structuredClone(layer) as Extract<Layer, { el: unknown }>;
@@ -2483,8 +2570,9 @@ export default function VideoEditor() {
         shuttleForward();
         return;
       }
-      // Escape leaves full-screen (crop-escape is owned by the other handler).
-      if (e.key === 'Escape' && fullscreen && !croppingId) {
+      // Escape leaves full-screen (crop-escape is owned by the other handler,
+      // and an open toolbar menu gets the first Escape to itself).
+      if (e.key === 'Escape' && fullscreen && !croppingId && !menuOpenRef.current) {
         e.preventDefault();
         setFullscreen(false);
       }
@@ -3049,6 +3137,10 @@ export default function VideoEditor() {
     [marquee, placeableBoxes, lockedIds],
   );
 
+  // How much viewport height the preview may claim. Inside the iPad frame the
+  // scrollable pane is only ~80dvh of the window, so it gets the smaller share.
+  const previewMaxVh = fullscreen ? '52vh' : '30vh';
+
   const editorBody = (
       <div className="ios-editor text-[var(--color-text-primary)]">
         {/* Top bar */}
@@ -3063,8 +3155,68 @@ export default function VideoEditor() {
             <div className="inline-flex items-center gap-2 text-[17px] font-semibold">
               <span aria-hidden>🎥</span>
               <span>Camera</span>
+              {/* Autosave state lives with the title — it describes this project,
+                  and no longer costs a full row of its own above the editor. */}
+              <span className="ml-1 inline-flex items-center gap-1 text-[11px] font-medium" aria-live="polite">
+                {saveState === 'saving' ? (
+                  <>
+                    <svg className="animate-spin text-[var(--color-accent)]" width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden>
+                      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeOpacity="0.25" />
+                      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                    </svg>
+                    <span className="text-[var(--color-text-secondary)] hidden sm:inline">Saving…</span>
+                  </>
+                ) : saveState === 'saved' ? (
+                  <>
+                    <span className="text-[var(--color-primary-green)] leading-none" aria-hidden>✓</span>
+                    <span className="text-[var(--color-text-muted)] hidden sm:inline">Saved</span>
+                  </>
+                ) : null}
+              </span>
             </div>
-            <div className="justify-self-end inline-flex items-center gap-3">
+            <div className="justify-self-end inline-flex items-center gap-1">
+              {/* Project file actions — one menu instead of three always-on buttons. */}
+              <div className="relative" data-menu>
+                <button
+                  onClick={() => { setProjectMenuOpen((v) => !v); setAddOpen(false); setGearOpen(false); }}
+                  aria-expanded={projectMenuOpen}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] px-2 py-1.5 rounded-lg hover:bg-[rgba(0,122,255,0.08)] transition-colors"
+                >
+                  <span>Project</span>
+                  <span className="text-[9px]" aria-hidden>▾</span>
+                </button>
+                {projectMenuOpen && (
+                  <div className="absolute right-0 mt-1.5 w-56 rounded-xl bg-[var(--color-bg-surface)] shadow-lg border border-[var(--color-glass-border)] overflow-hidden z-30 py-1">
+                    <MenuItem
+                      onClick={() => { setProjectMenuOpen(false); saveProjectFile(); }}
+                      disabled={!mediaKind || busy}
+                      icon="↓"
+                      label="Save project file"
+                      hint="JSON backup, media embedded"
+                    />
+                    <MenuItem
+                      onClick={() => { setProjectMenuOpen(false); projectInput.current?.click(); }}
+                      disabled={busy}
+                      icon="↑"
+                      label="Load project file"
+                    />
+                    <MenuItem
+                      onClick={() => { setProjectMenuOpen(false); setLibraryOpen('clip'); }}
+                      disabled={busy}
+                      icon="📚"
+                      label="Asset library"
+                      hint="Reuse clips across projects"
+                    />
+                    <div className="my-1 border-t border-[var(--color-glass-border)]" />
+                    <MenuItem
+                      onClick={() => { setProjectMenuOpen(false); clearAutosave(); }}
+                      icon="🗑"
+                      label="Clear autosave"
+                      danger
+                    />
+                  </div>
+                )}
+              </div>
               <button
                 onClick={() => setFullscreen((v) => !v)}
                 title={fullscreen ? 'Exit full screen (Esc)' : 'Full screen'}
@@ -3074,112 +3226,57 @@ export default function VideoEditor() {
                 <span aria-hidden>{fullscreen ? '🡿' : '⛶'}</span>
                 <span className="hidden sm:inline">{fullscreen ? 'Exit' : 'Full screen'}</span>
               </button>
-              <a href="/video-classic/" className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)] font-mono hidden sm:block">
+              <a href="/video-classic/" className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)] font-mono hidden lg:block ml-1">
                 classic ↗
               </a>
             </div>
           </div>
         </header>
 
-        <div className="max-w-7xl mx-auto px-5 pt-6 pb-28">
-          {/* Autosave status + JSON backup — kept at the top, always visible. */}
-          <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
-            <div className="inline-flex items-center gap-1.5 text-xs font-medium" aria-live="polite">
-              {saveState === 'saving' ? (
-                <>
-                  <svg className="animate-spin text-[var(--color-accent)]" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
-                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeOpacity="0.25" />
-                    <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-                  </svg>
-                  <span className="text-[var(--color-text-secondary)]">Saving…</span>
-                </>
-              ) : saveState === 'saved' ? (
-                <>
-                  <span className="text-[var(--color-primary-green)] text-sm leading-none" aria-hidden>✓</span>
-                  <span className="text-[var(--color-text-secondary)]">Saved to this browser</span>
-                </>
-              ) : (
-                <span className="text-[var(--color-text-muted)]">Autosaves in this browser</span>
-              )}
-            </div>
-            <div className="inline-flex items-center gap-2">
-              <button
-                onClick={saveProjectFile}
-                disabled={!mediaKind || busy}
-                title="Download a JSON backup (media embedded, lossless)"
-                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40"
-              >
-                ↓ Save project
-              </button>
-              <button
-                onClick={() => projectInput.current?.click()}
-                disabled={busy}
-                title="Load a project JSON"
-                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40"
-              >
-                ↑ Load project
-              </button>
-              <button
-                onClick={clearAutosave}
-                title="Clear the autosaved project from this browser"
-                className="px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--color-glass-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-glass-hover)]"
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-
-          <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight flex items-center gap-3 mb-1">
-            <span aria-hidden>🎬</span>
-            <span className="gradient-text">Layer editor</span>
-          </h1>
-          <p className="text-[var(--color-text-secondary)] mt-1 mb-6 max-w-2xl text-[15px] leading-relaxed">
-            Stitch clips into one timeline. Trim and reorder them, add a banner, captions, and a zoom as layers, then export a single MP4 — all in your browser.
-          </p>
-
-          <div className="grid lg:grid-cols-[minmax(0,1fr)_360px] gap-8 items-start">
+        <div className="max-w-7xl mx-auto px-5 pt-4 pb-8">
+          <div className="grid lg:grid-cols-[minmax(0,1fr)_360px] gap-6 items-start">
             {/* ---- Preview + timeline ---- */}
             <section>
-              <label
-                onDragOver={onDragOverFiles}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={onDropFiles}
-                className={`block glass-card mb-4 cursor-pointer text-center border-2 border-dashed rounded-xl px-4 py-7 transition-colors ${
-                  dragOver
-                    ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]'
-                    : 'border-[var(--color-glass-border)] hover:bg-[var(--color-glass-hover)]'
-                }`}
-              >
-                <div className="text-2xl mb-1" aria-hidden>
-                  {dragOver ? '⬇️' : '🎞️'}
-                </div>
-                <div className="text-sm font-medium">
-                  {dragOver
-                    ? 'Drop to upload'
-                    : clips.length === 0
-                      ? 'Drag & drop a photo or video'
-                      : 'Drag & drop another clip'}
-                </div>
-                <div className="text-xs text-[var(--color-text-muted)] mt-0.5">or click to browse</div>
-                <input
-                  type="file"
-                  accept="image/*,video/*"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => {
-                    for (const f of Array.from(e.target.files ?? [])) onFile(f);
-                    e.target.value = '';
-                  }}
-                />
-              </label>
-
-              {/* Reuse a previously-uploaded clip from the cross-project library. */}
-              <button
-                onClick={() => setLibraryOpen('clip')}
-                className="mb-4 -mt-2 w-full inline-flex items-center justify-center gap-1.5 text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]"
-              >
-                <span aria-hidden>📚</span> Choose a clip from your library
-              </button>
+              {/* The drop target is the empty state ONLY. Once there are clips the
+                  canvas itself accepts drops and the clip strip carries ＋Clip /
+                  ⬛Blank / 📚Library tiles, so this card would be a third copy of
+                  the same action sitting permanently above the fold. */}
+              {clips.length === 0 && (
+                <>
+                  <label
+                    onDragOver={onDragOverFiles}
+                    onDragLeave={() => setDragOver(false)}
+                    onDrop={onDropFiles}
+                    className={`block glass-card mb-3 cursor-pointer text-center border-2 border-dashed rounded-xl px-4 py-7 transition-colors ${
+                      dragOver
+                        ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]'
+                        : 'border-[var(--color-glass-border)] hover:bg-[var(--color-glass-hover)]'
+                    }`}
+                  >
+                    <div className="text-2xl mb-1" aria-hidden>
+                      {dragOver ? '⬇️' : '🎞️'}
+                    </div>
+                    <div className="text-sm font-medium">{dragOver ? 'Drop to upload' : 'Drag & drop a photo or video'}</div>
+                    <div className="text-xs text-[var(--color-text-muted)] mt-0.5">or click to browse</div>
+                    <input
+                      type="file"
+                      accept="image/*,video/*"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        for (const f of Array.from(e.target.files ?? [])) onFile(f);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                  <button
+                    onClick={() => setLibraryOpen('clip')}
+                    className="mb-4 w-full inline-flex items-center justify-center gap-1.5 text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]"
+                  >
+                    <span aria-hidden>📚</span> …or reuse a clip from your library
+                  </button>
+                </>
+              )}
 
               {/* Hidden input used by the clip strip's "+ Clip" tile. */}
               <input
@@ -3245,8 +3342,190 @@ export default function VideoEditor() {
               />
 
               <div className="glass-card p-3">
+                {/* ---- Transport + tools: one sticky bar, above the preview ----
+                    Everything here used to sit BELOW the canvas, which on a 9:16
+                    project put Play / Split / Export off the bottom of the screen
+                    at all times. Sticking it to the top of the preview card keeps
+                    the whole verb set reachable however far you scroll. */}
+                <div className="sticky top-[68px] z-30 -mx-3 -mt-3 mb-3 px-3 py-2 rounded-t-[inherit] bg-[var(--color-bg-surface)]/85 backdrop-blur border-b border-[var(--color-glass-border)] flex flex-wrap items-center gap-1.5">
+                  <button onClick={playFromStart} disabled={!mediaKind || busy} title="Restart from the beginning" aria-label="Restart" className={TOOL_BTN}>
+                    ⏮
+                  </button>
+                  <button
+                    onClick={togglePlay}
+                    disabled={!mediaKind || busy}
+                    title="Play / pause (Space)"
+                    className="tool-btn px-3.5 py-1.5 rounded-md text-sm min-w-[86px]"
+                  >
+                    {isPlaying ? '⏸ Pause' : '▶ Play'}
+                  </button>
+                  <button onClick={splitAtPlayhead} disabled={!mediaKind || busy} title="Split the clip under the playhead (S)" aria-label="Split" className={TOOL_BTN}>
+                    ✂
+                  </button>
+
+                  <span className="w-px self-stretch my-0.5 bg-[var(--color-glass-border)]" aria-hidden />
+
+                  <button onClick={undo} disabled={!history.canUndo || busy} title="Undo (⌘Z / Ctrl+Z)" aria-label="Undo" className={TOOL_BTN}>
+                    ↶
+                  </button>
+                  <button onClick={redo} disabled={!history.canRedo || busy} title="Redo (⇧⌘Z / Ctrl+Y)" aria-label="Redo" className={TOOL_BTN}>
+                    ↷
+                  </button>
+                  <button
+                    onClick={() => selectedLayerId && duplicateLayer(selectedLayerId)}
+                    disabled={!selectedLayerId || busy}
+                    title="Duplicate the selected layer (⌘D / Ctrl+D)"
+                    aria-label="Duplicate selected layer"
+                    className={TOOL_BTN}
+                  >
+                    ⧉
+                  </button>
+
+                  <span className="w-px self-stretch my-0.5 bg-[var(--color-glass-border)]" aria-hidden />
+
+                  {/* Add layer — the single entry point. The canvas no longer
+                      carries a duplicate "+" bubble over the footage. */}
+                  <div className="relative" data-menu>
+                    <button
+                      onClick={() => { setAddOpen((v) => !v); setGearOpen(false); setProjectMenuOpen(false); }}
+                      disabled={!mediaKind || busy}
+                      aria-expanded={addOpen}
+                      className="px-3 py-1.5 rounded-md bg-[var(--color-primary-green)] text-black disabled:opacity-40 text-sm font-semibold"
+                    >
+                      + Add <span className="text-[9px]" aria-hidden>▾</span>
+                    </button>
+                    {addOpen && (
+                      <div className="absolute left-0 mt-1.5 w-56 max-h-[60vh] overflow-y-auto rounded-xl bg-[var(--color-bg-surface)] shadow-lg border border-[var(--color-glass-border)] z-40 py-1">
+                        {ADD_GROUPS.map((g) => (
+                          <div key={g.group}>
+                            <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+                              {g.group}
+                            </div>
+                            {g.items.map((it) => {
+                              // Zoom / Time Machine are single-track: a repeat add
+                              // drops another keyframe / point rather than a layer.
+                              const tmUnavailable = it.kind === 'timemachine' && mediaKind !== 'video';
+                              const hint = tmUnavailable
+                                ? 'video only'
+                                : it.kind === 'zoom' && !!zoom
+                                  ? 'add keyframe'
+                                  : it.kind === 'timemachine' && !!timeMachine
+                                    ? 'add point'
+                                    : undefined;
+                              return (
+                                <MenuItem
+                                  key={it.kind}
+                                  onClick={() => addLayer(it.kind)}
+                                  disabled={tmUnavailable}
+                                  icon={it.icon}
+                                  label={it.label}
+                                  hint={hint}
+                                />
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* View options: guides, snapping, safe zones — all the canvas
+                      overlays in one place (they used to be split between a gear
+                      bubble on the canvas and checkboxes in the Output panel). */}
+                  <div className="relative" data-menu>
+                    <button
+                      onClick={() => { setGearOpen((v) => !v); setAddOpen(false); setProjectMenuOpen(false); }}
+                      aria-expanded={gearOpen}
+                      title="Guides, snapping and safe zones"
+                      className={`tool-btn px-2.5 py-1.5 rounded-md text-sm ${guidesOn ? '!text-[var(--color-primary-green)]' : ''}`}
+                    >
+                      View <span className="text-[9px]" aria-hidden>▾</span>
+                    </button>
+                    {gearOpen && (
+                      <div className="absolute left-0 mt-1.5 w-56 rounded-xl bg-[var(--color-bg-surface)] shadow-lg border border-[var(--color-glass-border)] z-40 p-2 text-sm">
+                        <label className="flex items-center gap-2 px-2 py-1.5 font-medium cursor-pointer">
+                          <input type="checkbox" checked={guidesOn} onChange={(e) => setGuidesOn(e.target.checked)} />
+                          <span>Guides &amp; snapping</span>
+                        </label>
+                        <div className={`mt-1 ml-3 border-t border-[var(--color-glass-border)] pt-1 ${guidesOn ? '' : 'opacity-40 pointer-events-none'}`}>
+                          {GUIDE_TOGGLES.map((g) => (
+                            <label key={g.key} className="flex items-center gap-2 px-2 py-1 hover:bg-[var(--color-glass-hover)] rounded-md cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={guideSettings[g.key]}
+                                onChange={(e) => setGuideSettings((s) => ({ ...s, [g.key]: e.target.checked }))}
+                              />
+                              <span>{g.label}</span>
+                            </label>
+                          ))}
+                          <div className="mt-1 pt-1 border-t border-[var(--color-glass-border)] text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] px-2 pb-0.5">
+                            Timeline snapping
+                          </div>
+                          {TIME_GUIDE_TOGGLES.map((g) => (
+                            <label key={g.key} className="flex items-center gap-2 px-2 py-1 hover:bg-[var(--color-glass-hover)] rounded-md cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={guideSettings[g.key]}
+                                onChange={(e) => setGuideSettings((s) => ({ ...s, [g.key]: e.target.checked }))}
+                              />
+                              <span>{g.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                        <div className="mt-1 pt-1 border-t border-[var(--color-glass-border)]">
+                          <label className="flex items-center gap-2 px-2 py-1 hover:bg-[var(--color-glass-hover)] rounded-md cursor-pointer">
+                            <input type="checkbox" checked={showSafeZones} onChange={(e) => setShowSafeZones(e.target.checked)} />
+                            <span>Safe zones</span>
+                          </label>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Export sits at the far right and BECOMES the download once the
+                      file is ready — no second "Save MP4" button to hunt for. */}
+                  <div className="ml-auto flex items-center gap-1.5">
+                    {downloadUrl ? (
+                      <a
+                        href={downloadUrl}
+                        download={downloadName}
+                        className="px-3.5 py-1.5 rounded-md bg-gradient-to-r from-[var(--color-primary-green)] to-[var(--color-primary-blue)] text-black font-semibold text-sm"
+                      >
+                        ↓ Save {downloadName.endsWith('.mp4') ? 'MP4' : 'WebM'}
+                      </a>
+                    ) : (
+                      <button
+                        onClick={doExport}
+                        disabled={!mediaKind || busy}
+                        className="px-3.5 py-1.5 rounded-md bg-gradient-to-r from-[var(--color-primary-green)] to-[var(--color-primary-blue)] text-black font-semibold disabled:opacity-40 text-sm"
+                      >
+                        {busy ? 'Working…' : 'Export MP4'}
+                      </button>
+                    )}
+                    {downloadUrl && (
+                      <button onClick={doExport} disabled={busy} title="Export again" aria-label="Export again" className={TOOL_BTN}>
+                        ⟳
+                      </button>
+                    )}
+                  </div>
+
+                  {busy && (
+                    <div className="w-full h-1 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-[var(--color-primary-green)] to-[var(--color-primary-blue)] transition-[width] duration-150"
+                        style={{ width: `${Math.round(progress * 100)}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+
                 <div
-                  className="relative mx-auto max-w-[420px]"
+                  className="relative mx-auto"
+                  // The preview is capped by HEIGHT, not width: a 9:16 project at
+                  // 420px wide is 747px tall, which pushed the clip strip and the
+                  // timeline off-screen. Deriving the width from the output aspect
+                  // keeps preview + strip + timeline together in one viewport.
+                  style={{ maxWidth: `min(420px, calc(${(out.w / Math.max(1, out.h)).toFixed(4)} * ${previewMaxVh}))` }}
                   onDragOver={onDragOverFiles}
                   onDragLeave={() => setDragOver(false)}
                   onDrop={onDropFiles}
@@ -3395,105 +3674,6 @@ export default function VideoEditor() {
                     ),
                   )}
 
-                  {/* corner "+" add-layer button */}
-                  {mediaKind && (
-                    <div className="absolute top-2 right-2">
-                      <button
-                        onClick={() => setAddOpen((v) => !v)}
-                        disabled={busy}
-                        className="w-9 h-9 rounded-full bg-[var(--color-primary-green)] text-black text-xl font-bold shadow-md flex items-center justify-center disabled:opacity-40"
-                        title="Add a layer"
-                        aria-label="Add a layer"
-                      >
-                        +
-                      </button>
-                      {addOpen && (
-                        <div className="absolute right-0 mt-1.5 w-44 rounded-xl bg-[var(--color-bg-surface)] shadow-lg border border-[var(--color-glass-border)] overflow-hidden z-20">
-                          {ADD_ITEMS.map((it) => {
-                            // Banner is multi-instance; Zoom / Time Machine are single-track
-                            // but a repeat "+" adds a keyframe/point — so nothing is ever
-                            // "added"-disabled. Time Machine only needs a video base.
-                            const tmUnavailable = it.kind === 'timemachine' && mediaKind !== 'video';
-                            const disabled = tmUnavailable;
-                            const hint =
-                              it.kind === 'zoom' && !!zoom
-                                ? 'add keyframe'
-                                : it.kind === 'timemachine' && !!timeMachine
-                                  ? 'add point'
-                                  : null;
-                            return (
-                              <button
-                                key={it.kind}
-                                onClick={() => addLayer(it.kind)}
-                                disabled={disabled}
-                                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left text-sm hover:bg-[var(--color-glass-hover)] disabled:opacity-35 disabled:cursor-not-allowed"
-                              >
-                                <span aria-hidden>{it.icon}</span>
-                                <span>{it.label}</span>
-                                {tmUnavailable ? (
-                                  <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">video only</span>
-                                ) : hint ? (
-                                  <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">{hint}</span>
-                                ) : null}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* corner guide-lock (gear) affordance */}
-                  {mediaKind && (
-                    <div
-                      className="absolute top-2 left-2"
-                      onMouseEnter={() => setGearOpen(true)}
-                      onMouseLeave={() => setGearOpen(false)}
-                    >
-                      <button
-                        onClick={() => setGearOpen((v) => !v)}
-                        className={`w-9 h-9 rounded-full shadow-md flex items-center justify-center text-lg transition-colors ${
-                          guidesOn ? 'bg-[var(--color-bg-surface)] text-[var(--color-primary-green)]' : 'bg-[var(--color-bg-surface)] text-[var(--color-text-muted)]'
-                        }`}
-                        title="Guide locks"
-                        aria-label="Guide locks"
-                      >
-                        ⚙
-                      </button>
-                      {gearOpen && (
-                        <div className="absolute left-0 mt-1.5 w-52 rounded-xl bg-[var(--color-bg-surface)] shadow-lg border border-[var(--color-glass-border)] overflow-hidden z-20 p-2 text-sm">
-                          <label className="flex items-center gap-2 px-2 py-1.5 font-medium">
-                            <input type="checkbox" checked={guidesOn} onChange={(e) => setGuidesOn(e.target.checked)} />
-                            <span>Guides &amp; snapping</span>
-                          </label>
-                          <div className={`mt-1 border-t border-[var(--color-glass-border)] pt-1 ${guidesOn ? '' : 'opacity-40 pointer-events-none'}`}>
-                            {GUIDE_TOGGLES.map((g) => (
-                              <label key={g.key} className="flex items-center gap-2 px-2 py-1 hover:bg-[var(--color-glass-hover)] rounded-md cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={guideSettings[g.key]}
-                                  onChange={(e) => setGuideSettings((s) => ({ ...s, [g.key]: e.target.checked }))}
-                                />
-                                <span>{g.label}</span>
-                              </label>
-                            ))}
-                            <div className="mt-1 pt-1 border-t border-[var(--color-glass-border)] text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] px-2 pb-0.5">Timeline snapping</div>
-                            {TIME_GUIDE_TOGGLES.map((g) => (
-                              <label key={g.key} className="flex items-center gap-2 px-2 py-1 hover:bg-[var(--color-glass-hover)] rounded-md cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={guideSettings[g.key]}
-                                  onChange={(e) => setGuideSettings((s) => ({ ...s, [g.key]: e.target.checked }))}
-                                />
-                                <span>{g.label}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
                   {!mediaKind && (
                     <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[var(--color-text-muted)] text-sm">
                       {dragOver ? 'Drop to upload' : 'Upload a file first'}
@@ -3509,7 +3689,7 @@ export default function VideoEditor() {
 
                 {clips.length > 0 && (
                   <div className="mt-3 mb-1">
-                    <div className="text-[11px] font-medium text-[var(--color-text-muted)] mb-1">Clips (base sequence)</div>
+                    <div className="text-[11px] font-medium text-[var(--color-text-muted)] mb-1">Clips · drag a file onto the preview to add another</div>
                     <ClipStrip
                       clips={clips}
                       selectedClipId={selectedClipId}
@@ -3520,6 +3700,7 @@ export default function VideoEditor() {
                       onTrim={trimClip}
                       onAddClip={addClipClick}
                       onAddBlank={addBlankClip}
+                      onAddFromLibrary={() => setLibraryOpen('clip')}
                       zOrder={clipZOrder}
                       onMoveZ={moveClipZ}
                       selectedBoundary={selectedBoundary}
@@ -3572,55 +3753,28 @@ export default function VideoEditor() {
                   />
                 )}
 
-                <div className="flex flex-wrap items-center gap-2 mt-3">
-                  <button onClick={playFromStart} disabled={!mediaKind || busy} title="Restart from beginning" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
-                    ⏮ Restart
-                  </button>
-                  <button onClick={togglePlay} disabled={!mediaKind || busy} title="Play / pause (Space)" className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
-                    {isPlaying ? '⏸ Pause' : '▶ Play'}
-                  </button>
-                  <button onClick={splitAtPlayhead} disabled={!mediaKind || busy} title="Split the clip under the playhead (S)" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
-                    ✂ Split
-                  </button>
-                  <button onClick={undo} disabled={!history.canUndo || busy} title="Undo (⌘Z / Ctrl+Z)" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
-                    ↶ Undo
-                  </button>
-                  <button onClick={redo} disabled={!history.canRedo || busy} title="Redo (⇧⌘Z / Ctrl+Y)" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
-                    ↷ Redo
-                  </button>
-                  <button onClick={() => selectedLayerId && duplicateLayer(selectedLayerId)} disabled={!selectedLayerId || busy} title="Duplicate selected (⌘D / Ctrl+D)" className="px-3 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
-                    ⧉ Duplicate
-                  </button>
-                  <button onClick={() => setAddOpen((v) => !v)} disabled={!mediaKind || busy} className="px-4 py-2 rounded-md bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] disabled:opacity-40 text-sm font-medium">
-                    + Add layer
-                  </button>
-                  <button onClick={doExport} disabled={!mediaKind || busy} className="px-4 py-2 rounded-md bg-gradient-to-r from-[var(--color-primary-green)] to-[var(--color-primary-blue)] text-black font-semibold disabled:opacity-40 text-sm">
-                    {busy ? 'Working…' : 'Export MP4'}
-                  </button>
-                  {downloadUrl && (
-                    <a href={downloadUrl} download={downloadName} className="px-4 py-2 rounded-md border border-[var(--color-primary-green)] text-[var(--color-primary-green)] text-sm font-medium">
-                      ↓ Save {downloadName.endsWith('.mp4') ? 'MP4' : 'WebM'}
-                    </a>
-                  )}
-                </div>
-
-                {busy && (
-                  <div className="mt-3">
-                    <div className="h-1.5 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">
-                      <div className="h-full bg-gradient-to-r from-[var(--color-primary-green)] to-[var(--color-primary-blue)] transition-[width] duration-150" style={{ width: `${Math.round(progress * 100)}%` }} />
-                    </div>
-                  </div>
-                )}
+                {/* Transport, add, view and export now live in the sticky bar at
+                    the top of this card — see above. */}
                 <p className="text-xs text-[var(--color-text-secondary)] mt-2 font-mono">{status}</p>
               </div>
             </section>
 
-            {/* ---- Controls ---- */}
-            <aside className="space-y-6">
+            {/* ---- Controls ----
+                 The rail scrolls on its own and sticks under the header, so the
+                 preview never leaves the screen while you dig through properties. */}
+            <aside
+              className="space-y-4 lg:sticky lg:overflow-y-auto lg:overscroll-contain lg:pr-1"
+              style={{
+                top: '60px',
+                maxHeight: fullscreen ? 'calc(100dvh - 76px)' : 'calc(72dvh - 24px)',
+              }}
+            >
               {/* Layers list */}
-              <Panel title="Layers">
+              <Panel title="Layers" badge={layers.length > 0 ? `${layers.length}` : undefined}>
                 {layers.length === 0 ? (
-                  <p className="text-xs text-[var(--color-text-secondary)]">{mediaKind ? 'Add a banner, caption, or zoom with the “+” button.' : 'Upload a photo or video to begin.'}</p>
+                  <p className="text-xs text-[var(--color-text-secondary)]">
+                    {mediaKind ? 'Nothing yet — use “+ Add” in the toolbar above the preview.' : 'Upload a photo or video to begin.'}
+                  </p>
                 ) : (
                   <div className="space-y-1">
                     {displayLayers.map((l) => {
@@ -3847,74 +4001,91 @@ export default function VideoEditor() {
                 </Panel>
               )}
 
-              {/* Selected base clip: its rectangle on the frame, crop, and where it
-                  sits on the base clock / in the clip stack */}
+              {/* Everything about the selected base clip in ONE panel. These were
+                  three sibling panels ("Clip placement" / "Clip audio" / "Clip
+                  colour"), so selecting a clip pushed the layer properties a
+                  screenful down the rail. */}
               {selectedClip && (
-                <Panel title="Clip placement">
-                  <ClipPlacementPanel
-                    key={selectedClip.id}
-                    clip={selectedClip}
-                    cropping={cropClipId === selectedClip.id}
-                    placed={selectedClip.transform !== undefined || selectedClip.crop !== undefined}
-                    cropped={hasUserCrop(selectedClip)}
-                    blank={isBlank(selectedClip)}
-                    pinned={clips.some((c) => c.baseStart !== undefined)}
-                    start={clipStarts[clips.indexOf(selectedClip)] ?? 0}
-                    length={clipLen(selectedClip)}
-                    baseDuration={duration}
-                    zIndex={clipZOrder.indexOf(selectedClip.id) + 1}
-                    clipCount={clips.length}
-                    onMove={(t) => moveClipTo(selectedClip.id, t)}
-                    onMoveZ={(dir) => moveClipZ(selectedClip.id, dir)}
-                    onReflow={reflowClips}
-                    onToggleCrop={() => setCropClipId((c) => (c === selectedClip.id ? null : selectedClip.id))}
-                    onUncrop={() => uncropClip(selectedClip)}
-                    onReset={() => resetClipPlacement(selectedClip.id)}
-                  />
-                </Panel>
-              )}
+                <Panel title="Clip" badge={selectedClip.name}>
+                  <Section title="Placement">
+                    <ClipPlacementPanel
+                      key={selectedClip.id}
+                      clip={selectedClip}
+                      cropping={cropClipId === selectedClip.id}
+                      placed={selectedClip.transform !== undefined || selectedClip.crop !== undefined}
+                      cropped={hasUserCrop(selectedClip)}
+                      blank={isBlank(selectedClip)}
+                      pinned={clips.some((c) => c.baseStart !== undefined)}
+                      start={clipStarts[clips.indexOf(selectedClip)] ?? 0}
+                      length={clipLen(selectedClip)}
+                      baseDuration={duration}
+                      zIndex={clipZOrder.indexOf(selectedClip.id) + 1}
+                      clipCount={clips.length}
+                      onMove={(t) => moveClipTo(selectedClip.id, t)}
+                      onMoveZ={(dir) => moveClipZ(selectedClip.id, dir)}
+                      onReflow={reflowClips}
+                      onToggleCrop={() => setCropClipId((c) => (c === selectedClip.id ? null : selectedClip.id))}
+                      onUncrop={() => uncropClip(selectedClip)}
+                      onReset={() => resetClipPlacement(selectedClip.id)}
+                    />
+                  </Section>
 
-              {/* Selected base clip: original-audio volume automation + mute (video only) */}
-              {selectedClip && selectedClip.kind === 'video' && (
-                <Panel title="Clip audio">
-                  <ClipPanel
-                    key={selectedClip.id}
-                    clip={selectedClip}
-                    onEdit={(patch, discrete) => editClip(selectedClip.id, patch, discrete)}
-                  />
-                </Panel>
-              )}
+                  {/* A still's on-screen length is a property of THIS clip, so it
+                      belongs here — it used to hide in the Output panel. */}
+                  {selectedClip.kind === 'image' && (() => {
+                    const target = selectedClip;
+                    const len = clipLen(target);
+                    // Slider for a quick coarse set; the number field types an exact,
+                    // frame-precise length (e.g. 3.03s) without snapping to 0.5s steps.
+                    const setLen = (v: number) => {
+                      if (!Number.isFinite(v)) return;
+                      const c = Math.max(MIN_CLIP_LEN, Math.min(IMAGE_CLIP_MAX, v));
+                      setImageDuration(c);
+                      trimClip(target.id, { out: c });
+                    };
+                    return (
+                      <Section title="Length">
+                        <Field label="Seconds on screen">
+                          <div className="flex items-center gap-2">
+                            <input type="range" min={0.5} max={20} step={0.1} value={Math.min(20, len)} onChange={(e) => setLen(Number(e.target.value))} className="flex-1 accent-[var(--color-primary-green)]" />
+                            <NumberInput
+                              min={MIN_CLIP_LEN}
+                              max={IMAGE_CLIP_MAX}
+                              step={0.01}
+                              value={Number(len.toFixed(2))}
+                              onChange={setLen}
+                              className="w-20 px-2 py-1 rounded-md bg-[var(--color-bg-elevated)] border border-[var(--color-glass-border)] text-sm text-right tabular-nums"
+                            />
+                            <span className="text-xs text-[var(--color-text-muted)]">s</span>
+                          </div>
+                        </Field>
+                      </Section>
+                    );
+                  })()}
 
-              {/* Selected base clip: per-clip colour grade (video or image) */}
-              {selectedClip && (
-                <Panel title="Clip colour">
-                  <GradePanel
-                    key={selectedClip.id}
-                    grade={selectedClip.grade ?? NEUTRAL_GRADE}
-                    onChange={(g, discrete) => editClip(selectedClip.id, { grade: g }, discrete)}
-                  />
-                </Panel>
-              )}
+                  {selectedClip.kind === 'video' && (
+                    <Section title="Audio">
+                      <ClipPanel
+                        key={selectedClip.id}
+                        clip={selectedClip}
+                        onEdit={(patch, discrete) => editClip(selectedClip.id, patch, discrete)}
+                      />
+                    </Section>
+                  )}
 
-              {/* Project-wide colour grade over the whole composited output */}
-              {mediaKind && (
-                <Panel title="Colour grade (global)">
-                  <p className="text-[11px] text-[var(--color-text-muted)] mb-1">
-                    Graded over the whole output (every clip + overlay), on top of any per-clip grade.
-                  </p>
-                  <GradePanel
-                    grade={globalGrade}
-                    onChange={(g, discrete) => {
-                      if (discrete) sealDiscrete();
-                      setGlobalGrade(g);
-                    }}
-                  />
+                  <Section title="Colour">
+                    <GradePanel
+                      key={selectedClip.id}
+                      grade={selectedClip.grade ?? NEUTRAL_GRADE}
+                      onChange={(g, discrete) => editClip(selectedClip.id, { grade: g }, discrete)}
+                    />
+                  </Section>
                 </Panel>
               )}
 
               {/* Timeline markers — an editing aid; nothing here is rendered. */}
               {mediaKind && (
-                <Panel title={markers.length > 0 ? `Markers (${markers.length})` : 'Markers'}>
+                <Panel title="Markers" badge={markers.length > 0 ? `${markers.length}` : undefined} collapsible defaultOpen={markers.length > 0}>
                   <MarkerPanel
                     markers={markers}
                     duration={timelineDuration}
@@ -3927,60 +4098,34 @@ export default function VideoEditor() {
                 </Panel>
               )}
 
-              {/* Autosave + JSON backup moved to the top bar (status + Save/Load/Clear). */}
-
-              {/* Project output settings */}
-              <Panel title="Output">
+              {/* Set-and-forget project settings. Collapsed by default so they stop
+                  competing for rail space with the thing you actually selected. */}
+              <Panel title="Output" collapsible defaultOpen={!mediaKind}>
                 <Field label="Aspect ratio">
                   <ChoiceGrid cols={2} value={ratio} options={RATIO_LABELS} onChange={(v) => { sealDiscrete(); setRatio(v); }} />
                 </Field>
                 <Field label="Fill mode (when input ratio ≠ output)">
                   <ChoiceGrid cols={3} value={fillMode} options={FILL_MODES.map((m) => ({ key: m, label: m === 'crop' ? 'Crop' : m === 'fit' ? 'Fit' : 'Blur' }))} onChange={(v) => { sealDiscrete(); setFillMode(v); }} />
                 </Field>
-                {mediaKind === 'image' && (() => {
-                  // Precise length control for the selected image clip (else the first).
-                  const target = clips.find((c) => c.id === selectedClipId && c.kind === 'image') ?? clips.find((c) => c.kind === 'image');
-                  const len = target ? clipLen(target) : imageDuration;
-                  // Slider for a quick coarse set; the number field types an exact,
-                  // frame-precise length (e.g. 3.03s) without snapping to 0.5s steps.
-                  const setLen = (v: number) => {
-                    if (!Number.isFinite(v)) return;
-                    const c = Math.max(MIN_CLIP_LEN, Math.min(IMAGE_CLIP_MAX, v));
-                    setImageDuration(c);
-                    if (target) trimClip(target.id, { out: c });
-                  };
-                  return (
-                  <Field label="Clip length">
-                    <div className="flex items-center gap-2">
-                      <input type="range" min={0.5} max={20} step={0.1} value={Math.min(20, len)} onChange={(e) => setLen(Number(e.target.value))} className="flex-1 accent-[var(--color-primary-green)]" />
-                      <NumberInput
-                        min={MIN_CLIP_LEN}
-                        max={IMAGE_CLIP_MAX}
-                        step={0.01}
-                        value={Number(len.toFixed(2))}
-                        onChange={setLen}
-                        className="w-20 px-2 py-1 rounded-md bg-[var(--color-bg-elevated)] border border-[var(--color-glass-border)] text-sm text-right tabular-nums"
-                      />
-                      <span className="text-xs text-[var(--color-text-muted)]">s</span>
-                    </div>
-                  </Field>
-                  );
-                })()}
-                <div className="flex items-center gap-4 text-xs text-[var(--color-text-secondary)]">
-                  <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={guidesOn} onChange={(e) => setGuidesOn(e.target.checked)} />
-                    Guides
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={showSafeZones} onChange={(e) => setShowSafeZones(e.target.checked)} />
-                    Safe zones
-                  </label>
-                </div>
+                {mediaKind && (
+                  <Section title="Colour grade (global)">
+                    <p className="text-[11px] text-[var(--color-text-muted)]">
+                      Over the whole output (every clip + overlay), on top of any per-clip grade.
+                    </p>
+                    <GradePanel
+                      grade={globalGrade}
+                      onChange={(g, discrete) => {
+                        if (discrete) sealDiscrete();
+                        setGlobalGrade(g);
+                      }}
+                    />
+                  </Section>
+                )}
               </Panel>
 
-              <Panel title="Font boil defaults">
-                <p className="text-[11px] text-[var(--color-text-muted)] mb-2">
-                  Starting pool + even-sizing for <em>newly added</em> captions. Each caption keeps its own — change one in its panel without touching the rest.
+              <Panel title="Caption defaults" collapsible defaultOpen={false}>
+                <p className="text-[11px] text-[var(--color-text-muted)]">
+                  Starting font-boil pool + even-sizing for <em>newly added</em> captions. Each caption keeps its own — change one in its panel without touching the rest.
                 </p>
                 <Field label="Default pool for new captions">
                   <div className="grid grid-cols-3 gap-1.5">
@@ -4001,7 +4146,7 @@ export default function VideoEditor() {
                 </label>
               </Panel>
 
-              <Panel title="Sound effects">
+              <Panel title="Sound effects" collapsible defaultOpen={false} badge={sfxEnabled ? 'on' : 'off'}>
                 <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
                   <input type="checkbox" checked={sfxEnabled} onChange={(e) => { sealDiscrete(); setSfxEnabled(e.target.checked); }} />
                   Enable (banner slash, caption riffle/keys, zoom whoosh, sketch pencil)

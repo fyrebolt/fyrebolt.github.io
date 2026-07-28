@@ -43,6 +43,8 @@ interface Props {
   onAddClip: () => void;
   /** Append a blank clip (no media — a stretch of blank screen). */
   onAddBlank: () => void;
+  /** Open the cross-project asset library filtered to clips. */
+  onAddFromLibrary: () => void;
   /** Clip ids in paint order, bottom-first — the stacking order the ↑/↓ buttons edit. */
   zOrder: string[];
   onMoveZ: (id: string, dir: -1 | 1) => void;
@@ -79,6 +81,7 @@ export default function ClipStrip({
   onTrim,
   onAddClip,
   onAddBlank,
+  onAddFromLibrary,
   zOrder,
   onMoveZ,
   selectedBoundary,
@@ -357,6 +360,17 @@ export default function ClipStrip({
       >
         <span className="text-lg leading-none">＋</span>
         <span className="mt-0.5">Clip</span>
+      </button>
+
+      {/* library tile: reuse a clip already uploaded in any project */}
+      <button
+        onClick={onAddFromLibrary}
+        style={{ width: 64 }}
+        className="shrink-0 rounded-md border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-primary-green)] hover:text-[var(--color-primary-green)] flex flex-col items-center justify-center text-xs"
+        title="Reuse a clip from your asset library"
+      >
+        <span className="text-lg leading-none">📚</span>
+        <span className="mt-0.5">Library</span>
       </button>
 
       {/* add-blank tile: a clip with no media at all — blank screen for its length */}
