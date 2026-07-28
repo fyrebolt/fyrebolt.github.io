@@ -3,9 +3,10 @@
 // Replaces the per-tool BannerPlayer / CaptionsPlayer / ZoomPlayer. Each frame it
 //   1. resolves the OUTPUT time (freeze-aware clock),
 //   2. maps it through the time-warp to a BASE-sequence time, then resolves WHICH
-//      clip is showing and the SOURCE time inside that clip (see project/clips.ts),
-//   3. draws the BASE frame — a zoom crop if a zoom layer exists, else the plain
-//      aspect-composited active clip,
+//      clips are showing and the SOURCE time inside each (see project/clips.ts),
+//   3. draws the BASE frame — the live clips composited bottom-up in z order; a
+//      full-frame clip is a zoom crop if a zoom layer exists, else the plain
+//      aspect composite, and a PLACED clip is contained inside its own box,
 //   4. draws every OVERLAY layer in z-order (banner, captions, …) on top,
 //   5. fires each layer's SFX.
 // Preview playback, scrubbing, zoom-rect editing, and MP4 export all share this.
@@ -13,6 +14,14 @@
 // The base sequence is the ONLY thing that knows about multiple clips. Overlays
 // and the warp operate in OUTPUT / base time exactly as in the single-source
 // editor, so a one-clip project is bit-for-bit the old behaviour.
+//
+// STACKING — clips may overlap in time, so several can be live at one instant.
+// They are composited by `z` (project/clips.ts) and their original audio mixes,
+// each riding its own volume curve through its own GainNode, the same way music
+// and sfx already mix. Ordinary stacking never BLENDS: each clip is drawn inside
+// its own (possibly cropped, possibly smaller-than-frame) rectangle over
+// whatever has a lower z. Only the boundary-transition case below blends, and
+// project/transitions.ts gates it to genuine sequence edges.
 //
 // Each clip boundary carries a TRANSITION (project/transitions.ts). Outside a
 // transition window the behaviour is the original hard cut: the active clip's
@@ -31,6 +40,7 @@
 
 import {
   drawSource,
+  drawInBox,
   drawZoomed,
   drawBanner,
   drawCaption,
@@ -60,7 +70,18 @@ import { elementEnd as musicEnd, musicSourceAt } from '../music/types';
 import type { Project, CaptionLayer } from './types';
 import { bannerLayers, zoomLayer, timeMachineLayer, overlayLayers, layerSpan } from './types';
 import type { VideoClip, BaseHit } from './clips';
-import { baseDuration, resolveBase, hasVideoClip, sampleVolume, clipLen } from './clips';
+import {
+  activeClipsAt,
+  baseDuration,
+  clipCrop,
+  clipLen,
+  clipTransform,
+  clipZ,
+  hasVideoClip,
+  isPlainClip,
+  resolveBase,
+  sampleVolume,
+} from './clips';
 import type { ActiveTransition } from './transitions';
 import { activeTransitionAt, allWindows, crossfadeGains, duckGain, isOverlapping, windowAt } from './transitions';
 import { TransitionRenderer } from './transitionDraw';
@@ -318,11 +339,16 @@ export class Compositor {
   }
 
   /**
-   * Steer every VIDEO clip so the ACTIVE one's frame + rate match OUTPUT time
+   * Steer every VIDEO clip so each LIVE one's frame + rate match OUTPUT time
    * `outputT` (pause on a freeze, else play at the warp's instantaneous speed,
    * correcting drift), pre-roll the NEXT clip to its in-point, and pause all
-   * others. Original audio (when the export graph exists) is gain-muted on any
-   * clip that isn't the audible active one, or whenever speed isn't ~1.
+   * others.
+   *
+   * Several clips can be live at once now that time ranges may overlap, so this
+   * steers all of them and their original audio MIXES — each riding its own
+   * volume-automation curve through its own GainNode, exactly the way music and
+   * sfx already mix. Audio is still gain-muted on any clip that isn't live, and
+   * whenever speed isn't ~1 (pitch-shifted playback) or the clock is frozen.
    */
   private driveClips(outputT: number, allowPlay: boolean): void {
     const clips = this.clips();
@@ -331,18 +357,23 @@ export class Compositor {
     const hasVideo = this.hasVideo();
     const speed = hasVideo ? warp.speedAt(outputT) : 1;
     const frozen = hasVideo && warp.frozen(outputT);
-    const hit = resolveBase(clips, warp.sourceAt(outputT));
+    const baseT = warp.sourceAt(outputT);
+    const hit = resolveBase(clips, baseT);
     const activeIdx = hit ? hit.index : -1;
     const nextIdx = activeIdx >= 0 && activeIdx + 1 < clips.length ? activeIdx + 1 : -1;
     const when = this.audioCtx ? this.audioCtx.currentTime : 0;
 
-    // ---- boundary transition: both sides live, gains on an equal-power crossfade ----
-    //
     // `steered` maps clip index → the source second that clip must show and the
-    // gain multiplier its original audio rides. Outside a window it holds only
-    // the single active clip, i.e. exactly the original hard-cut behaviour.
-    const active = this.activeTransition(outputT);
+    // gain multiplier its original audio rides. Every live clip is in it; for a
+    // plain sequential project that is the single active clip, i.e. exactly the
+    // original hard-cut behaviour.
     const steered = new Map<number, { target: number; gain: number }>();
+    for (const h of activeClipsAt(clips, baseT)) {
+      steered.set(h.index, { target: h.sourceT, gain: sampleVolume(h.clip.volume, h.local) });
+    }
+
+    // ---- boundary transition: both sides live, gains on an equal-power crossfade ----
+    const active = this.activeTransition(outputT);
     if (active) {
       // A same-source boundary must snapshot the outgoing frame BEFORE the shared
       // element is re-steered below.
@@ -399,14 +430,12 @@ export class Compositor {
       const audio = this.clipAudio.get(clip.srcId);
       const cap = Math.max(0, clip.srcDuration - 0.03);
 
-      // Inside a transition window `steered` is authoritative (it may hold BOTH
-      // sides); outside one it is empty and the single active clip drives, as
-      // before. Everything else pauses and mutes.
+      // `steered` is authoritative: it holds every live clip, plus both sides of
+      // a transition window. Everything else pauses and mutes.
       const want = steered.get(i);
-      const driven = active ? want !== undefined : i === activeIdx && hit !== null;
 
-      if (driven) {
-        const target = Math.min(want ? want.target : hit ? hit.sourceT : 0, cap);
+      if (want) {
+        const target = Math.min(want.target, cap);
         if (frozen || !allowPlay) {
           if (!v.paused) v.pause();
           if (Math.abs(v.currentTime - target) > 0.05) v.currentTime = Math.max(0, target);
@@ -418,14 +447,13 @@ export class Compositor {
           if (Math.abs(v.currentTime - target) > 0.3) v.currentTime = Math.max(0, target);
         }
         if (audio && this.audioCtx) {
-          // Base = the clip's own automation curve at this clip-local instant
-          // (hit.local == seconds from the in-point), or — inside a transition —
-          // that curve already multiplied by the crossfade/duck envelope.
-          // Pitch-shifted / paused audio is still silenced on a freeze or
-          // off-speed span, and mute wins outright.
+          // `want.gain` is this clip's own automation curve at its own clip-local
+          // instant — or, inside a transition, that curve already multiplied by
+          // the crossfade / duck envelope. Overlapping clips each carry their own,
+          // so they mix. Pitch-shifted / paused audio is still silenced on a
+          // freeze or off-speed span, and mute wins outright.
           const suppressed = frozen || Math.abs(speed - 1) > 0.02 || clip.muted === true;
-          const base = want ? want.gain : hit ? sampleVolume(clip.volume, hit.local) : 0;
-          audio.gain.gain.setTargetAtTime(suppressed ? 0 : base, when, 0.01);
+          audio.gain.gain.setTargetAtTime(suppressed ? 0 : want.gain, when, 0.01);
         }
       } else {
         if (!v.paused) v.pause();
@@ -603,9 +631,10 @@ export class Compositor {
   // ---- drawing ----
 
   /**
-   * Paint ONE clip's finished base frame (zoom crop or aspect composite, plus its
-   * per-clip grade) into `ctx`. The element is drawn at whatever frame it is
-   * currently showing — driveClips is what steers it to the right source second.
+   * Paint ONE FULL-FRAME clip's finished base frame (zoom crop or aspect
+   * composite, plus its per-clip grade) into `ctx`. The element is drawn at
+   * whatever frame it is currently showing — driveClips is what steers it to the
+   * right source second.
    */
   private paintClipFrame(ctx: CanvasRenderingContext2D, clip: VideoClip, src: ClipEl, outputT: number): void {
     const p = this.getProject();
@@ -618,17 +647,85 @@ export class Compositor {
     }
   }
 
-  private drawBase(outputT: number): void {
-    const active = this.activeTransition(outputT);
-    if (active) {
-      this.drawTransition(active, outputT);
+  /**
+   * Paint one clip of the stack. A PLAIN clip (full-frame, uncropped) takes the
+   * original path above, untouched — so an ordinary project renders exactly as it
+   * always has, zoom track included. A PLACED clip is instead drawn contained
+   * inside its own rotated box, showing only its crop region, leaving the rest of
+   * the frame to whatever sits behind it.
+   *
+   * The Zoom layer stays a FULL-FRAME base effect and is deliberately not applied
+   * to a placed clip: a clip given its own rectangle owns its own framing, and
+   * the two crops would otherwise compound into something unreadable.
+   */
+  private paintClip(ctx: CanvasRenderingContext2D, clip: VideoClip, src: ClipEl, outputT: number): void {
+    if (isPlainClip(clip)) {
+      this.paintClipFrame(ctx, clip, src, outputT);
       return;
     }
-    const hit = this.hitAt(outputT);
-    if (!hit) return;
-    const src = this.elOf(hit.clip);
-    if (!src) return;
-    this.paintClipFrame(this.ctx, hit.clip, src, outputT);
+    const t = clipTransform(clip);
+    const cx = (t.x + t.w / 2) * this.out.w;
+    const cy = (t.y + t.h / 2) * this.out.h;
+    const paint = (): void => drawInBox(ctx, src, t, clipCrop(clip), this.out, gradeFilter(clip.grade));
+    if (!t.rotation) {
+      paint();
+      return;
+    }
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(t.rotation);
+    ctx.translate(-cx, -cy);
+    paint();
+    ctx.restore();
+  }
+
+  /**
+   * Composite the base frame: every clip live at this instant, painted bottom-up
+   * in z order, plus the boundary transition (if the playhead is inside one) in
+   * the pair's own z slot.
+   *
+   * The frame is cleared to black first because a placed clip need not cover it —
+   * uncovered area shows whatever is behind, or the empty canvas. For a plain
+   * sequential project the single full-frame clip paints straight over that fill,
+   * so nothing about the result changes.
+   */
+  private drawBase(outputT: number): void {
+    const clips = this.clips();
+    const baseT = this.warp().sourceAt(outputT);
+    const active = this.activeTransition(outputT);
+
+    this.ctx.save();
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.fillStyle = '#000';
+    this.ctx.fillRect(0, 0, this.out.w, this.out.h);
+    this.ctx.restore();
+
+    // The two sides of a live transition are composited together by
+    // drawTransition, so they are lifted out of the ordinary stack.
+    const pair = active ? new Set([active.outgoingIndex, active.incomingIndex]) : null;
+    const items: { z: number; order: number; draw: () => void }[] = [];
+
+    for (const hit of activeClipsAt(clips, baseT)) {
+      if (pair?.has(hit.index)) continue;
+      const src = this.elOf(hit.clip);
+      if (!src) continue;
+      items.push({
+        z: clipZ(hit.clip, hit.index),
+        order: hit.index,
+        draw: () => this.paintClip(this.ctx, hit.clip, src, outputT),
+      });
+    }
+
+    if (active) {
+      items.push({
+        z: Math.min(clipZ(active.outgoing, active.outgoingIndex), clipZ(active.incoming, active.incomingIndex)),
+        order: active.outgoingIndex,
+        draw: () => this.drawTransition(active, outputT),
+      });
+    }
+
+    items.sort((a, b) => a.z - b.z || a.order - b.order);
+    for (const it of items) it.draw();
   }
 
   /** The boundary transition covering OUTPUT time `outputT`, if any. */
@@ -942,7 +1039,7 @@ export class Compositor {
     const sec = this.pausedT;
     this.driveStickerVideos(sec, false);
     this.driveMusic(sec, false);
-    if (this.parkTransition(sec)) return;
+    if (this.parkMulti(sec)) return;
     const hit = this.hitAt(sec);
     const active = hit && hit.clip.kind === 'video' ? this.elOf(hit.clip) : null;
     this.pauseClipVideos();
@@ -971,20 +1068,33 @@ export class Compositor {
   }
 
   /**
-   * Park a PAUSED frame that falls inside a transition window: both sides have to
-   * sit on their own source second, so this hands the seeking to driveClips (which
-   * also captures the same-source freeze-frame) and repaints as each seek lands.
-   * Returns false when `sec` isn't in a window, leaving the caller's normal
-   * single-clip path to run.
+   * Park a PAUSED frame where MORE THAN ONE clip is live — inside a transition
+   * window (both sides), or wherever clips overlap in time. Each has to sit on its
+   * own source second, which the single-element coalescing path below can't
+   * express, so this hands the seeking to driveClips (which also captures the
+   * same-source freeze-frame) and repaints as each seek lands.
+   *
+   * Returns false in the ordinary one-clip case, leaving the caller's normal
+   * single-clip path — and its scrub coalescing — to run.
    */
-  private parkTransition(sec: number): boolean {
+  private parkMulti(sec: number): boolean {
     const active = this.activeTransition(sec);
-    if (!active) return false;
+    const stack = activeClipsAt(this.clips(), this.warp().sourceAt(sec));
+    if (!active && stack.length <= 1) return false;
     this.driveClips(sec, false);
-    for (const clip of [active.outgoing, active.incoming]) {
+    const seen = new Set<HTMLVideoElement>();
+    const park = (clip: VideoClip): void => {
       const v = this.elOf(clip);
-      if (v instanceof HTMLVideoElement) this.redrawWhenSeeked(v);
+      if (v instanceof HTMLVideoElement && !seen.has(v)) {
+        seen.add(v);
+        this.redrawWhenSeeked(v);
+      }
+    };
+    if (active) {
+      park(active.outgoing);
+      park(active.incoming);
     }
+    for (const h of stack) park(h.clip);
     this.drawFrameAt(sec, false);
     return true;
   }
@@ -1185,7 +1295,7 @@ export class Compositor {
 
     // A scrub landing inside a transition window needs BOTH sides parked, which
     // the coalescing single-element path below can't express.
-    if (this.parkTransition(sec)) {
+    if (this.parkMulti(sec)) {
       this.scrubNext = null;
       return;
     }
@@ -1307,6 +1417,36 @@ export class Compositor {
       if (lx >= b.left - pad && lx <= b.left + b.width + pad && ly >= b.top - pad && ly <= b.top + b.height + pad) {
         return layer.id;
       }
+    }
+    return null;
+  }
+
+  /**
+   * Top-most CLIP live at the paused time whose placed rectangle contains a
+   * normalised point, or null. Drives double-click-to-crop on the preview, so it
+   * deliberately ignores the overlay stack — the caller tests overlays first.
+   */
+  hitTestClip(nx: number, ny: number): string | null {
+    if (!this.loaded) return null;
+    const px = nx * this.out.w;
+    const py = ny * this.out.h;
+    const stack = activeClipsAt(this.clips(), this.warp().sourceAt(this.pausedT));
+    for (let i = stack.length - 1; i >= 0; i--) {
+      const t = clipTransform(stack[i].clip);
+      const left = t.x * this.out.w;
+      const top = t.y * this.out.h;
+      const width = t.w * this.out.w;
+      const height = t.h * this.out.h;
+      // Transform the point into the box's local (unrotated) frame about its centre.
+      const cx = left + width / 2;
+      const cy = top + height / 2;
+      const dx = px - cx;
+      const dy = py - cy;
+      const c = Math.cos(-t.rotation);
+      const s = Math.sin(-t.rotation);
+      const lx = cx + dx * c - dy * s;
+      const ly = cy + dx * s + dy * c;
+      if (lx >= left && lx <= left + width && ly >= top && ly <= top + height) return stack[i].clip.id;
     }
     return null;
   }
