@@ -1,11 +1,69 @@
 // ===== Shared presentational primitives for the editor's control panels =====
 
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 
-export function Panel({ title, children }: { title: string; children: ReactNode }) {
+/**
+ * A titled card in the properties rail.
+ *
+ * `collapsible` turns the title into a disclosure button. Panels the editor
+ * needs constantly (the selection's properties) stay plain and always-open;
+ * set-and-forget project settings collapse so they cost one line of rail
+ * instead of a screenful of scrolling.
+ */
+export function Panel({
+  title,
+  children,
+  collapsible,
+  defaultOpen = true,
+  badge,
+}: {
+  title: string;
+  children: ReactNode;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  /** Small muted note beside the title (a count, a state word…). */
+  badge?: string;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const heading = (
+    <>
+      <span className="text-sm font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">{title}</span>
+      {badge && <span className="ml-2 text-[10px] font-medium text-[var(--color-text-muted)] normal-case">{badge}</span>}
+    </>
+  );
+  if (!collapsible) {
+    return (
+      <div className="glass-card p-5">
+        <h2 className="mb-4">{heading}</h2>
+        <div className="space-y-4">{children}</div>
+      </div>
+    );
+  }
   return (
     <div className="glass-card p-5">
-      <h2 className="text-sm font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-4">{title}</h2>
+      <h2>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className={`w-full flex items-center gap-1.5 text-left ${open ? 'mb-4' : ''}`}
+        >
+          <span className={`text-[10px] text-[var(--color-text-muted)] transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden>
+            ▶
+          </span>
+          {heading}
+        </button>
+      </h2>
+      {open && <div className="space-y-4">{children}</div>}
+    </div>
+  );
+}
+
+/** A labelled group inside a panel — one panel can hold several. */
+export function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="pt-3 first:pt-0 border-t first:border-t-0 border-[var(--color-glass-border)]">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-2.5">{title}</div>
       <div className="space-y-4">{children}</div>
     </div>
   );

@@ -755,7 +755,7 @@ export default function ProjectTimeline({
       <div className="space-y-1.5">
         {layers.length === 0 && (
           <div className="text-[11px] text-[var(--color-text-muted)] py-2 text-center">
-            No layers yet — use “+ Add layer” to place one on the timeline.
+            No layers yet — use “+ Add” in the toolbar to place one on the timeline.
           </div>
         )}
 

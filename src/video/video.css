@@ -31,6 +31,23 @@
   transform: scale(0.96);
 }
 
+/* Transport-bar controls. --color-bg-elevated is pure white here, so a button
+   using it sat invisibly on the white toolbar; the secondary fill is the iOS
+   tint that actually reads as a pressable control on a light surface. */
+.ios-editor .tool-btn {
+  background: var(--color-fill-secondary);
+  color: var(--color-text-primary);
+  font-weight: 500;
+  line-height: 1.25;
+  transition: background-color 0.18s ease, opacity 0.18s ease;
+}
+.ios-editor .tool-btn:hover:not(:disabled) {
+  background: #e0e2e8;
+}
+.ios-editor .tool-btn:disabled {
+  opacity: 0.35;
+}
+
 /* Native checkbox -> iOS switch */
 .ios-editor input[type='checkbox'] {
   appearance: none;
