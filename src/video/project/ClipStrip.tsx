@@ -9,7 +9,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { VideoClip } from './clips';
-import { clipLen, MIN_CLIP_LEN } from './clips';
+import { baseDuration, clipLen, MIN_CLIP_LEN } from './clips';
 import { glyphOf, labelOf, maxDurationAt, transitionAt, MIN_TRANSITION_DUR } from './transitions';
 
 const CARD_W = 150; // px, fixed
@@ -40,6 +40,9 @@ interface Props {
   onDuplicate: (id: string) => void;
   onTrim: (id: string, patch: { in?: number; out?: number }) => void;
   onAddClip: () => void;
+  /** Clip ids in paint order, bottom-first — the stacking order the ↑/↓ buttons edit. */
+  zOrder: string[];
+  onMoveZ: (id: string, dir: -1 | 1) => void;
   /** Boundary index (== the INCOMING clip's index) whose transition is selected. */
   selectedBoundary: number | null;
   onSelectBoundary: (index: number) => void;
@@ -72,6 +75,8 @@ export default function ClipStrip({
   onDuplicate,
   onTrim,
   onAddClip,
+  zOrder,
+  onMoveZ,
   selectedBoundary,
   onSelectBoundary,
   onTransitionDur,
@@ -83,7 +88,8 @@ export default function ClipStrip({
   const durDrag = useRef<{ index: number; startX: number; orig: number; moved: boolean } | null>(null);
   const trim = useRef<{ id: string; edge: TrimEdge; startX: number; max: number; trackW: number; origIn: number; origOut: number } | null>(null);
 
-  const total = useMemo(() => clips.reduce((s, c) => s + clipLen(c), 0), [clips]);
+  // The base span, not the sum of lengths — clips may overlap or leave a gap.
+  const total = useMemo(() => baseDuration(clips), [clips]);
 
   // ---- reorder (grip drag) ----
   const onGripDown = useCallback(
@@ -294,8 +300,44 @@ export default function ClipStrip({
               onTrimUp={onTrimUp}
             />
 
-            <div className="mt-1 flex justify-between text-[10px] text-[var(--color-text-muted)]">
+            <div className="mt-1 flex items-center justify-between text-[10px] text-[var(--color-text-muted)]">
               <span>#{i + 1}</span>
+              {/* Stacking order — only meaningful once clips can overlap, and edited
+                  with the layers list's own bring-forward / send-backward pattern. */}
+              {clips.length > 1 &&
+                (() => {
+                  const zPos = zOrder.indexOf(clip.id) + 1;
+                  return (
+                    <span
+                      className="flex items-center gap-0.5"
+                      title={`Stacking order ${zPos} of ${clips.length} from the back — which clip draws on top where clips overlap`}
+                    >
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onMoveZ(clip.id, -1);
+                        }}
+                        disabled={zPos <= 1}
+                        title="Send backward"
+                        className="hover:text-[var(--color-primary-green)] disabled:opacity-30 leading-none"
+                      >
+                        ↓
+                      </button>
+                      <span>z{zPos}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onMoveZ(clip.id, 1);
+                        }}
+                        disabled={zPos >= clips.length}
+                        title="Bring forward"
+                        className="hover:text-[var(--color-primary-green)] disabled:opacity-30 leading-none"
+                      >
+                        ↑
+                      </button>
+                    </span>
+                  );
+                })()}
               <span>{fmt(clipLen(clip))}</span>
             </div>
           </div>,

@@ -1,16 +1,34 @@
 // ===== Multi-clip base sequence =====
 //
-// The editor's BASE timeline is an ordered list of clips. Their trimmed lengths
-// concatenate into one continuous "base" clock (0 .. baseDuration). This base
-// clock is exactly what the single-source editor used to call SOURCE time — so
-// the whole time-warp (banner freeze + Time Machine, see project/timeMap.ts) and
-// every overlay layer keep working unchanged: they operate in OUTPUT / base time
-// and never learn that the base is now stitched from several clips.
+// The editor's BASE timeline is a list of clips laid out on one continuous "base"
+// clock (0 .. baseDuration). This base clock is exactly what the single-source
+// editor used to call SOURCE time — so the whole time-warp (banner freeze + Time
+// Machine, see project/timeMap.ts) and every overlay layer keep working
+// unchanged: they operate in OUTPUT / base time and never learn that the base is
+// now stitched from several clips.
 //
-//   outputT --(warp: freeze + time machine)--> baseT --(resolveBase)--> (clip, sourceT)
+//   outputT --(warp: freeze + time machine)--> baseT --(layout)--> (clip, sourceT)
 //
 // A single un-trimmed clip makes baseT === sourceT, so a one-clip project behaves
 // exactly as the old single-source editor did.
+//
+// LAYOUT — clips are laid out left to right by `layoutClips`. A clip with no
+// `baseStart` simply follows the previous one (the original purely-sequential
+// behaviour, unchanged); a clip WITH one is pinned there and may therefore sit
+// anywhere, including on top of its neighbours. Several clips can be live at the
+// same instant, so a base time resolves to a STACK (`activeClipsAt`) rather than
+// to one clip — see `z` below for the paint order.
+//
+// PLACEMENT — a clip also carries an optional `transform` (its rectangle on the
+// output frame) and `crop` (which part of its own source shows inside that
+// rectangle). Both absent == the original full-frame behaviour. This crop is a
+// THIRD, independent mechanism, not to be confused with either:
+//   - `Project.fillMode` — how a full-frame clip's aspect is reconciled with the
+//     output frame (crop-to-fill / blur-pad / letterbox), and
+//   - the Zoom layer's keyframed crop rect, a full-frame base effect on the
+//     OUTPUT clock.
+// It is the same idea as a Sticker's crop: which part of a source is visible
+// inside its own transformed box.
 //
 // The decoded <video>/<img> elements live in a registry outside the project
 // (keyed by srcId), mirroring how stickers keep their media out of the plain
@@ -18,6 +36,8 @@
 
 import type { ColorGrade } from './grade';
 import type { Transition } from './transitions';
+import type { Transform } from '../transform/TransformBox';
+import type { CropRect } from '../sticker/types';
 
 export type ClipKind = 'video' | 'image';
 
@@ -50,6 +70,33 @@ export interface VideoClip {
   /** Native pixel dimensions — used for output sizing + aspect compositing. */
   w: number;
   h: number;
+  /**
+   * Where this clip is pinned on the BASE clock (seconds). Absent == "straight
+   * after the previous clip", i.e. the original sequential layout — so existing
+   * projects lay out bit-for-bit as before. Set it (by dragging the clip along
+   * the timeline) to move a clip freely, including over its neighbours.
+   */
+  baseStart?: number;
+  /**
+   * Paint order where clips overlap in the SAME screen space at the SAME time
+   * (higher = on top), mirroring every Layer's `z`. Absent == the clip's index,
+   * so a sequential project — where nothing ever overlaps — is unaffected.
+   */
+  z?: number;
+  /**
+   * The clip's rectangle on the output frame (output-normalised box + rotation),
+   * the same shape every other transformable layer stores. Absent == full-frame,
+   * centred, unrotated: exactly today's behaviour. Once set, the clip is drawn
+   * contained inside this box and whatever sits behind it shows through the rest
+   * of the frame.
+   */
+  transform?: Transform;
+  /**
+   * Which part of the clip's OWN source is visible inside `transform`
+   * (source-normalised). Absent == the whole source. See the header note: this is
+   * neither `fillMode` nor the Zoom layer's rect.
+   */
+  crop?: CropRect;
   /** Volume-automation curve, ordered by `t`. Absent/empty == flat 100% (the
    *  clip's original volume, unchanged), so existing clips/projects are never
    *  affected until someone edits a curve. */
@@ -160,18 +207,95 @@ export function clipLen(c: VideoClip): number {
   return Math.max(MIN_CLIP_LEN, c.out - c.in);
 }
 
-/** Total base-sequence duration = sum of every clip's trimmed length. */
-export function baseDuration(clips: VideoClip[]): number {
-  let s = 0;
-  for (const c of clips) s += clipLen(c);
-  return s;
+// ---- placement (transform + crop) ----
+
+/** Full-frame, centred, unrotated — what a clip with no `transform` renders as. */
+export const FULL_FRAME: Transform = { x: 0, y: 0, w: 1, h: 1, rotation: 0 };
+/** The whole source — what a clip with no `crop` shows. */
+export const FULL_CLIP_CROP: CropRect = { x: 0, y: 0, w: 1, h: 1 };
+
+export function clipTransform(c: VideoClip): Transform {
+  return c.transform ?? FULL_FRAME;
 }
 
-/** Base time at which clip `index` starts (sum of preceding clip lengths). */
+export function clipCrop(c: VideoClip): CropRect {
+  return c.crop ?? FULL_CLIP_CROP;
+}
+
+function near(a: number, b: number): boolean {
+  return Math.abs(a - b) < 1e-4;
+}
+
+/** True when the clip still fills the frame unrotated (no explicit transform). */
+export function isFullFrame(c: VideoClip): boolean {
+  const t = clipTransform(c);
+  return near(t.x, 0) && near(t.y, 0) && near(t.w, 1) && near(t.h, 1) && near(t.rotation, 0);
+}
+
+/** True when the clip shows its whole source (no crop applied). */
+export function isFullCrop(c: VideoClip): boolean {
+  const r = clipCrop(c);
+  return near(r.x, 0) && near(r.y, 0) && near(r.w, 1) && near(r.h, 1);
+}
+
+/**
+ * A "plain" clip is one nobody has placed yet: full-frame and uncropped. These
+ * take the ORIGINAL render path (fill-mode aspect composite / zoom crop over the
+ * whole canvas) so untouched projects are pixel-identical, and they are the only
+ * clips eligible for a boundary transition (see project/transitions.ts).
+ */
+export function isPlainClip(c: VideoClip): boolean {
+  return isFullFrame(c) && isFullCrop(c);
+}
+
+// ---- layout on the base clock ----
+
+/** Paint order of a clip where clips overlap: explicit `z`, else its index. */
+export function clipZ(c: VideoClip, index: number): number {
+  return c.z ?? index;
+}
+
+/** One clip's resolved extent on the base clock. */
+export interface ClipPlacement {
+  index: number;
+  clip: VideoClip;
+  start: number;
+  end: number;
+}
+
+/**
+ * Lay every clip out on the base clock. A clip with `baseStart` is pinned there;
+ * one without simply follows the clip before it — so a project where no clip has
+ * ever been moved lays out as the original strict concatenation.
+ */
+export function layoutClips(clips: VideoClip[]): ClipPlacement[] {
+  const out: ClipPlacement[] = [];
+  let cursor = 0;
+  for (let i = 0; i < clips.length; i++) {
+    const c = clips[i];
+    const len = clipLen(c);
+    const start = c.baseStart !== undefined && isFinite(c.baseStart) ? Math.max(0, c.baseStart) : cursor;
+    out.push({ index: i, clip: c, start, end: start + len });
+    cursor = start + len;
+  }
+  return out;
+}
+
+/**
+ * Total base-sequence duration: the span from 0 to the LAST clip end. Clips may
+ * overlap (or leave a gap), so this is a max over ends rather than a sum of
+ * lengths — for a purely sequential layout the two are identical.
+ */
+export function baseDuration(clips: VideoClip[]): number {
+  let end = 0;
+  for (const p of layoutClips(clips)) end = Math.max(end, p.end);
+  return end;
+}
+
+/** Base time at which clip `index` starts. */
 export function clipStartAt(clips: VideoClip[], index: number): number {
-  let s = 0;
-  for (let i = 0; i < index && i < clips.length; i++) s += clipLen(clips[i]);
-  return s;
+  const lay = layoutClips(clips);
+  return lay[index]?.start ?? 0;
 }
 
 export interface BaseHit {
@@ -185,25 +309,50 @@ export interface BaseHit {
   sourceT: number;
 }
 
+function hitOf(p: ClipPlacement, baseT: number): BaseHit {
+  const len = clipLen(p.clip);
+  const local = Math.max(0, Math.min(len, baseT - p.start));
+  return { index: p.index, clip: p.clip, clipStart: p.start, local, sourceT: p.clip.in + local };
+}
+
 /**
- * Resolve a base-sequence time to the clip showing at that instant and the
- * source time within its media. Clamps into the sequence; returns null only when
- * there are no clips. The final clip owns any overrun (base time >= total).
+ * Every clip live at base time `baseT`, BOTTOM-FIRST in paint order (`clipZ`,
+ * ties broken by sequence index). Usually one clip — the stack only grows when
+ * clips have been given overlapping time ranges.
+ *
+ * Past the very end of the sequence the last-ending clip holds its final frame,
+ * preserving the original "the final clip owns any overrun" contract. A genuine
+ * GAP between clips returns nothing: the frame there is empty, by design.
+ */
+export function activeClipsAt(clips: VideoClip[], baseT: number): BaseHit[] {
+  if (clips.length === 0) return [];
+  const t = Math.max(0, baseT);
+  const lay = layoutClips(clips);
+  const live = lay.filter((p) => t >= p.start && t < p.end);
+  if (live.length === 0) {
+    const last = lay.reduce((a, b) => (b.end >= a.end ? b : a));
+    return t >= last.end ? [hitOf(last, t)] : [];
+  }
+  live.sort((a, b) => clipZ(a.clip, a.index) - clipZ(b.clip, b.index) || a.index - b.index);
+  return live.map((p) => hitOf(p, t));
+}
+
+/**
+ * The TOP-MOST clip showing at base time `baseT` — the one a razor cut, a seek,
+ * or the zoom base frame refers to. Returns null only when there are no clips at
+ * all; in a gap between clips it falls back to the nearest preceding clip so the
+ * transport still has something to steer.
  */
 export function resolveBase(clips: VideoClip[], baseT: number): BaseHit | null {
   if (clips.length === 0) return null;
+  const stack = activeClipsAt(clips, baseT);
+  if (stack.length > 0) return stack[stack.length - 1];
+  // Interior gap: the nearest clip that has already ended (else the first clip).
   const t = Math.max(0, baseT);
-  let acc = 0;
-  for (let i = 0; i < clips.length; i++) {
-    const len = clipLen(clips[i]);
-    const last = i === clips.length - 1;
-    if (t < acc + len || last) {
-      const local = Math.max(0, Math.min(len, t - acc));
-      return { index: i, clip: clips[i], clipStart: acc, local, sourceT: clips[i].in + local };
-    }
-    acc += len;
-  }
-  return null; // unreachable
+  const lay = layoutClips(clips);
+  const before = lay.filter((p) => p.end <= t);
+  const pick = before.length > 0 ? before.reduce((a, b) => (b.end >= a.end ? b : a)) : lay[0];
+  return hitOf(pick, t);
 }
 
 /** Whether any clip in the sequence is a video (drives audio + playback steering). */
@@ -245,6 +394,8 @@ export function splitClip(c: VideoClip, local: number): [VideoClip, VideoClip] |
     id: `clip-${Date.now().toString(36)}-${uid}`,
     out: c.kind === 'image' ? local : cutSource,
     volume: firstVol.length ? firstVol : undefined,
+    transform: c.transform ? { ...c.transform } : undefined,
+    crop: c.crop ? { ...c.crop } : undefined,
   };
   uid += 1;
   const second: VideoClip = {
@@ -253,6 +404,12 @@ export function splitClip(c: VideoClip, local: number): [VideoClip, VideoClip] |
     in: c.kind === 'image' ? 0 : cutSource,
     out: c.kind === 'image' ? len - local : c.out,
     volume: secondVol.length ? secondVol : undefined,
+    // Placement travels to both halves (independent copies), and an explicitly
+    // pinned clip hands the second half the pin it now starts at — an implicitly
+    // sequential one needs nothing, the layout keeps the halves back to back.
+    transform: c.transform ? { ...c.transform } : undefined,
+    crop: c.crop ? { ...c.crop } : undefined,
+    baseStart: c.baseStart !== undefined ? c.baseStart + local : undefined,
     // The razor introduces a BRAND NEW boundary: it starts as a plain cut. (The
     // clip's incoming transition belongs to the boundary before it, which the
     // first half keeps.)

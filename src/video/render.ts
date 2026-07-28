@@ -174,6 +174,119 @@ export function drawSource(
   ctx.restore();
 }
 
+// ---- clip placement: a clip drawn inside its OWN box instead of the full frame ----
+
+/** An output-normalised rectangle (0..1 of out.w / out.h). */
+export interface NormBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * The box + source crop that reproduce, EXACTLY, what `drawSource` currently
+ * paints for a full-frame source of `srcW`×`srcH` under `mode`. This is what a
+ * clip's placement is seeded with the moment it is first transformed, so taking
+ * hold of the transform widget never makes the picture jump:
+ *
+ *   - crop-to-fill  → the box stays the whole frame and the CROP records the
+ *                     sub-region of the source that the cover-fit was showing.
+ *   - fit / blur    → the crop stays the whole source and the BOX records the
+ *                     contained (letterboxed) rectangle it was drawn into.
+ *
+ * Contain-fitting the returned crop into the returned box (`drawInBox`) then
+ * yields the same pixels. `blur` additionally loses its blurred backdrop, which
+ * is inherent: once a clip owns a box, the frame around it belongs to whatever
+ * sits behind the clip.
+ */
+export function fillPlacement(
+  out: OutputSize,
+  srcW: number,
+  srcH: number,
+  mode: FillMode,
+): { box: NormBox; crop: ZoomRect } {
+  const full = { box: { x: 0, y: 0, w: 1, h: 1 }, crop: { x: 0, y: 0, w: 1, h: 1 } };
+  if (srcW <= 0 || srcH <= 0) return full;
+  if (mode === 'crop') {
+    const c = fitRect(out.w, out.h, srcW, srcH, 'cover');
+    if (c.dw <= 0 || c.dh <= 0) return full;
+    return {
+      box: { x: 0, y: 0, w: 1, h: 1 },
+      crop: { x: -c.dx / c.dw, y: -c.dy / c.dh, w: out.w / c.dw, h: out.h / c.dh },
+    };
+  }
+  const c = fitRect(out.w, out.h, srcW, srcH, 'contain');
+  return {
+    box: { x: c.dx / out.w, y: c.dy / out.h, w: c.dw / out.w, h: c.dh / out.h },
+    crop: { x: 0, y: 0, w: 1, h: 1 },
+  };
+}
+
+/**
+ * Draw a source's `crop` region CONTAINED inside `box` (output pixels), centred.
+ * This is the placed-clip counterpart of `drawSource`: the clip's own aspect is
+ * preserved inside whatever box it has been given, so a resized clip is never
+ * stretched, and the frame around the box is left untouched for the clips (or
+ * empty canvas) behind it. An over-dragged crop reaching outside the source is
+ * clipped to the valid region and mapped proportionally, so it letterboxes
+ * rather than smearing. Rotation is applied by the caller about the box centre.
+ */
+export function drawInBox(
+  ctx: CanvasRenderingContext2D,
+  src: Source,
+  box: NormBox,
+  crop: ZoomRect,
+  out: OutputSize,
+  grade = '',
+): void {
+  const { w: srcW, h: srcH } = sourceDims(src);
+  if (srcW <= 0 || srcH <= 0) return;
+  const bx = box.x * out.w;
+  const by = box.y * out.h;
+  const bw = box.w * out.w;
+  const bh = box.h * out.h;
+  if (bw <= 0 || bh <= 0) return;
+
+  // The crop region in source pixels (may reach outside the source).
+  const sx = crop.x * srcW;
+  const sy = crop.y * srcH;
+  const sw = crop.w * srcW;
+  const sh = crop.h * srcH;
+  if (sw <= 0 || sh <= 0) return;
+
+  // Contain-fit the whole crop region inside the box, centred.
+  const scale = Math.min(bw / sw, bh / sh);
+  const dw = sw * scale;
+  const dh = sh * scale;
+  const dx = bx + (bw - dw) / 2;
+  const dy = by + (bh - dh) / 2;
+
+  // Clip to the valid source region, mapping proportionally into the destination.
+  const vx = Math.max(sx, 0);
+  const vy = Math.max(sy, 0);
+  const vx2 = Math.min(sx + sw, srcW);
+  const vy2 = Math.min(sy + sh, srcH);
+  if (vx2 <= vx || vy2 <= vy) return;
+  const vw = vx2 - vx;
+  const vh = vy2 - vy;
+
+  ctx.save();
+  ctx.filter = grade || 'none';
+  ctx.drawImage(
+    src,
+    vx,
+    vy,
+    vw,
+    vh,
+    dx + ((vx - sx) / sw) * dw,
+    dy + ((vy - sy) / sh) * dh,
+    (vw / sw) * dw,
+    (vh / sh) * dh,
+  );
+  ctx.restore();
+}
+
 // ---- the banner ----
 
 /** Draw a right-leaning parallelogram band. Top edge is shifted right by `skew`. */

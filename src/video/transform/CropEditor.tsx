@@ -1,17 +1,21 @@
 import { useCallback, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import type { StickerElement } from './types';
+import type { CropRect } from '../sticker/types';
 
-// Crop-rectangle editor for a sticker — the Zoom tool's rect pattern (8 handles +
-// body drag, source-normalised coords), but scoped to the sticker's OWN source.
+// ===== Shared crop-rectangle editor (stickers and clips) =====
 //
-// The sticker's full source is pinned on the canvas at a fixed "anchor" area,
-// reconstructed from the frame box + current crop so that the crop region lands
-// exactly on the frame box. Because that anchor is invariant under our own edits
-// (the frame box is re-derived from the crop each change), the source stays put
-// while the user drags the crop window over it. Every change rewrites BOTH the
-// crop and the frame box, keeping the box aspect-locked to the crop (no
-// distortion) — the same result the compositor draws.
+// The Zoom tool's rect pattern (8 handles + body drag, source-normalised coords),
+// but scoped to ONE object's OWN source: it chooses which part of that source
+// shows inside the object's frame box. Both stickers and base clips use it — they
+// differ only in how the owning object stores the box, which the caller patches.
+//
+// The full source is pinned on the canvas at a fixed "anchor" area, reconstructed
+// from the frame box + current crop so that the crop region lands exactly on the
+// frame box. Because that anchor is invariant under our own edits (the frame box
+// is re-derived from the crop each change), the source stays put while the user
+// drags the crop window over it. Every change rewrites BOTH the crop and the
+// frame box, keeping the box aspect-locked to the crop (no distortion) — the same
+// result the compositor draws.
 
 type Mode = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
@@ -28,20 +32,30 @@ const HANDLES: { mode: Mode; left: string; top: string; cursor: string }[] = [
 
 const MIN = 0.05; // min crop size (source-normalised)
 
+/** The frame box (output-normalised) plus the crop it currently shows. */
+export interface CropTarget {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  crop: CropRect;
+}
+
 interface Props {
-  el: StickerElement;
-  /** The sticker's decoded source, used to show context behind the crop window. */
+  el: CropTarget;
+  /** The object's decoded source, used to show context behind the crop window. */
   media: HTMLImageElement | HTMLVideoElement | undefined;
-  onChange: (patch: Partial<StickerElement>) => void;
+  /** Both the new crop and the frame box it implies — always patched together. */
+  onChange: (patch: CropTarget) => void;
 }
 
 interface CropDrag {
   mode: Mode;
-  orig: StickerElement['crop'];
+  orig: CropRect;
   startSrc: { x: number; y: number };
 }
 
-export default function StickerCropEditor({ el, media, onChange }: Props) {
+export default function CropEditor({ el, media, onChange }: Props) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const drag = useRef<CropDrag | null>(null);
   const [active, setActive] = useState(false);

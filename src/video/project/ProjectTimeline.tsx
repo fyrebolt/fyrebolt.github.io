@@ -119,6 +119,8 @@ interface Props {
   selectedClipId: string | null;
   getClipBlob: (srcId: string) => Blob | undefined;
   onSelectClip: (id: string) => void;
+  /** Move a clip so it starts at this OUTPUT second (streamed during the drag). */
+  onMoveClip: (id: string, outputStart: number) => void;
   /** Timeline markers: pins in their own lane + a guide line down the whole stack. */
   markers: Marker[];
   selectedMarkerId: string | null;
@@ -208,6 +210,7 @@ export default function ProjectTimeline({
   selectedClipId,
   getClipBlob,
   onSelectClip,
+  onMoveClip,
   markers,
   selectedMarkerId,
   onSelectMarker,
@@ -736,8 +739,10 @@ export default function ProjectTimeline({
                 duration={duration}
                 currentSec={currentSec}
                 selectedClipId={selectedClipId}
+                guideSettings={guideSettings}
                 getClipBlob={getClipBlob}
                 onSelectClip={onSelectClip}
+                onMoveClip={onMoveClip}
               />
             </div>
           )}
