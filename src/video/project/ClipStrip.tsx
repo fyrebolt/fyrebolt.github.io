@@ -1,15 +1,16 @@
 // ===== Clip strip: the base sequence as reorderable, trimmable cards =====
 //
 // One card per clip, in sequence order. Each card is a mini-trimmer: a track
-// spanning the clip's source length with draggable in/out handles (image clips
-// have no in-point, so only the out/length handle shows). A grip drags the card
-// left/right to reorder; the final index is applied on release (one undo step).
-// Trim drags stream continuous onTrim calls, which the history coalesces.
+// spanning the clip's source length with draggable in/out handles (stills — images
+// and blanks — have no in-point, so only the out/length handle shows, and it sets
+// the length rather than trimming). A grip drags the card left/right to reorder;
+// the final index is applied on release (one undo step). Trim drags stream
+// continuous onTrim calls, which the history coalesces.
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { VideoClip } from './clips';
-import { baseDuration, clipLen, MIN_CLIP_LEN } from './clips';
+import { baseDuration, clipGlyph, clipLen, isStill, MIN_CLIP_LEN } from './clips';
 import { glyphOf, labelOf, maxDurationAt, transitionAt, MIN_TRANSITION_DUR } from './transitions';
 
 const CARD_W = 150; // px, fixed
@@ -40,6 +41,8 @@ interface Props {
   onDuplicate: (id: string) => void;
   onTrim: (id: string, patch: { in?: number; out?: number }) => void;
   onAddClip: () => void;
+  /** Append a blank clip (no media — a stretch of blank screen). */
+  onAddBlank: () => void;
   /** Clip ids in paint order, bottom-first — the stacking order the ↑/↓ buttons edit. */
   zOrder: string[];
   onMoveZ: (id: string, dir: -1 | 1) => void;
@@ -61,7 +64,7 @@ function fmt(sec: number): string {
 
 /** Friendly track span for a clip: the video's full length, or a soft image range. */
 function trackMax(c: VideoClip): number {
-  return c.kind === 'image' ? Math.max(20, Math.ceil(c.out + 4)) : Math.max(MIN_CLIP_LEN, c.srcDuration);
+  return isStill(c) ? Math.max(20, Math.ceil(c.out + 4)) : Math.max(MIN_CLIP_LEN, c.srcDuration);
 }
 
 type TrimEdge = 'in' | 'out';
@@ -75,6 +78,7 @@ export default function ClipStrip({
   onDuplicate,
   onTrim,
   onAddClip,
+  onAddBlank,
   zOrder,
   onMoveZ,
   selectedBoundary,
@@ -244,7 +248,7 @@ export default function ClipStrip({
                 ⠿
               </span>
               <span className="flex-1 truncate text-[11px] font-medium text-[var(--color-text-secondary)]" title={clip.name}>
-                {clip.kind === 'video' ? '🎬' : '🖼️'} {clip.name}
+                {clipGlyph(clip.kind)} {clip.name}
               </span>
               <button
                 onClick={(e) => {
@@ -355,6 +359,17 @@ export default function ClipStrip({
         <span className="mt-0.5">Clip</span>
       </button>
 
+      {/* add-blank tile: a clip with no media at all — blank screen for its length */}
+      <button
+        onClick={onAddBlank}
+        style={{ width: 64 }}
+        className="shrink-0 rounded-md border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-primary-green)] hover:text-[var(--color-primary-green)] flex flex-col items-center justify-center text-xs"
+        title="Add a blank clip — blank screen for its length. Crossfade into one to fade to black."
+      >
+        <span className="text-lg leading-none">⬛</span>
+        <span className="mt-0.5">Blank</span>
+      </button>
+
       {clips.length > 1 && (
         <button
           onClick={onRandomizeTransitions}
@@ -420,7 +435,7 @@ function TrimTrack({
         onPointerDown={handle('out')}
         onPointerMove={onTrimMove}
         onPointerUp={onTrimUp}
-        title={clip.kind === 'image' ? 'Set length' : 'Trim end'}
+        title={isStill(clip) ? 'Set length' : 'Trim end'}
         className="absolute inset-y-0 w-3 -ml-1.5 cursor-ew-resize touch-none"
         style={{ left: `${outFrac * 100}%` }}
       />

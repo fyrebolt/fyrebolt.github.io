@@ -39,7 +39,15 @@ import type { Transition } from './transitions';
 import type { Transform } from '../transform/TransformBox';
 import type { CropRect } from '../sticker/types';
 
-export type ClipKind = 'video' | 'image';
+/**
+ * `blank` is a clip with NO source: it paints an opaque black rectangle in its own
+ * box, so a full-frame one is simply a blank screen for its length. It is the
+ * timeline's gap / hold primitive — and, because it takes part in boundary
+ * transitions like any other plain clip, a crossfade into one is a fade to black.
+ * It behaves like an image everywhere else (no in-point, a freely set length, no
+ * audio), which is why `isStill` covers both.
+ */
+export type ClipKind = 'video' | 'image' | 'blank';
 
 /**
  * One control point of a clip's volume-automation curve. `t` is CLIP-LOCAL
@@ -55,7 +63,8 @@ export interface VolumePoint {
 
 export interface VideoClip {
   id: string;
-  /** Registry key for the decoded media element (kept out of the project). */
+  /** Registry key for the decoded media element (kept out of the project).
+   *  Empty for a `blank` clip, which has no media at all. */
   srcId: string;
   kind: ClipKind;
   /** Human label (file name) shown on the clip strip. */
@@ -205,6 +214,34 @@ export function applyOscillation(existing: VolumePoint[] | undefined, opts: Osci
 /** Effective on-timeline length of a clip (trimmed), in seconds. */
 export function clipLen(c: VideoClip): number {
   return Math.max(MIN_CLIP_LEN, c.out - c.in);
+}
+
+/**
+ * A clip with no moving source — an image or a blank. Stills have no in-point
+ * (nothing to trim INTO), their length is set freely rather than bounded by a
+ * media duration, and they carry no audio.
+ */
+export function isStill(c: VideoClip): boolean {
+  return c.kind !== 'video';
+}
+
+/** A clip with no media at all: it paints blank (opaque black) in its own box. */
+export function isBlank(c: VideoClip): boolean {
+  return c.kind === 'blank';
+}
+
+/** Glyph for a clip's kind, shared by every place a clip is labelled. */
+export function clipGlyph(kind: ClipKind): string {
+  return kind === 'video' ? '🎬' : kind === 'blank' ? '⬛' : '🖼️';
+}
+
+/**
+ * The clip whose native dimensions size the output frame — the first one that HAS
+ * dimensions. A blank clip has none, so a project that opens on a blank still
+ * sizes itself off the real footage that follows instead of collapsing to 0×0.
+ */
+export function sizingClip(clips: VideoClip[]): VideoClip | null {
+  return clips.find((c) => c.w > 0 && c.h > 0) ?? null;
 }
 
 // ---- placement (transform + crop) ----
@@ -386,13 +423,14 @@ export function splitClip(c: VideoClip, local: number): [VideoClip, VideoClip] |
 
   // Split source seconds: for a still (in === 0) the "in" stays 0 and the length
   // lives in `out`; for video the second clip picks up where the first left off.
-  const cutSource = c.kind === 'image' ? local : c.in + local;
+  const still = isStill(c);
+  const cutSource = still ? local : c.in + local;
 
   uid += 1;
   const first: VideoClip = {
     ...c,
     id: `clip-${Date.now().toString(36)}-${uid}`,
-    out: c.kind === 'image' ? local : cutSource,
+    out: still ? local : cutSource,
     volume: firstVol.length ? firstVol : undefined,
     transform: c.transform ? { ...c.transform } : undefined,
     crop: c.crop ? { ...c.crop } : undefined,
@@ -401,8 +439,8 @@ export function splitClip(c: VideoClip, local: number): [VideoClip, VideoClip] |
   const second: VideoClip = {
     ...c,
     id: `clip-${Date.now().toString(36)}-${uid}`,
-    in: c.kind === 'image' ? 0 : cutSource,
-    out: c.kind === 'image' ? len - local : c.out,
+    in: still ? 0 : cutSource,
+    out: still ? len - local : c.out,
     volume: secondVol.length ? secondVol : undefined,
     // Placement travels to both halves (independent copies), and an explicitly
     // pinned clip hands the second half the pin it now starts at — an implicitly
@@ -426,9 +464,9 @@ export function createClip(
   overrides: Partial<VideoClip> = {},
 ): VideoClip {
   uid += 1;
-  const srcDuration =
-    seed.kind === 'image' ? IMAGE_CLIP_MAX : Math.max(MIN_CLIP_LEN, seed.srcDuration);
-  const out = seed.kind === 'image' ? 6 : srcDuration;
+  const still = seed.kind !== 'video';
+  const srcDuration = still ? IMAGE_CLIP_MAX : Math.max(MIN_CLIP_LEN, seed.srcDuration);
+  const out = still ? 6 : srcDuration;
   return {
     id: `clip-${Date.now().toString(36)}-${uid}`,
     srcId: seed.srcId,
@@ -441,4 +479,19 @@ export function createClip(
     h: seed.h,
     ...overrides,
   };
+}
+
+/** Default length of a freshly added blank clip (seconds). */
+export const BLANK_CLIP_LEN = 2;
+
+/**
+ * A blank clip: no media, no dimensions, just a length. It has no srcId (there is
+ * nothing to resolve) and no w/h, so it never sizes the output frame — see
+ * `sizingClip`.
+ */
+export function createBlankClip(seconds = BLANK_CLIP_LEN, overrides: Partial<VideoClip> = {}): VideoClip {
+  return createClip(
+    { srcId: '', kind: 'blank', name: 'Blank', srcDuration: 0, w: 0, h: 0 },
+    { out: Math.max(MIN_CLIP_LEN, seconds), ...overrides },
+  );
 }

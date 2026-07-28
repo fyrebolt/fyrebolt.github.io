@@ -227,7 +227,9 @@ export function activeTransitionAt(clips: VideoClip[], baseT: number): ActiveTra
       incomingIndex: i,
       outgoingSourceT: outSrc,
       incomingSourceT: inSrc,
-      sameSource: prev.srcId === next.srcId,
+      // Blank clips have no srcId at all, so two of them are NOT one shared
+      // element — only a real, non-empty srcId can collide.
+      sameSource: prev.srcId !== '' && prev.srcId === next.srcId,
     };
   }
   return null;

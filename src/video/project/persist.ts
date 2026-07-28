@@ -161,7 +161,8 @@ async function readMediaFor(db: IDBDatabase, srcIds: Set<string>): Promise<Media
 /** Every srcId a project references: base clips + sticker + music layers. */
 export function referencedSrcIds(snapshot: PersistSnapshot): Set<string> {
   const ids = new Set<string>();
-  for (const c of snapshot.clips) ids.add(c.srcId);
+  // A blank clip has no srcId — it references no media at all.
+  for (const c of snapshot.clips) if (c.srcId) ids.add(c.srcId);
   for (const l of snapshot.layers) if (l.kind === 'sticker' || l.kind === 'music') ids.add(l.el.srcId);
   return ids;
 }

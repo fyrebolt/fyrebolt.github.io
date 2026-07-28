@@ -40,6 +40,7 @@
 
 import {
   drawSource,
+  drawBlank,
   drawInBox,
   drawZoomed,
   drawBanner,
@@ -78,9 +79,11 @@ import {
   clipTransform,
   clipZ,
   hasVideoClip,
+  isBlank,
   isPlainClip,
   resolveBase,
   sampleVolume,
+  sizingClip,
 } from './clips';
 import type { ActiveTransition } from './transitions';
 import { activeTransitionAt, allWindows, crossfadeGains, duckGain, isOverlapping, windowAt } from './transitions';
@@ -257,10 +260,6 @@ export class Compositor {
     return this.clips().length > 0;
   }
 
-  private firstClip(): VideoClip | null {
-    return this.clips()[0] ?? null;
-  }
-
   private elOf(clip: VideoClip): ClipEl | undefined {
     return this.getClipMedia(clip.srcId);
   }
@@ -291,12 +290,14 @@ export class Compositor {
   }
 
   sourceDims(): { w: number; h: number } {
-    const c = this.firstClip();
+    const c = sizingClip(this.clips());
     return c ? { w: c.w, h: c.h } : { w: 0, h: 0 };
   }
 
   private syncOutputSize(): void {
-    const c = this.firstClip();
+    // The first clip that HAS dimensions — a blank clip has none, so opening on
+    // one still sizes the output off the real footage that follows.
+    const c = sizingClip(this.clips());
     if (!c) return;
     const size = outputSizeFor(this.getProject().ratio, c.w, c.h);
     if (size.w !== this.out.w || size.h !== this.out.h) {
@@ -378,6 +379,7 @@ export class Compositor {
     const claimed = new Set<string>();
     for (let i = stack.length - 1; i >= 0; i--) {
       const h = stack[i];
+      if (isBlank(h.clip)) continue; // no media to steer, no audio to mix
       if (claimed.has(h.clip.srcId)) continue;
       claimed.add(h.clip.srcId);
       steered.set(h.index, { target: h.sourceT, gain: sampleVolume(h.clip.volume, h.local) });
@@ -674,15 +676,21 @@ export class Compositor {
    * to a placed clip: a clip given its own rectangle owns its own framing, and
    * the two crops would otherwise compound into something unreadable.
    */
-  private paintClip(ctx: CanvasRenderingContext2D, clip: VideoClip, src: ClipEl, outputT: number): void {
-    if (isPlainClip(clip)) {
-      this.paintClipFrame(ctx, clip, src, outputT);
+  private paintClip(ctx: CanvasRenderingContext2D, clip: VideoClip, src: ClipEl | null, outputT: number): void {
+    const t = clipTransform(clip);
+    if (!isBlank(clip) && isPlainClip(clip)) {
+      if (src) this.paintClipFrame(ctx, clip, src, outputT);
       return;
     }
-    const t = clipTransform(clip);
     const cx = (t.x + t.w / 2) * this.out.w;
     const cy = (t.y + t.h / 2) * this.out.h;
-    const paint = (): void => drawInBox(ctx, src, t, clipCrop(clip), this.out, gradeFilter(clip.grade));
+    // A blank clip has no source: it just fills its own box with black.
+    const paint = (): void =>
+      isBlank(clip)
+        ? drawBlank(ctx, t, this.out)
+        : src
+          ? drawInBox(ctx, src, t, clipCrop(clip), this.out, gradeFilter(clip.grade))
+          : undefined;
     if (!t.rotation) {
       paint();
       return;
@@ -723,8 +731,10 @@ export class Compositor {
 
     for (const hit of activeClipsAt(clips, baseT)) {
       if (pair?.has(hit.index)) continue;
-      const src = this.elOf(hit.clip);
-      if (!src) continue;
+      // A blank clip is paintable without any media; everything else needs its
+      // element to have decoded.
+      const src = this.elOf(hit.clip) ?? null;
+      if (!src && !isBlank(hit.clip)) continue;
       items.push({
         z: clipZ(hit.clip, hit.index),
         order: hit.index,
@@ -758,6 +768,12 @@ export class Compositor {
     const inEl = this.elOf(active.incoming);
     const frozen = active.sameSource ? this.freezeFrame : null;
 
+    // A BLANK side needs no element — it paints black — so it is a full
+    // participant here: a crossfade into a blank clip is a fade to black, an iris
+    // into one closes to black, and so on.
+    const outBlank = isBlank(active.outgoing);
+    const inBlank = isBlank(active.incoming);
+
     const paintA = (c: CanvasRenderingContext2D): void => {
       // Same-source boundaries show the captured freeze-frame for the outgoing
       // side (one element can't be at two positions); it is already a finished
@@ -766,17 +782,22 @@ export class Compositor {
         c.drawImage(frozen, 0, 0, this.out.w, this.out.h);
         return;
       }
-      if (outEl) this.paintClipFrame(c, active.outgoing, outEl, outputT);
+      if (outBlank) drawBlank(c, clipTransform(active.outgoing), this.out);
+      else if (outEl) this.paintClipFrame(c, active.outgoing, outEl, outputT);
     };
     const paintB = (c: CanvasRenderingContext2D): void => {
-      if (inEl) this.paintClipFrame(c, active.incoming, inEl, outputT);
+      if (inBlank) drawBlank(c, clipTransform(active.incoming), this.out);
+      else if (inEl) this.paintClipFrame(c, active.incoming, inEl, outputT);
     };
 
     // Nothing to mix against — fall back to a plain cut rather than a black frame.
-    if (!inEl || (!outEl && !frozen)) {
-      const only = inEl ?? outEl;
-      const clip = inEl ? active.incoming : active.outgoing;
-      if (only) this.paintClipFrame(this.ctx, clip, only, outputT);
+    const haveIn = inBlank || !!inEl;
+    const haveOut = outBlank || !!outEl || !!frozen;
+    if (!haveIn || !haveOut) {
+      const clip = haveIn ? active.incoming : active.outgoing;
+      const only = haveIn ? inEl : outEl;
+      if (isBlank(clip)) drawBlank(this.ctx, clipTransform(clip), this.out);
+      else if (only) this.paintClipFrame(this.ctx, clip, only, outputT);
       return;
     }
 
@@ -1373,7 +1394,13 @@ export class Compositor {
     const hit = this.hitAt(outputT);
     if (!hit) return;
     const el = this.elOf(hit.clip);
-    if (!el) return;
+    if (!el) {
+      // Nothing to show the un-zoomed frame of (a blank clip): paint the empty
+      // frame rather than leaving whatever was on the canvas before.
+      this.syncOutputSize();
+      drawBlank(this.ctx, { x: 0, y: 0, w: 1, h: 1 }, this.out);
+      return;
+    }
     if (el instanceof HTMLVideoElement) {
       const cap = Math.max(0, hit.clip.srcDuration - 0.03);
       this.pauseClipVideos();
@@ -1396,6 +1423,7 @@ export class Compositor {
     this.syncOutputSize();
     const el = this.activeEl(this.pausedT);
     if (el) drawZoomed(this.ctx, el, this.out, FULL_RECT);
+    else drawBlank(this.ctx, { x: 0, y: 0, w: 1, h: 1 }, this.out);
   }
 
   exitEdit(): void {

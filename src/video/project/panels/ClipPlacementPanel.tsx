@@ -23,6 +23,8 @@ interface Props {
   placed: boolean;
   /** The clip carries an active, non-full crop. */
   cropped: boolean;
+  /** A blank clip: no source, so nothing to crop. */
+  blank: boolean;
   /** Any clip in the project has been pinned to an explicit base-clock position. */
   pinned: boolean;
   /** Where the clip currently starts on the base clock, and how long it runs. */
@@ -46,6 +48,7 @@ export default function ClipPlacementPanel({
   cropping,
   placed,
   cropped,
+  blank,
   pinned,
   start,
   length,
@@ -65,8 +68,12 @@ export default function ClipPlacementPanel({
   return (
     <>
       <p className="text-[11px] text-[var(--color-text-muted)] -mt-1">
-        Drag on the preview to move; use the handles to resize &amp; rotate. Double-click the clip to crop
-        {cropped ? ' — double-click it again to remove the crop.' : '.'}
+        Drag on the preview to move; use the handles to resize &amp; rotate.
+        {blank ? (
+          ' This clip has no source — it paints blank wherever its box is.'
+        ) : (
+          <> Double-click the clip to crop{cropped ? ' — double-click it again to remove the crop.' : '.'}</>
+        )}
       </p>
 
       <div className="grid grid-cols-2 gap-3">
@@ -131,21 +138,26 @@ export default function ClipPlacementPanel({
         </div>
       </div>
 
-      <button
-        onClick={onToggleCrop}
-        className={`w-full mt-1 px-3 py-2 rounded-md border text-xs font-medium ${
-          cropping
-            ? 'border-[var(--color-primary-green)] bg-[rgba(139,233,199,0.12)] text-[var(--color-primary-green)]'
-            : 'border-[var(--color-glass-border)] hover:bg-[var(--color-glass-hover)]'
-        }`}
-      >
-        {cropping ? 'Done cropping' : `Crop ${clip.kind === 'image' ? 'image' : 'clip'}`}
-      </button>
-      <div className="text-[10px] text-[var(--color-text-muted)]">
-        Cropping sets which part of the source shows inside the frame — the frame keeps the crop's shape.
-      </div>
+      {/* Cropping picks a region of the SOURCE, so it is meaningless for a blank. */}
+      {!blank && (
+        <button
+          onClick={onToggleCrop}
+          className={`w-full mt-1 px-3 py-2 rounded-md border text-xs font-medium ${
+            cropping
+              ? 'border-[var(--color-primary-green)] bg-[rgba(139,233,199,0.12)] text-[var(--color-primary-green)]'
+              : 'border-[var(--color-glass-border)] hover:bg-[var(--color-glass-hover)]'
+          }`}
+        >
+          {cropping ? 'Done cropping' : `Crop ${clip.kind === 'image' ? 'image' : 'clip'}`}
+        </button>
+      )}
+      {!blank && (
+        <div className="text-[10px] text-[var(--color-text-muted)]">
+          Cropping sets which part of the source shows inside the frame — the frame keeps the crop's shape.
+        </div>
+      )}
 
-      {cropped && (
+      {cropped && !blank && (
         <button
           onClick={onUncrop}
           className="w-full px-3 py-2 rounded-md border border-[var(--color-glass-border)] text-xs font-medium hover:bg-[var(--color-glass-hover)]"
