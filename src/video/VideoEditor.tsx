@@ -66,13 +66,18 @@ import {
 import type { CropRect, StickerElement } from './sticker/types';
 import type { VideoClip } from './project/clips';
 import {
+  createBlankClip,
   createClip,
   clipLen,
   clipZ,
   baseDuration,
+  isBlank,
   isFullCrop,
+  isStill,
   layoutClips,
+  sizingClip,
   splitClip,
+  BLANK_CLIP_LEN,
   FULL_CLIP_CROP,
   MIN_CLIP_LEN,
   IMAGE_CLIP_MAX,
@@ -402,8 +407,12 @@ export default function VideoEditor() {
   );
   // Base-sequence duration (sum of trimmed clip lengths) — the old single "clip seconds".
   const duration = useMemo(() => baseDuration(clips), [clips]);
-  // Output sizing reference = the first clip's native dimensions.
-  const srcDims = useMemo(() => (clips[0] ? { w: clips[0].w, h: clips[0].h } : { w: 0, h: 0 }), [clips]);
+  // Output sizing reference = the first clip that HAS native dimensions, so a
+  // project opening on a blank clip still sizes off its real footage.
+  const srcDims = useMemo(() => {
+    const c = sizingClip(clips);
+    return c ? { w: c.w, h: c.h } : { w: 0, h: 0 };
+  }, [clips]);
 
   // The output frame size, derived once. Memoised because it feeds the placeable-box
   // measurement below, which re-measures every text layer against an offscreen
@@ -876,8 +885,9 @@ export default function VideoEditor() {
     setClips((cs) =>
       cs.map((c) => {
         if (c.id !== id) return c;
-        const max = c.kind === 'image' ? IMAGE_CLIP_MAX : c.srcDuration;
-        let inP = c.kind === 'image' ? 0 : patch.in ?? c.in; // a still has no in-point
+        const still = isStill(c);
+        const max = still ? IMAGE_CLIP_MAX : c.srcDuration;
+        let inP = still ? 0 : patch.in ?? c.in; // a still has no in-point
         let outP = patch.out ?? c.out;
         inP = Math.max(0, Math.min(inP, max - MIN_CLIP_LEN));
         outP = Math.max(inP + MIN_CLIP_LEN, Math.min(outP, max));
@@ -1079,6 +1089,20 @@ export default function VideoEditor() {
     setClips((cs) => (cs.length > 1 ? randomizeAllTransitions(cs) : cs));
   }, [sealDiscrete]);
 
+  /**
+   * Append a BLANK clip — a stretch of blank screen with no media at all. It is
+   * the timeline's gap / hold primitive: pad the end, hold on black between two
+   * shots, or (because it takes part in boundary transitions like any other plain
+   * clip) fade to black by putting a crossfade on its edge.
+   */
+  const addBlankClip = useCallback(() => {
+    sealDiscrete();
+    const clip = createBlankClip(BLANK_CLIP_LEN);
+    setClips((cs) => [...cs, clip]);
+    setSelectedClipId(clip.id);
+    setStatus('Blank clip added — set its length on the strip, or crossfade into it to fade to black.');
+  }, [sealDiscrete]);
+
   // ---- clip duplicate / copy / paste ----
   //
   // A clip resolves its decoded media by srcId (clipMedia). Two clips must NOT
@@ -1090,6 +1114,8 @@ export default function VideoEditor() {
 
   const cloneClipWithMedia = useCallback(
     (src: VideoClip): VideoClip | null => {
+      // A blank clip has no media to clone — it copies as plain data.
+      if (isBlank(src)) return { ...structuredClone(src), id: freshId('clip') };
       const blob = clipBlobs.current.get(src.srcId);
       if (!blob) return null;
       const newSrcId = freshId('clipsrc');
@@ -2532,6 +2558,7 @@ export default function VideoEditor() {
       setSelectedLayerId(null);
       setSelectedAttachmentId(null);
       setSelectedClipId(clip.id);
+      if (isBlank(clip)) return; // no source to pick a region of
       if (cropClipId === clip.id) setCropClipId(null); // done cropping
       else if (hasUserCrop(clip)) uncropClip(clip); // one-click un-crop
       else setCropClipId(clip.id);
@@ -3492,6 +3519,7 @@ export default function VideoEditor() {
                       onDuplicate={duplicateClip}
                       onTrim={trimClip}
                       onAddClip={addClipClick}
+                      onAddBlank={addBlankClip}
                       zOrder={clipZOrder}
                       onMoveZ={moveClipZ}
                       selectedBoundary={selectedBoundary}
@@ -3829,6 +3857,7 @@ export default function VideoEditor() {
                     cropping={cropClipId === selectedClip.id}
                     placed={selectedClip.transform !== undefined || selectedClip.crop !== undefined}
                     cropped={hasUserCrop(selectedClip)}
+                    blank={isBlank(selectedClip)}
                     pinned={clips.some((c) => c.baseStart !== undefined)}
                     start={clipStarts[clips.indexOf(selectedClip)] ?? 0}
                     length={clipLen(selectedClip)}

@@ -17,6 +17,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
+import type { ClipKind } from './clips';
+import { clipGlyph } from './clips';
 import type { Waveform } from './waveform';
 import { getWaveform, waveformPolygon } from './waveform';
 import type { GuideSettings, TimeSnapTarget } from '../transform/snapEngine';
@@ -26,7 +28,7 @@ export interface ClipExtent {
   id: string;
   srcId: string;
   name: string;
-  kind: 'video' | 'image';
+  kind: ClipKind;
   /** Trim in/out in SOURCE seconds (for slicing the waveform). */
   inSec: number;
   outSec: number;
@@ -192,10 +194,12 @@ export default function ClipLane({
             {c.kind === 'video' ? (
               <ClipWave clip={c} getClipBlob={getClipBlob} />
             ) : (
-              <div className="absolute inset-0 flex items-center justify-center text-[9px] text-[var(--color-text-muted)]">🖼️</div>
+              <div className="absolute inset-0 flex items-center justify-center text-[9px] text-[var(--color-text-muted)]">
+                {clipGlyph(c.kind)}
+              </div>
             )}
             <span className="absolute left-1 top-0.5 text-[9px] font-medium text-[var(--color-text-secondary)] truncate max-w-[92%] pointer-events-none">
-              {c.kind === 'video' ? '🎬' : '🖼️'} {c.name}
+              {clipGlyph(c.kind)} {c.name}
             </span>
           </div>
         );

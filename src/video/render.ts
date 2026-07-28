@@ -224,6 +224,21 @@ export function fillPlacement(
 }
 
 /**
+ * Fill `box` with opaque black — what a BLANK clip (no source at all) paints. A
+ * full-frame blank is therefore simply a blank screen; a placed one is a black
+ * matte over whatever sits beneath it. Opaque rather than transparent so it
+ * composites predictably in the clip stack and reads as black through a
+ * boundary transition.
+ */
+export function drawBlank(ctx: CanvasRenderingContext2D, box: NormBox, out: OutputSize): void {
+  ctx.save();
+  ctx.filter = 'none';
+  ctx.fillStyle = '#000';
+  ctx.fillRect(box.x * out.w, box.y * out.h, box.w * out.w, box.h * out.h);
+  ctx.restore();
+}
+
+/**
  * Draw a source's `crop` region CONTAINED inside `box` (output pixels), centred.
  * This is the placed-clip counterpart of `drawSource`: the clip's own aspect is
  * preserved inside whatever box it has been given, so a resized clip is never
