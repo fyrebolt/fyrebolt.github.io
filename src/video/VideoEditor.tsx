@@ -446,19 +446,23 @@ export default function VideoEditor() {
     return Math.max(3, duration, ...ends);
   }, [warp, mediaKind, duration, layers]);
 
-  // Base clips as OUTPUT-time extents (warped) for the timeline clip lane.
-  const clipExtents = useMemo<ClipExtent[]>(() => {
-    const out: ClipExtent[] = [];
-    let base = 0;
-    for (const c of clips) {
-      const len = clipLen(c);
-      const start = warp ? warp.outputAt(base) : base;
-      const end = warp ? warp.outputAt(base + len) : base + len;
-      out.push({ id: c.id, srcId: c.srcId, name: c.name, kind: c.kind, inSec: c.in, outSec: c.out, start, end });
-      base += len;
-    }
-    return out;
-  }, [clips, warp]);
+  // Base clips as OUTPUT-time extents (warped) for the timeline clip lane. Clips
+  // may overlap, so these come from the shared layout rather than a running sum.
+  const clipExtents = useMemo<ClipExtent[]>(
+    () =>
+      layoutClips(clips).map((p) => ({
+        id: p.clip.id,
+        srcId: p.clip.srcId,
+        name: p.clip.name,
+        kind: p.clip.kind,
+        inSec: p.clip.in,
+        outSec: p.clip.out,
+        start: warp ? warp.outputAt(p.start) : p.start,
+        end: warp ? warp.outputAt(p.end) : p.end,
+        z: clipZ(p.clip, p.index),
+      })),
+    [clips, warp],
+  );
 
   // Unique clip-boundary times (OUTPUT seconds) for temporal snapping.
   const clipEdges = useMemo(() => {
@@ -975,6 +979,14 @@ export default function VideoEditor() {
       return cs.map((c, i) => ({ ...c, baseStart: c.id === id ? Math.max(0, baseStart) : lay[i].start }));
     });
   }, []);
+
+  /** Timeline drag: the lane works in OUTPUT seconds, the pin lives in BASE time. */
+  const moveClipToOutput = useCallback(
+    (id: string, outputStart: number) => {
+      moveClipTo(id, warp ? warp.sourceAt(outputStart) : outputStart);
+    },
+    [moveClipTo, warp],
+  );
 
   /** Swap a clip's z with its neighbour in paint order (the layer list's pattern). */
   const moveClipZ = useCallback(
@@ -3448,6 +3460,8 @@ export default function VideoEditor() {
                       onDuplicate={duplicateClip}
                       onTrim={trimClip}
                       onAddClip={addClipClick}
+                      zOrder={clipZOrder}
+                      onMoveZ={moveClipZ}
                       selectedBoundary={selectedBoundary}
                       onSelectBoundary={setSelectedBoundary}
                       onTransitionDur={setTransitionDur}
@@ -3470,6 +3484,7 @@ export default function VideoEditor() {
                     selectedClipId={selectedClipId}
                     getClipBlob={getClipBlob}
                     onSelectClip={selectClip}
+                    onMoveClip={moveClipToOutput}
                     markers={markers}
                     selectedMarkerId={selectedMarkerId}
                     onSelectMarker={selectMarker}
