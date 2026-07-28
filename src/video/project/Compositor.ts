@@ -367,14 +367,30 @@ export class Compositor {
     // gain multiplier its original audio rides. Every live clip is in it; for a
     // plain sequential project that is the single active clip, i.e. exactly the
     // original hard-cut behaviour.
+    //
+    // Two clips can share ONE media element (a razor split, or a clip whose copy
+    // kept the same source), and one <video> cannot present two positions at once
+    // — the same constraint the same-source transition path works around with a
+    // freeze-frame. Where that happens among clips live at the same instant, the
+    // TOP-MOST claims the element and the ones beneath it are left alone.
+    const stack = activeClipsAt(clips, baseT);
     const steered = new Map<number, { target: number; gain: number }>();
-    for (const h of activeClipsAt(clips, baseT)) {
+    const claimed = new Set<string>();
+    for (let i = stack.length - 1; i >= 0; i--) {
+      const h = stack[i];
+      if (claimed.has(h.clip.srcId)) continue;
+      claimed.add(h.clip.srcId);
       steered.set(h.index, { target: h.sourceT, gain: sampleVolume(h.clip.volume, h.local) });
     }
 
     // ---- boundary transition: both sides live, gains on an equal-power crossfade ----
     const active = this.activeTransition(outputT);
     if (active) {
+      // The transition owns both of its sides outright (a same-source boundary
+      // deliberately drives only the incoming one), so drop anything the stack
+      // pass put there.
+      steered.delete(active.outgoingIndex);
+      steered.delete(active.incomingIndex);
       // A same-source boundary must snapshot the outgoing frame BEFORE the shared
       // element is re-steered below.
       const key = `${active.index}:${active.cut.toFixed(4)}`;

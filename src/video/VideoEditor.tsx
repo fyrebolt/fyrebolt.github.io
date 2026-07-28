@@ -916,6 +916,27 @@ export default function VideoEditor() {
     [out, fillMode],
   );
 
+  /**
+   * Whether the USER has cropped this clip — as opposed to merely carrying the
+   * crop that was seeded from the fill mode when it was first placed. Only a real
+   * crop arms the double-click un-crop shortcut, otherwise simply moving a
+   * crop-to-fill clip would make the next double-click un-crop instead of crop.
+   */
+  const hasUserCrop = useCallback(
+    (clip: VideoClip): boolean => {
+      if (!clip.crop || isFullCrop(clip)) return false;
+      const seed = fillPlacement(out, clip.w, clip.h, fillMode).crop;
+      const same = (a: number, b: number) => Math.abs(a - b) < 1e-3;
+      return !(
+        same(clip.crop.x, seed.x) &&
+        same(clip.crop.y, seed.y) &&
+        same(clip.crop.w, seed.w) &&
+        same(clip.crop.h, seed.h)
+      );
+    },
+    [out, fillMode],
+  );
+
   /** Commit a TransformBox change to a clip, seeding its crop on the first edit. */
   const onClipTransform = useCallback(
     (clip: VideoClip, t: Transform) => {
@@ -979,6 +1000,17 @@ export default function VideoEditor() {
       return cs.map((c, i) => ({ ...c, baseStart: c.id === id ? Math.max(0, baseStart) : lay[i].start }));
     });
   }, []);
+
+  /**
+   * Drop every pin, restoring the strict back-to-back sequence. Pinned clips keep
+   * their own times through a reorder (that is the point of pinning them), so this
+   * is the way back to a plain sequential layout — and the way to make the clip
+   * strip's reorder move clips in time again.
+   */
+  const reflowClips = useCallback(() => {
+    sealDiscrete();
+    setClips((cs) => cs.map((c) => ({ ...c, baseStart: undefined })));
+  }, [sealDiscrete]);
 
   /** Timeline drag: the lane works in OUTPUT seconds, the pin lives in BASE time. */
   const moveClipToOutput = useCallback(
@@ -2501,10 +2533,10 @@ export default function VideoEditor() {
       setSelectedAttachmentId(null);
       setSelectedClipId(clip.id);
       if (cropClipId === clip.id) setCropClipId(null); // done cropping
-      else if (clip.crop && !isFullCrop(clip)) uncropClip(clip); // one-click un-crop
+      else if (hasUserCrop(clip)) uncropClip(clip); // one-click un-crop
       else setCropClipId(clip.id);
     },
-    [normFromPointer, layers, selectedLayer, clips, selectedClipId, cropClipId, uncropClip],
+    [normFromPointer, layers, selectedLayer, clips, selectedClipId, cropClipId, hasUserCrop, uncropClip],
   );
 
   // ---- export ----
@@ -3796,7 +3828,8 @@ export default function VideoEditor() {
                     clip={selectedClip}
                     cropping={cropClipId === selectedClip.id}
                     placed={selectedClip.transform !== undefined || selectedClip.crop !== undefined}
-                    cropped={selectedClip.crop !== undefined && !isFullCrop(selectedClip)}
+                    cropped={hasUserCrop(selectedClip)}
+                    pinned={clips.some((c) => c.baseStart !== undefined)}
                     start={clipStarts[clips.indexOf(selectedClip)] ?? 0}
                     length={clipLen(selectedClip)}
                     baseDuration={duration}
@@ -3804,6 +3837,7 @@ export default function VideoEditor() {
                     clipCount={clips.length}
                     onMove={(t) => moveClipTo(selectedClip.id, t)}
                     onMoveZ={(dir) => moveClipZ(selectedClip.id, dir)}
+                    onReflow={reflowClips}
                     onToggleCrop={() => setCropClipId((c) => (c === selectedClip.id ? null : selectedClip.id))}
                     onUncrop={() => uncropClip(selectedClip)}
                     onReset={() => resetClipPlacement(selectedClip.id)}

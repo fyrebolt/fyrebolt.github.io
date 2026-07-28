@@ -23,6 +23,8 @@ interface Props {
   placed: boolean;
   /** The clip carries an active, non-full crop. */
   cropped: boolean;
+  /** Any clip in the project has been pinned to an explicit base-clock position. */
+  pinned: boolean;
   /** Where the clip currently starts on the base clock, and how long it runs. */
   start: number;
   length: number;
@@ -33,6 +35,7 @@ interface Props {
   clipCount: number;
   onMove: (baseStart: number) => void;
   onMoveZ: (dir: -1 | 1) => void;
+  onReflow: () => void;
   onToggleCrop: () => void;
   onUncrop: () => void;
   onReset: () => void;
@@ -43,6 +46,7 @@ export default function ClipPlacementPanel({
   cropping,
   placed,
   cropped,
+  pinned,
   start,
   length,
   baseDuration,
@@ -50,6 +54,7 @@ export default function ClipPlacementPanel({
   clipCount,
   onMove,
   onMoveZ,
+  onReflow,
   onToggleCrop,
   onUncrop,
   onReset,
@@ -82,6 +87,21 @@ export default function ClipPlacementPanel({
         Clips may overlap in time — move one over another and both play at once, stacked by the order below. A shared
         edge between two untouched, full-frame clips is still a transition, not a stack.
       </div>
+
+      {pinned && (
+        <button
+          onClick={onReflow}
+          className="w-full px-3 py-2 rounded-md border border-[var(--color-glass-border)] text-xs font-medium hover:bg-[var(--color-glass-hover)]"
+        >
+          Re-flow every clip end to end
+        </button>
+      )}
+      {pinned && (
+        <div className="text-[10px] text-[var(--color-text-muted)] -mt-1">
+          Moved clips hold their own position, so reordering the strip no longer shifts them in time. This drops every
+          position and lays the clips back to back.
+        </div>
+      )}
 
       {/* stacking order — the layers list's bring-forward / send-backward pattern */}
       <div className="flex items-center justify-between rounded-md border border-[var(--color-glass-border)] px-2.5 py-1.5">
