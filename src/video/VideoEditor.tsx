@@ -13,7 +13,7 @@ import type { Transform } from './transform/TransformBox';
 import type { Box, GuideSettings, Guide } from './transform/snapEngine';
 import { DEFAULT_GUIDES, snapMove } from './transform/snapEngine';
 import { measurePlaceableBox } from './transform/measure';
-import { outputSizeFor } from './render';
+import { fillPlacement, outputSizeFor } from './render';
 import { transcodeToMp4, ensureFFmpeg } from './ffmpeg';
 import { preloadAllFontPools, FONT_POOLS } from './captions/fonts';
 import type { BoilPoolId } from './captions/fonts';
@@ -63,9 +63,20 @@ import {
   createStickerLayer,
   createMusicLayer,
 } from './project/types';
-import type { StickerElement } from './sticker/types';
+import type { CropRect, StickerElement } from './sticker/types';
 import type { VideoClip } from './project/clips';
-import { createClip, clipLen, baseDuration, splitClip, MIN_CLIP_LEN, IMAGE_CLIP_MAX } from './project/clips';
+import {
+  createClip,
+  clipLen,
+  clipZ,
+  baseDuration,
+  isFullCrop,
+  layoutClips,
+  splitClip,
+  FULL_CLIP_CROP,
+  MIN_CLIP_LEN,
+  IMAGE_CLIP_MAX,
+} from './project/clips';
 import type { Transition } from './project/transitions';
 import {
   clampDuration as clampTransitionDur,
@@ -90,11 +101,12 @@ import HighlighterPanel from './project/panels/HighlighterPanel';
 import DramaticPanel from './project/panels/DramaticPanel';
 import StickerPanel from './project/panels/StickerPanel';
 import ClipPanel from './project/panels/ClipPanel';
+import ClipPlacementPanel from './project/panels/ClipPlacementPanel';
 import TransitionPanel from './project/panels/TransitionPanel';
 import GradePanel from './project/panels/GradePanel';
 import MusicPanel from './project/panels/MusicPanel';
 import type { MusicElement } from './music/types';
-import StickerCropEditor from './sticker/StickerCropEditor';
+import CropEditor from './transform/CropEditor';
 import { useHistory } from './project/useHistory';
 import type { HistoryApi } from './project/useHistory';
 import type { PersistSnapshot, MediaEntry, LoadedProject, LibraryEntry, LibraryMedia } from './project/persist';
@@ -362,6 +374,10 @@ export default function VideoEditor() {
   const stickerVideoInput = useRef<HTMLInputElement>(null);
   /** Sticker layer currently in crop mode (double-clicked), else null. */
   const [croppingId, setCroppingId] = useState<string | null>(null);
+  /** Selected base clip (its transform widget + placement / audio / colour panels). */
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  /** Base clip currently in crop mode (double-clicked), else null. */
+  const [cropClipId, setCropClipId] = useState<string | null>(null);
   /** Size/rotation reference captured when a text-layer transform grab starts. */
   const textGrab = useRef<{ id: string; sizeScale: number; w: number } | null>(null);
   /** Group-move gesture: ids + each layer's origin (x,y) captured at grab. */
@@ -518,9 +534,10 @@ export default function VideoEditor() {
       const editable = isEditableTarget(e);
       const mod = hasMod(e);
 
-      if (e.key === 'Escape' && croppingId) {
+      if (e.key === 'Escape' && (croppingId || cropClipId)) {
         e.preventDefault();
         setCroppingId(null);
+        setCropClipId(null);
         return;
       }
 
@@ -553,7 +570,7 @@ export default function VideoEditor() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, selectedLayerId, confirmDeleteId, croppingId, requestDelete]);
+  }, [undo, redo, selectedLayerId, confirmDeleteId, croppingId, cropClipId, requestDelete]);
 
   const setEditingZoomBoth = (v: boolean) => {
     editingRef.current = v;
@@ -589,6 +606,8 @@ export default function VideoEditor() {
     setSelectedMarkerId((cur) => (cur && s.markers.some((m) => m.id === cur) ? cur : null));
     setSelectedLayerId((cur) => (cur && s.layers.some((l) => l.id === cur) ? cur : null));
     setCroppingId((cur) => (cur && s.layers.some((l) => l.id === cur) ? cur : null));
+    setSelectedClipId((cur) => (cur && s.clips.some((c) => c.id === cur) ? cur : null));
+    setCropClipId((cur) => (cur && s.clips.some((c) => c.id === cur) ? cur : null));
   }, []);
   const snapshotEqual = useCallback(
     (a: EditorSnapshot, b: EditorSnapshot) =>
@@ -789,25 +808,32 @@ export default function VideoEditor() {
   }, [clips, seekTo]);
 
   // ---- clip sequence management ----
-  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const selectedClip = clips.find((c) => c.id === selectedClipId) ?? null;
   /** Selected clip BOUNDARY (index of the incoming clip) whose transition is being edited. */
   const [selectedBoundary, setSelectedBoundary] = useState<number | null>(null);
 
   /** Base-sequence start time of each clip (for scrubbing to a clip's head). */
-  const clipStarts = useMemo(() => {
-    const out: number[] = [];
-    let acc = 0;
-    for (const c of clips) {
-      out.push(acc);
-      acc += clipLen(c);
-    }
-    return out;
-  }, [clips]);
+  const clipStarts = useMemo(() => layoutClips(clips).map((p) => p.start), [clips]);
+
+  /** Clip ids in paint order, bottom-first — the stacking order the panel edits. */
+  const clipZOrder = useMemo(
+    () =>
+      clips
+        .map((c, i) => ({ id: c.id, i, z: clipZ(c, i) }))
+        .sort((a, b) => a.z - b.z || a.i - b.i)
+        .map((o) => o.id),
+    [clips],
+  );
 
   const selectClip = useCallback(
     (id: string) => {
-      setSelectedClipId(id);
+      setSelectedClipId((cur) => {
+        if (cur !== id) setCropClipId(null); // leave crop mode when switching clips
+        return id;
+      });
+      // A clip and a layer both own a transform widget, so selection is exclusive.
+      setSelectedLayerId(null);
+      setSelectedAttachmentId(null);
       const i = clips.findIndex((c) => c.id === id);
       if (i >= 0) seekTo(Math.min(clipStarts[i] + 0.001, timelineDuration));
     },
@@ -856,11 +882,115 @@ export default function VideoEditor() {
     );
   }, []);
 
-  /** Patch a clip (volume curve / mute). `discrete` seals it as its own undo entry. */
+  /** Patch a clip (volume curve / mute / placement). `discrete` seals its own undo entry. */
   const editClip = useCallback(
     (id: string, patch: Partial<VideoClip>, discrete = false) => {
       if (discrete) sealDiscrete();
       setClips((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+    },
+    [sealDiscrete],
+  );
+
+  // ---- clip placement (transform + crop) ----
+  //
+  // A clip stores no transform/crop until it is actually placed, which is what
+  // keeps existing projects untouched. The first placing edit therefore SEEDS both
+  // from the clip's current on-screen appearance (fillPlacement), so grabbing the
+  // widget never makes the picture jump: crop-to-fill hands over its cover crop,
+  // fit / blur hand over their letterboxed box. Every edit flows through editClip,
+  // so the shared snapshot history covers it like any other clip property.
+
+  /** The clip's placement as it renders right now — its transform box + crop. */
+  const placementOf = useCallback(
+    (clip: VideoClip): { transform: Transform; crop: CropRect } => {
+      const seed = fillPlacement(out, clip.w, clip.h, fillMode);
+      return {
+        transform: clip.transform ?? { ...seed.box, rotation: 0 },
+        crop: clip.crop ?? seed.crop,
+      };
+    },
+    [out, fillMode],
+  );
+
+  /** Commit a TransformBox change to a clip, seeding its crop on the first edit. */
+  const onClipTransform = useCallback(
+    (clip: VideoClip, t: Transform) => {
+      editClip(clip.id, { transform: t, crop: placementOf(clip).crop });
+    },
+    [editClip, placementOf],
+  );
+
+  /** Commit a crop-editor change: the new crop plus the box it implies. */
+  const onClipCrop = useCallback(
+    (clip: VideoClip, patch: { crop: CropRect; x: number; y: number; w: number; h: number }) => {
+      const cur = placementOf(clip).transform;
+      editClip(clip.id, {
+        crop: patch.crop,
+        transform: { x: patch.x, y: patch.y, w: patch.w, h: patch.h, rotation: cur.rotation },
+      });
+    },
+    [editClip, placementOf],
+  );
+
+  /**
+   * Reset a clip's crop to its full, uncropped source — the one-click "undo the
+   * crop" a second double-click performs. The box grows back to where the whole
+   * source sits at the crop's current scale (the inverse of the crop editor's own
+   * maths), so the visible part of the picture doesn't move.
+   */
+  const uncropClip = useCallback(
+    (clip: VideoClip) => {
+      const { transform: t, crop } = placementOf(clip);
+      const fullW = t.w / Math.max(1e-4, crop.w);
+      const fullH = t.h / Math.max(1e-4, crop.h);
+      editClip(
+        clip.id,
+        {
+          crop: { ...FULL_CLIP_CROP },
+          transform: { x: t.x - crop.x * fullW, y: t.y - crop.y * fullH, w: fullW, h: fullH, rotation: t.rotation },
+        },
+        true,
+      );
+    },
+    [editClip, placementOf],
+  );
+
+  /** Restore a clip to the untouched full-frame default (no transform, no crop). */
+  const resetClipPlacement = useCallback(
+    (id: string) => {
+      setCropClipId((c) => (c === id ? null : c));
+      editClip(id, { transform: undefined, crop: undefined }, true);
+    },
+    [editClip],
+  );
+
+  /**
+   * Move a clip along the base clock, pinning it with an explicit `baseStart`.
+   * Once ANY clip is pinned the whole sequence is pinned, so the clips that used
+   * to follow implicitly don't slide out from under the one being dragged.
+   */
+  const moveClipTo = useCallback((id: string, baseStart: number) => {
+    setClips((cs) => {
+      const lay = layoutClips(cs);
+      return cs.map((c, i) => ({ ...c, baseStart: c.id === id ? Math.max(0, baseStart) : lay[i].start }));
+    });
+  }, []);
+
+  /** Swap a clip's z with its neighbour in paint order (the layer list's pattern). */
+  const moveClipZ = useCallback(
+    (id: string, dir: -1 | 1) => {
+      sealDiscrete();
+      setClips((cs) => {
+        const order = cs
+          .map((c, i) => ({ id: c.id, i, z: clipZ(c, i) }))
+          .sort((a, b) => a.z - b.z || a.i - b.i);
+        const at = order.findIndex((o) => o.id === id);
+        const to = at + dir;
+        if (at < 0 || to < 0 || to >= order.length) return cs;
+        const a = order[at];
+        const b = order[to];
+        return cs.map((c, i) => (c.id === a.id ? { ...c, z: b.z } : c.id === b.id ? { ...c, z: a.z } : { ...c, z: clipZ(c, i) }));
+      });
     },
     [sealDiscrete],
   );
@@ -1902,6 +2032,9 @@ export default function VideoEditor() {
       });
       setSelectedAttachmentId(null);
       setCroppingId((c) => (c === id ? c : null)); // leave crop mode when switching layers
+      // A layer and a clip both own a transform widget, so selection is exclusive.
+      setSelectedClipId(null);
+      setCropClipId(null);
       if (layer.kind === 'zoom') {
         const first = layer.keyframes[0];
         if (first) selectZoomKf(id, first.id);
@@ -2324,7 +2457,15 @@ export default function VideoEditor() {
     [updateSketchEl, updateHighlighterEl, updateStickerEl, updateCaptionEl, updateDramaticEl],
   );
 
-  /** Double-click a sticker on the canvas to toggle crop mode for it. */
+  /**
+   * Double-click to crop. A sticker under the pointer wins (its own crop mode);
+   * otherwise the double-click belongs to the CLIP under the pointer.
+   *
+   * Clips add one behaviour stickers deliberately don't have: double-clicking a
+   * clip that ALREADY carries a crop, while not currently cropping it, resets that
+   * crop to the full source — a one-click "undo the crop". Otherwise it toggles
+   * crop-adjust mode as a sticker does.
+   */
   const onCanvasDoubleClick = useCallback(
     (e: { clientX: number; clientY: number }) => {
       if (editingRef.current) return;
@@ -2333,14 +2474,25 @@ export default function VideoEditor() {
       const { nx, ny } = normFromPointer(e.clientX, e.clientY);
       const hit = c.hitTestDraggable(nx, ny);
       const target = hit ?? (selectedLayer?.kind === 'sticker' ? selectedLayer.id : null);
-      if (!target) return;
-      const layer = layers.find((l) => l.id === target);
-      if (!layer || layer.kind !== 'sticker' || layer.locked || layer.hidden) return;
-      setSelectedLayerId(target);
+      const layer = target ? layers.find((l) => l.id === target) : null;
+      if (layer && layer.kind === 'sticker' && !layer.locked && !layer.hidden) {
+        setSelectedLayerId(layer.id);
+        setSelectedAttachmentId(null);
+        setCroppingId((cur) => (cur === layer.id ? null : layer.id));
+        return;
+      }
+      if (hit) return; // some other overlay owns this pixel — leave it alone
+
+      const clip = clips.find((x) => x.id === (c.hitTestClip(nx, ny) ?? selectedClipId));
+      if (!clip) return;
+      setSelectedLayerId(null);
       setSelectedAttachmentId(null);
-      setCroppingId((cur) => (cur === target ? null : target));
+      setSelectedClipId(clip.id);
+      if (cropClipId === clip.id) setCropClipId(null); // done cropping
+      else if (clip.crop && !isFullCrop(clip)) uncropClip(clip); // one-click un-crop
+      else setCropClipId(clip.id);
     },
-    [normFromPointer, layers, selectedLayer],
+    [normFromPointer, layers, selectedLayer, clips, selectedClipId, cropClipId, uncropClip],
   );
 
   // ---- export ----
@@ -2636,10 +2788,33 @@ export default function VideoEditor() {
     return m;
   }, [layers, out, currentSec]);
   const selBox = selectedLayer && isPlaceable(selectedLayer) ? placeableBoxes[selectedLayer.id] ?? null : null;
-  const otherBoxes = useMemo(
-    () => Object.entries(placeableBoxes).filter(([id]) => id !== selectedLayerId).map(([, b]) => b),
-    [placeableBoxes, selectedLayerId],
+
+  // A clip is a transformable object too, so it gets the same treatment: its box
+  // drives its transform widget and serves as a snap target for everything else.
+  // Only clips LIVE at the cursor count — an off-screen clip must not throw guides.
+  const clipBoxes = useMemo(() => {
+    const m: Record<string, Transform> = {};
+    for (const c of clips) m[c.id] = placementOf(c).transform;
+    return m;
+  }, [clips, placementOf]);
+  const selClipPlacement = selectedClip ? placementOf(selectedClip) : null;
+  const liveClipIds = useMemo(
+    () => new Set(clipExtents.filter((e) => currentSec >= e.start && currentSec < e.end).map((e) => e.id)),
+    [clipExtents, currentSec],
   );
+
+  const otherBoxes = useMemo(() => {
+    const boxes: Box[] = [];
+    for (const [id, b] of Object.entries(placeableBoxes)) if (id !== selectedLayerId) boxes.push(b);
+    for (const [id, b] of Object.entries(clipBoxes)) {
+      if (id === selectedClipId || !liveClipIds.has(id)) continue;
+      // A clip still filling the whole frame is the frame border, which `border`
+      // snapping already provides — skip it rather than duplicate the lines.
+      if (b.x === 0 && b.y === 0 && b.w === 1 && b.h === 1) continue;
+      boxes.push({ x: b.x, y: b.y, w: b.w, h: b.h });
+    }
+    return boxes;
+  }, [placeableBoxes, selectedLayerId, clipBoxes, selectedClipId, liveClipIds]);
 
   /** Locked layer ids — a set, because the pointer paths test membership per event. */
   const lockedIds = useMemo(() => new Set(layers.filter((l) => l.locked).map((l) => l.id)), [layers]);
@@ -3046,12 +3221,51 @@ export default function VideoEditor() {
                     srcDims.w > 0 &&
                     selectedLayer?.kind === 'sticker' &&
                     selectedLayer.id === croppingId && (
-                      <StickerCropEditor
+                      <CropEditor
                         el={selectedLayer.el}
                         media={stickerMedia.current.get(selectedLayer.el.srcId)}
                         onChange={(patch) => updateStickerEl(selectedLayer.id, patch)}
                       />
                     )}
+
+                  {/* clip crop editor (double-click) — replaces the clip's widget */}
+                  {cropClipId && mediaKind && selectedClip && selectedClip.id === cropClipId && selClipPlacement && (
+                    <CropEditor
+                      el={{ ...selClipPlacement.transform, crop: selClipPlacement.crop }}
+                      media={clipMedia.current.get(selectedClip.srcId)}
+                      onChange={(patch) => onClipCrop(selectedClip, patch)}
+                    />
+                  )}
+
+                  {/* transform widget for the selected CLIP — the same shared widget
+                      every overlay layer uses, so a clip drags / resizes / rotates
+                      and guide-locks identically. Aspect-locked like a sticker, so
+                      the box always frames exactly what is drawn inside it. */}
+                  {!editingZoom &&
+                    !isGroup &&
+                    mediaKind &&
+                    srcDims.w > 0 &&
+                    !isPlaceable(selectedLayer) &&
+                    selectedClip &&
+                    selClipPlacement &&
+                    cropClipId !== selectedClip.id &&
+                    (() => {
+                      const clip = selectedClip;
+                      const t = selClipPlacement.transform;
+                      return (
+                        <TransformBox
+                          transform={t}
+                          resize="locked"
+                          lockedAspectPx={(t.w * out.w) / Math.max(1e-4, t.h * out.h)}
+                          out={out}
+                          settings={effectiveGuides}
+                          others={otherBoxes}
+                          color="#74b9ff"
+                          onChange={(nt) => onClipTransform(clip, nt)}
+                          onGuides={setGuideLines}
+                        />
+                      );
+                    })()}
 
                   {/* unified transform widget for the single selected placeable layer.
                       Suppressed while it is hidden (nothing on screen to line up
@@ -3554,6 +3768,30 @@ export default function VideoEditor() {
                     index={selectedBoundary}
                     onEdit={setTransition}
                     onRandomizeAll={randomizeTransitions}
+                  />
+                </Panel>
+              )}
+
+              {/* Selected base clip: its rectangle on the frame, crop, and where it
+                  sits on the base clock / in the clip stack */}
+              {selectedClip && (
+                <Panel title="Clip placement">
+                  <ClipPlacementPanel
+                    key={selectedClip.id}
+                    clip={selectedClip}
+                    cropping={cropClipId === selectedClip.id}
+                    placed={selectedClip.transform !== undefined || selectedClip.crop !== undefined}
+                    cropped={selectedClip.crop !== undefined && !isFullCrop(selectedClip)}
+                    start={clipStarts[clips.indexOf(selectedClip)] ?? 0}
+                    length={clipLen(selectedClip)}
+                    baseDuration={duration}
+                    zIndex={clipZOrder.indexOf(selectedClip.id) + 1}
+                    clipCount={clips.length}
+                    onMove={(t) => moveClipTo(selectedClip.id, t)}
+                    onMoveZ={(dir) => moveClipZ(selectedClip.id, dir)}
+                    onToggleCrop={() => setCropClipId((c) => (c === selectedClip.id ? null : selectedClip.id))}
+                    onUncrop={() => uncropClip(selectedClip)}
+                    onReset={() => resetClipPlacement(selectedClip.id)}
                   />
                 </Panel>
               )}
