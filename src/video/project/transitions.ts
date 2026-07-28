@@ -24,7 +24,7 @@
 // getImageData pass for `glitch`); no external image/video/audio assets.
 
 import type { VideoClip } from './clips';
-import { clipLen, clipStartAt } from './clips';
+import { clipLen, clipStartAt, isPlainClip, layoutClips } from './clips';
 
 export type TransitionKind =
   | 'cut'
@@ -148,9 +148,33 @@ export interface TransitionWindow {
   end: number;
 }
 
+/**
+ * Whether boundary `index` is a real SEQUENCE EDGE — the only situation a
+ * transition applies to. Two conditions, both required:
+ *
+ *   1. the two clips are butt-joined in base time (clip `index` starts exactly
+ *      where clip `index - 1` ends), i.e. the overlap comes from the boundary's
+ *      own transition window and not from clips deliberately given overlapping
+ *      time ranges, and
+ *   2. both are still PLAIN — full-frame and uncropped.
+ *
+ * Every other kind of overlap (a clip resized into a corner while another plays
+ * behind it, two clips parked over each other) is ordinary z-ordered
+ * compositing: each clip is simply drawn in its own rectangle, never blended.
+ * Gating it here means one check governs the renderer, the audio graph, the SFX
+ * cues and the timeline at once.
+ */
+export function isSequenceEdge(clips: VideoClip[], index: number): boolean {
+  if (index <= 0 || index >= clips.length) return false;
+  if (!isPlainClip(clips[index - 1]) || !isPlainClip(clips[index])) return false;
+  const lay = layoutClips(clips);
+  return Math.abs(lay[index].start - lay[index - 1].end) < 1e-3;
+}
+
 export function windowAt(clips: VideoClip[], index: number): TransitionWindow | null {
   const tr = transitionAt(clips, index);
   if (!hasWindow(tr)) return null;
+  if (!isSequenceEdge(clips, index)) return null;
   const cut = clipStartAt(clips, index);
   const half = tr.duration / 2;
   return { index, tr, cut, start: cut - half, end: cut + half };
