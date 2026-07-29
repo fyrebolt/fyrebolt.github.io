@@ -2,11 +2,12 @@
    width is solved backwards from the room the iPad screen actually has — so the
    printer, the page and the controls all stay in view without scrolling.
      - min(72vw, 87dvh, 885px) is the landscape frame's height (see .ipad-landscape)
-     - 318px covers the status bar, app bar, body padding, button and caption
+     - --chrome covers the status bar, app bar, body padding, button and caption
      - 1.62 turns a sheet width into total scene height (--paper-ratio + 0.32) */
 .printer-stage {
   --paper-ratio: 1.294; /* h / w; replaced with the PDF's own ratio once loaded */
-  --paper-w: clamp(130px, calc((min(72vw, 87dvh, 885px) - 318px) / 1.62), 330px);
+  --chrome: 318px;
+  --paper-w: clamp(130px, calc((min(72vw, 87dvh, 885px) - var(--chrome)) / 1.62), 330px);
   --paper-h: calc(var(--paper-w) * var(--paper-ratio));
   --printer-h: clamp(56px, calc(var(--paper-w) * 0.32), 104px);
 
@@ -20,7 +21,7 @@
    emerge from the slot. */
 .printer-scene {
   position: relative;
-  width: min(100%, calc(var(--paper-w) + 110px));
+  width: min(100%, calc(var(--paper-w) * 1.45));
   height: calc(var(--paper-h) + var(--printer-h) - 8px);
 }
 
@@ -62,7 +63,9 @@
   bottom: 0;
   left: 50%;
   transform: translateX(-50%);
-  width: calc(var(--paper-w) + 70px);
+  /* Proportional to the sheet, so the printer keeps its shape as the scene
+     scales rather than looking bloated around a small page. */
+  width: calc(var(--paper-w) * 1.26);
   max-width: 100%;
   height: var(--printer-h);
   border-radius: calc(var(--printer-h) * 0.24);
@@ -93,8 +96,8 @@
 }
 .printer-led {
   position: absolute;
-  top: 28px;
-  right: 22px;
+  top: 46%;
+  right: 7%;
   width: 9px;
   height: 9px;
   border-radius: 50%;
@@ -116,6 +119,18 @@
 @keyframes printer-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
+}
+
+/* Portrait-ish windows drive the landscape frame off width, which leaves it
+   short: the fixed chrome eats proportionally more of it, so give the caption's
+   row back to the sheet rather than shrinking the résumé into illegibility. */
+@media (min-width: 621px) and (max-aspect-ratio: 5 / 4) {
+  .printer-stage {
+    --chrome: 295px;
+  }
+  .printer-caption {
+    display: none;
+  }
 }
 
 /* The iPad frame goes full-screen below 620px: height is the whole viewport, so
