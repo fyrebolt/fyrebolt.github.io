@@ -142,7 +142,12 @@ html.ios-cursor [contenteditable='true'] {
 }
 
 /* Solid elevated card. */
+/* Cards are used two ways: wrapped in <Squircle>, which clips a true
+   superellipse and drops this radius, and on a bare element that can't be
+   wrapped (a <form>, an <a> row). The radius is the fallback for the latter —
+   without it those cards render as hard-cornered rectangles. */
 .ios-card {
+  border-radius: 22px;
   background: var(--color-bg-surface);
   box-shadow: var(--shadow-2);
 }
