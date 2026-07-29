@@ -1,116 +1,116 @@
+/* Every measurement in the scene derives from the width of the sheet, and that
+   width is solved backwards from the room the iPad screen actually has — so the
+   printer, the page and the controls all stay in view without scrolling.
+     - min(72vw, 87dvh, 885px) is the landscape frame's height (see .ipad-landscape)
+     - --chrome covers the status bar, app bar, body padding, button and caption
+     - 1.62 turns a sheet width into total scene height (--paper-ratio + 0.32) */
 .printer-stage {
+  --paper-ratio: 1.294; /* h / w; replaced with the PDF's own ratio once loaded */
+  --chrome: 318px;
+  --paper-w: clamp(130px, calc((min(72vw, 87dvh, 885px) - var(--chrome)) / 1.62), 330px);
+  --paper-h: calc(var(--paper-w) * var(--paper-ratio));
+  --printer-h: clamp(56px, calc(var(--paper-w) * 0.32), 104px);
+
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding-top: 8px;
+  gap: 14px;
 }
 
 /* The scene stacks the paper behind the printer body so the page appears to
    emerge from the slot. */
 .printer-scene {
   position: relative;
-  width: 440px;
-  max-width: 100%;
-  height: 620px;
-  display: flex;
-  justify-content: center;
-  align-items: flex-end;
+  width: min(100%, calc(var(--paper-w) * 1.45));
+  height: calc(var(--paper-h) + var(--printer-h) - 8px);
+}
+
+/* Clips the sheet at the slot line: below this it is inside the printer. */
+.printer-paper-clip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: calc(var(--printer-h) - 8px);
+  overflow: hidden;
+  z-index: 1;
 }
 
 .paper {
   position: absolute;
-  bottom: 96px; /* rests tucked into the printer slot until it prints */
-  width: 380px;
-  max-width: 88%;
+  bottom: 0;
+  left: 50%;
+  width: var(--paper-w);
+  aspect-ratio: 1 / var(--paper-ratio);
   background: #fff;
   border-radius: 4px;
   box-shadow: 0 10px 30px rgba(17, 24, 39, 0.18), 0 2px 6px rgba(17, 24, 39, 0.1);
   overflow: hidden;
-  transform: translateY(40%);
+  /* Resting state: tucked out of sight inside the printer. Printer.tsx drives
+     the sheet out of the slot with a Web Animation so it can be replayed. */
+  transform: translate(-50%, 100%);
   opacity: 0;
-  z-index: 1;
-  transition: transform 1.5s var(--ease-out-ios), opacity 0.5s ease;
-}
-.is-printing .paper {
-  transform: translateY(-58%);
-  opacity: 1;
 }
 .paper-canvas {
   display: block;
   width: 100%;
-}
-.paper-placeholder {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-text-muted);
-  font-size: 14px;
-  background: #fff;
+  height: 100%;
 }
 
 /* Printer body */
 .printer-body {
   position: absolute;
   bottom: 0;
-  width: 440px;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Proportional to the sheet, so the printer keeps its shape as the scene
+     scales rather than looking bloated around a small page. */
+  width: calc(var(--paper-w) * 1.26);
   max-width: 100%;
-  height: 150px;
-  border-radius: 26px;
+  height: var(--printer-h);
+  border-radius: calc(var(--printer-h) * 0.24);
   background: linear-gradient(180deg, #f4f5f7 0%, #dfe2e8 100%);
   box-shadow: var(--shadow-3), inset 0 1px 0 rgba(255, 255, 255, 0.9);
   z-index: 2;
 }
 .printer-slot {
   position: absolute;
-  top: 20px;
+  top: 6px;
   left: 50%;
   transform: translateX(-50%);
   width: 78%;
-  height: 12px;
+  height: 10px;
   border-radius: 999px;
   background: #2b2d33;
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.55);
 }
 .printer-tray {
   position: absolute;
-  bottom: 26px;
+  bottom: 22%;
   left: 50%;
   transform: translateX(-50%);
   width: 60%;
-  height: 10px;
+  height: 8px;
   border-radius: 999px;
   background: rgba(60, 60, 67, 0.16);
 }
 .printer-led {
   position: absolute;
-  top: 46px;
-  right: 34px;
-  width: 10px;
-  height: 10px;
+  top: 46%;
+  right: 7%;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: var(--color-primary-green);
   box-shadow: 0 0 8px rgba(52, 199, 89, 0.8);
   animation: printer-blink 2.4s var(--ease-in-out-ios) infinite;
 }
 
-.printer-controls {
-  margin-top: 8px;
-}
 .printer-caption {
-  margin-top: 16px;
   color: var(--color-text-muted);
   font-size: 13.5px;
   text-align: center;
   max-width: 44ch;
-}
-.printer-caption code {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  background: var(--color-fill-secondary);
-  padding: 1px 6px;
-  border-radius: 6px;
 }
 .printer-open {
   text-decoration: none;
@@ -121,11 +121,28 @@
   50% { opacity: 0.35; }
 }
 
-@media (max-width: 460px) {
-  .printer-scene {
-    height: 560px;
+/* Portrait-ish windows drive the landscape frame off width, which leaves it
+   short: the fixed chrome eats proportionally more of it, so give the caption's
+   row back to the sheet rather than shrinking the résumé into illegibility. */
+@media (min-width: 621px) and (max-aspect-ratio: 5 / 4) {
+  .printer-stage {
+    --chrome: 295px;
   }
-  .paper {
-    width: 300px;
+  .printer-caption {
+    display: none;
+  }
+}
+
+/* The iPad frame goes full-screen below 620px: height is the whole viewport, so
+   the sheet gets more room but is now capped by how narrow the screen is. */
+@media (max-width: 620px) {
+  .printer-stage {
+    --paper-w: clamp(130px, min(calc((100dvh - 255px) / 1.62), 74vw), 330px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .printer-led {
+    animation: none;
   }
 }

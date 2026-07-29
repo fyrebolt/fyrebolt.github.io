@@ -74,6 +74,11 @@ export default function Squircle({
       style={{
         clipPath: clip,
         WebkitClipPath: clip,
+        // .ios-card carries a plain border-radius so it still looks like a card
+        // on a bare element. Once the real superellipse clip exists that radius
+        // has to go, or its circular corners would cut the squircle's bulge
+        // back into an ordinary rounded rectangle.
+        borderRadius: clip ? 0 : undefined,
         ...style,
       }}
     >
