@@ -42,6 +42,17 @@ install)
     echo "  The job will install, but it'll fail until you create it. See the README."
   fi
 
+  # Fire every hour from the chosen time until midnight. The script itself is
+  # the guard: with --once-daily it no-ops as soon as a run has succeeded today,
+  # so these are retries, not repeats. A Mac that was asleep at 09:20 still gets
+  # its pull at 10:20, or whenever it next wakes.
+  INTERVALS=""
+  for H in $(seq "$((10#$HOUR))" 23); do
+    INTERVALS="$INTERVALS
+    <dict><key>Hour</key><integer>$H</integer><key>Minute</key><integer>$((10#$MINUTE))</integer></dict>"
+  done
+  ATTEMPTS=$((24 - 10#$HOUR))
+
   mkdir -p "$HOME/Library/LaunchAgents" "$(dirname "$LOG")"
   cat >"$PLIST" <<PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -54,13 +65,12 @@ install)
     <string>$NODE</string>
     <string>$REPO/scripts/instagram-pull.mjs</string>
     <string>--commit</string>
+    <string>--once-daily</string>
   </array>
   <key>WorkingDirectory</key><string>$REPO</string>
   <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key><integer>$((10#$HOUR))</integer>
-    <key>Minute</key><integer>$((10#$MINUTE))</integer>
-  </dict>
+  <array>$INTERVALS
+  </array>
   <!-- Don't fire on install/login; only on the calendar interval above. launchd
        provides the catch-up on its own: a run missed because the Mac was asleep
        fires once the machine wakes. -->
@@ -77,7 +87,8 @@ PLISTEOF
 
   launchctl unload "$PLIST" 2>/dev/null || true
   launchctl load "$PLIST"
-  echo "✓ Scheduled daily at $AT"
+  echo "✓ First attempt at $AT, then hourly until midnight ($ATTEMPTS attempts)"
+  echo "  It stops as soon as one succeeds — at most one real pull per day."
   echo "  plist: $PLIST"
   echo "  log:   $LOG"
   echo "  node:  $NODE"
@@ -101,6 +112,21 @@ status)
     echo "✗ $LABEL is not loaded — run: ./scripts/instagram-schedule.sh install"
   fi
   [ -f "$LOG" ] && echo "  log: $LOG ($(wc -l <"$LOG" | tr -d ' ') lines)"
+  # The question you actually care about: is today's data in?
+  node -e '
+    const fs = require("fs");
+    const p = process.argv[1];
+    const day = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    let h; try { h = JSON.parse(fs.readFileSync(p, "utf8")); } catch { console.log("  ✗ no history.json yet"); process.exit(0); }
+    if (h.sample) { console.log("  ✗ still showing sample data — no real pull yet"); process.exit(0); }
+    const t = new Date(h.generatedAt);
+    const done = day(t) === day(new Date());
+    const hrs = ((Date.now() - t.getTime()) / 3.6e6).toFixed(1);
+    console.log(done
+      ? `  ✓ today’s pull is done (${t.toLocaleTimeString()}) — further attempts today will no-op`
+      : `  ⏳ today’s pull has NOT run yet (last was ${hrs}h ago) — it will retry on the hour`);
+    console.log(`     followers ${h.followers?.length ?? "?"} · following ${h.following?.length ?? "?"}`);
+  ' "$REPO/public/instagram/history.json" 2>/dev/null || true
   ;;
 
 run)

@@ -20,6 +20,7 @@
 //   node scripts/instagram-pull.mjs --dry-run   # pull, print a summary, write nothing
 //   node scripts/instagram-pull.mjs --commit    # write, then git commit + push
 //   node scripts/instagram-pull.mjs --force     # write even if the read looks partial
+//   node scripts/instagram-pull.mjs --once-daily  # no-op if today already succeeded
 //
 // Credentials live in scripts/.instagram-secrets.json (gitignored):
 //   { "account": "yourhandle", "cookie": "<the whole Cookie: header from devtools>" }
@@ -34,6 +35,7 @@ import { execFileSync } from 'node:child_process';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '..');
 const SECRETS = resolve(__dirname, '.instagram-secrets.json');
+const STATE = resolve(__dirname, '.instagram-state.json');
 const OUT = resolve(REPO, 'public/instagram/history.json');
 
 const IG_APP_ID = '936619743392459';
@@ -58,12 +60,56 @@ const DRY_RUN = args.has('--dry-run');
 const COMMIT = args.has('--commit');
 const FORCE = args.has('--force');
 const NO_NOTIFY = args.has('--no-notify');
+const ONCE_DAILY = args.has('--once-daily');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const jitter = () => DELAY_MIN + Math.random() * (DELAY_MAX - DELAY_MIN);
 
 function log(...parts) {
   console.log(`[${new Date().toISOString()}]`, ...parts);
+}
+
+/** YYYY-MM-DD in *local* time — "today" means the user's day, not UTC's. */
+export function localDay(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Has a pull already succeeded today?
+ *
+ * history.json is written only on success, so its `generatedAt` *is* the record
+ * of the last good run — no separate stamp file to drift out of sync. This is
+ * what lets the job be scheduled every hour while still doing real work at most
+ * once a day: the first attempt that succeeds makes the rest of the day's
+ * attempts no-ops. A failed attempt leaves the file untouched, so the next hour
+ * tries again.
+ */
+export function alreadySucceededToday(prev, now = new Date()) {
+  if (!prev || prev.sample || !prev.generatedAt) return false;
+  const t = new Date(prev.generatedAt);
+  if (Number.isNaN(t.getTime())) return false;
+  return localDay(t) === localDay(now);
+}
+
+// ===== Small persistent state (notification de-duplication) =====
+
+function readState() {
+  try {
+    return JSON.parse(readFileSync(STATE, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeState(next) {
+  try {
+    writeFileSync(STATE, JSON.stringify(next, null, 2) + '\n');
+  } catch {
+    /* state is a convenience; never fail a run over it */
+  }
 }
 
 /**
@@ -89,12 +135,27 @@ function notify(title, subtitle, message) {
   }
 }
 
+/**
+ * Notify at most once per day per failure kind.
+ *
+ * The job retries every hour, so without this an expired cookie would fire the
+ * same alert fifteen times before lunch and train you to ignore it.
+ */
+function notifyOncePerDay(kind, title, subtitle, message) {
+  const today = localDay();
+  const state = readState();
+  if (state.notifiedOn === today && state.notifiedKind === kind) return;
+  writeState({ ...state, notifiedOn: today, notifiedKind: kind });
+  notify(title, subtitle, message);
+}
+
 function die(code, message, hint) {
   console.error(`\n✗ ${message}`);
   if (hint) console.error(`\n  ${hint}\n`);
   // Exit 2 means "needs your attention" (expired cookie, bad config); 1 is
-  // transient (throttled, network) and usually fixes itself by tomorrow.
-  notify(
+  // transient (throttled, network) and the next hourly attempt may well succeed.
+  notifyOncePerDay(
+    code === 2 ? 'action' : 'transient',
     'Instagram Tracker',
     code === 2 ? 'Action needed — tracking has stopped' : 'Run failed',
     message,
@@ -355,9 +416,17 @@ export function appendSnapshot(snapshots, point) {
 // ===== Main =====
 
 async function main() {
+  const prev = loadPrevious();
+
+  // Scheduled hourly, but only ever does the work once a day. Checked before
+  // anything else so a satisfied day costs one file read and no network at all.
+  if (ONCE_DAILY && !DRY_RUN && alreadySucceededToday(prev)) {
+    log(`already pulled today (${prev.generatedAt}) — nothing to do`);
+    return;
+  }
+
   const creds = loadSecrets();
   const nowIso = new Date().toISOString();
-  const prev = loadPrevious();
   const firstRealRun = !prev || prev.sample || !prev.followers?.length;
 
   log(`pulling @${creds.account}${DRY_RUN ? ' (dry run)' : ''}`);
