@@ -158,6 +158,60 @@ export function groupByDay(events: FollowEvent[]): DayBucket[] {
   return [...map.values()].sort((a, b) => (a.key < b.key ? 1 : -1));
 }
 
+/** Everything known to have happened on one local day. */
+export interface DayActivity {
+  key: string;
+  /** Who followed you that day. */
+  follows: Profile[];
+  /** Who unfollowed. Only exists from when daily tracking began. */
+  unfollows: FollowEvent[];
+}
+
+/**
+ * Index activity by local day, for the chart's detail panel.
+ *
+ * The two halves have very different provenance, and the UI says so:
+ * follows are derived from each follower's `since`, so they're known across the
+ * whole history — but only for people who are *still* following. Unfollows come
+ * from the event log, which starts when daily tracking did. Nothing can recover
+ * an unfollow from before that.
+ */
+export function buildDayActivity(
+  followers: Profile[],
+  events: FollowEvent[],
+): Map<string, DayActivity> {
+  const map = new Map<string, DayActivity>();
+  const at = (key: string) => {
+    let d = map.get(key);
+    if (!d) {
+      d = { key, follows: [], unfollows: [] };
+      map.set(key, d);
+    }
+    return d;
+  };
+
+  for (const p of followers) {
+    if (p.since) at(dayKey(p.since)).follows.push(p);
+  }
+  for (const e of events) {
+    const d = at(dayKey(e.t));
+    if (e.kind === 'unfollow') d.unfollows.push(e);
+  }
+  return map;
+}
+
+/**
+ * The first day with a real reading, i.e. when unfollow tracking began.
+ *
+ * Reconstructed points carry a follower count only; the daily puller also
+ * records `following`. That difference is the marker — before this date the
+ * curve is inferred, after it it was actually measured.
+ */
+export function trackingStartedAt(snapshots: Snapshot[]): string | null {
+  const first = snapshots.find((s) => typeof s.following === 'number');
+  return first ? first.t : null;
+}
+
 export interface RangeStats {
   current: number;
   start: number;

@@ -284,10 +284,202 @@
   padding: 18px;
 }
 
+/* ===== Interactive chart ===== */
+.ig-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.ig-chart-span {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.ig-chart-count {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+.ig-chart-reset {
+  font-size: 12px;
+  padding: 5px 10px;
+}
+
+.ig-chart-wrap {
+  position: relative;
+}
 .ig-chart {
   display: block;
   width: 100%;
   height: clamp(180px, 30vh, 240px);
+  /* Let the page scroll vertically, but claim horizontal drags for zooming. */
+  touch-action: pan-y;
+  cursor: crosshair;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ig-chart-crosshair {
+  stroke: var(--color-text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.65;
+}
+.ig-chart-brush {
+  fill: rgba(214, 41, 118, 0.14);
+  stroke: rgba(214, 41, 118, 0.5);
+  stroke-width: 1;
+}
+
+/* Floating readout that tracks the crosshair */
+.ig-tip {
+  position: absolute;
+  top: 2px;
+  max-width: 60%;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  border-radius: 12px;
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-2), inset 0 0 0 0.5px var(--color-hairline);
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 2;
+}
+.ig-tip-date {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+.ig-tip-count {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.ig-tip-delta {
+  display: inline-flex;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.ig-tip-delta .pos,
+.ig-breakdown-tally .pos {
+  color: var(--color-primary-green);
+}
+.ig-tip-delta .neg,
+.ig-breakdown-tally .neg {
+  color: var(--color-primary-pink);
+}
+
+.ig-chart-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-align: center;
+  margin-top: 10px;
+}
+.ig-chart-clear {
+  border: none;
+  background: none;
+  padding: 0 0 0 8px;
+  font: inherit;
+  color: var(--color-accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* Per-day breakdown under the chart */
+.ig-breakdown {
+  margin-top: 14px;
+  padding-top: 14px;
+  box-shadow: inset 0 0.5px 0 var(--color-hairline);
+}
+.ig-breakdown.is-pinned {
+  background: linear-gradient(120deg, rgba(214, 41, 118, 0.05), rgba(79, 91, 213, 0.05));
+  border-radius: 14px;
+  padding: 12px 12px 4px;
+  box-shadow: inset 0 0 0 1px rgba(214, 41, 118, 0.18);
+}
+.ig-breakdown-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ig-breakdown-date {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+.ig-breakdown-tally {
+  display: inline-flex;
+  gap: 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.ig-breakdown-list {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 2px 14px;
+  max-height: 220px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.ig-breakdown-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 2px;
+  min-width: 0;
+}
+.ig-breakdown-row .ig-avatar {
+  width: 26px;
+  height: 26px;
+  font-size: 11px;
+}
+.ig-breakdown-handle {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ig-breakdown-handle:hover {
+  color: var(--color-accent);
+}
+.ig-breakdown-tag {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.ig-breakdown-tag.pos {
+  color: var(--color-primary-green);
+  background: rgba(52, 199, 89, 0.12);
+}
+.ig-breakdown-tag.neg {
+  color: var(--color-primary-pink);
+  background: rgba(255, 45, 85, 0.12);
+}
+.ig-breakdown-more {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  padding: 6px 2px;
+}
+.ig-breakdown-note {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+  margin-top: 10px;
 }
 .ig-chart-foot {
   display: flex;
