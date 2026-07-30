@@ -1,6 +1,6 @@
 {
   "account": "hastinchen",
-  "generatedAt": "2026-07-30T05:27:11.862Z",
+  "generatedAt": "2026-07-30T06:58:02.670Z",
   "sample": false,
   "snapshots": [
     {
@@ -9,12 +9,18 @@
       "following": 869
     },
     {
-      "t": "2026-07-30T05:27:11.862Z",
-      "followers": 909,
-      "following": 868
+      "t": "2026-07-30T06:58:02.670Z",
+      "followers": 908,
+      "following": 866
     }
   ],
   "events": [
+    {
+      "username": "hrite5h",
+      "kind": "unfollow",
+      "t": "2026-07-30T06:58:02.670Z",
+      "name": "Hritesh"
+    },
     {
       "username": "hazimsf",
       "kind": "unfollow",
@@ -2152,12 +2158,6 @@
     {
       "username": "howarblee",
       "name": "Howard",
-      "since": "2026-07-30T00:04:26.924Z"
-    },
-    {
-      "username": "hrite5h",
-      "name": "Hritesh",
-      "private": true,
       "since": "2026-07-30T00:04:26.924Z"
     },
     {
@@ -6657,6 +6657,12 @@
       "since": "2026-07-30T00:04:26.924Z"
     },
     {
+      "username": "dxx_913",
+      "name": "daniel",
+      "private": true,
+      "since": "2026-07-30T06:58:02.670Z"
+    },
+    {
       "username": "dylan_amador33",
       "name": "Dylan Amador",
       "private": true,
@@ -7121,12 +7127,6 @@
     {
       "username": "howarblee",
       "name": "Howard",
-      "since": "2026-07-30T00:04:26.924Z"
-    },
-    {
-      "username": "hrite5h",
-      "name": "Hritesh",
-      "private": true,
       "since": "2026-07-30T00:04:26.924Z"
     },
     {
@@ -7751,11 +7751,6 @@
       "since": "2026-07-30T00:04:26.924Z"
     },
     {
-      "username": "kettle.recipes",
-      "name": "Kettle Recipes",
-      "since": "2026-07-30T00:04:26.924Z"
-    },
-    {
       "username": "kev.zhang1",
       "name": "Kevin",
       "since": "2026-07-30T00:04:26.924Z"
@@ -8024,6 +8019,12 @@
       "name": "Adam Xiong",
       "private": true,
       "since": "2026-07-30T00:04:26.924Z"
+    },
+    {
+      "username": "mandascai",
+      "name": "manda 蔡",
+      "private": true,
+      "since": "2026-07-30T06:58:02.670Z"
     },
     {
       "username": "mankydankybanky",
@@ -8399,11 +8400,6 @@
       "name": "Brina.bear23",
       "private": true,
       "since": "2026-07-30T00:04:26.924Z"
-    },
-    {
-      "username": "nihal.gunu",
-      "name": "Nihal Gunukula",
-      "since": "2026-07-30T05:21:33.877Z"
     },
     {
       "username": "nikhil_nagalla25",
@@ -9241,12 +9237,6 @@
     {
       "username": "su7na.18",
       "name": "Suna Alan",
-      "private": true,
-      "since": "2026-07-30T00:04:26.924Z"
-    },
-    {
-      "username": "sujay_kan",
-      "name": "Sujay",
       "private": true,
       "since": "2026-07-30T00:04:26.924Z"
     },
