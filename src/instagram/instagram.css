@@ -1012,8 +1012,9 @@
 .ig-person-handle { color: var(--color-text-secondary); }
 
 .ig-sheet-backdrop {
+  /* top/left/width/height/border-radius are set inline from the measured iPad
+     screen — see measureScreen() in ProfileSheet.tsx. */
   position: fixed;
-  inset: 0;
   z-index: 50;
   display: grid;
   place-items: center;

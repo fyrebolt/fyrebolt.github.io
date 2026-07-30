@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   buildRanks,
   exactDate,
@@ -32,6 +33,21 @@ export default function ProfileSheet({
     () => insightFor(username, data, followerRanks, followingRanks),
     [username, data, followerRanks, followingRanks],
   );
+
+  // Where to put the dialog.
+  //
+  // `position: fixed` can't be trusted here: .ipad-frame is scaled and
+  // .app-body is translated, and a transformed ancestor becomes the containing
+  // block for fixed descendants. The backdrop was therefore sizing itself
+  // against the full scrollable content and landing off-screen. Portalling to
+  // <body> escapes those transforms, and measuring the device screen keeps the
+  // dialog centred on it rather than on the whole browser window.
+  const [screenBox, setScreenBox] = useState<ScreenBox>(measureScreen);
+  useEffect(() => {
+    const remeasure = () => setScreenBox(measureScreen());
+    window.addEventListener('resize', remeasure);
+    return () => window.removeEventListener('resize', remeasure);
+  }, []);
 
   const [live, setLive] = useState<LiveProfile | null>(null);
   const [liveState, setLiveState] = useState<'loading' | 'done' | 'unavailable'>('loading');
@@ -86,8 +102,8 @@ export default function ProfileSheet({
 
   const displayName = live?.fullName || insight.name;
 
-  return (
-    <div className="ig-sheet-backdrop" onClick={onClose} role="presentation">
+  return createPortal(
+    <div className="ig-sheet-backdrop" style={screenBox} onClick={onClose} role="presentation">
       <div
         className="ig-sheet"
         role="dialog"
@@ -164,8 +180,34 @@ export default function ProfileSheet({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
+}
+
+interface ScreenBox {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+  borderRadius: string;
+}
+
+/** The iPad screen's on-screen rectangle, or the whole window as a fallback. */
+function measureScreen(): ScreenBox {
+  const el = document.querySelector('.ipad-screen');
+  if (!el) {
+    return { top: 0, left: 0, width: window.innerWidth, height: window.innerHeight, borderRadius: '0px' };
+  }
+  const r = el.getBoundingClientRect();
+  return {
+    top: r.top,
+    left: r.left,
+    width: r.width,
+    height: r.height,
+    // Follow the device's rounded corners so the dim doesn't overhang them.
+    borderRadius: getComputedStyle(el).borderRadius,
+  };
 }
 
 function Relationship({ insight }: { insight: Insight }) {
