@@ -1,6 +1,6 @@
 {
   "account": "hastinchen",
-  "generatedAt": "2026-07-30T05:21:33.877Z",
+  "generatedAt": "2026-07-30T05:27:11.862Z",
   "sample": false,
   "snapshots": [
     {
@@ -9,9 +9,9 @@
       "following": 869
     },
     {
-      "t": "2026-07-30T05:21:33.877Z",
+      "t": "2026-07-30T05:27:11.862Z",
       "followers": 909,
-      "following": 869
+      "following": 868
     }
   ],
   "events": [
@@ -5081,6 +5081,11 @@
   ],
   "following": [
     {
+      "username": "___troy.nichols___",
+      "name": "Troy Nichols",
+      "since": "2026-07-30T05:27:11.862Z"
+    },
+    {
       "username": "__austtin__",
       "name": "austin",
       "private": true,
@@ -6652,12 +6657,6 @@
       "since": "2026-07-30T00:04:26.924Z"
     },
     {
-      "username": "dxx_913",
-      "name": "daniel",
-      "private": true,
-      "since": "2026-07-30T05:14:40.871Z"
-    },
-    {
       "username": "dylan_amador33",
       "name": "Dylan Amador",
       "private": true,
@@ -8023,12 +8022,6 @@
     {
       "username": "m1nattto",
       "name": "Adam Xiong",
-      "private": true,
-      "since": "2026-07-30T00:04:26.924Z"
-    },
-    {
-      "username": "mandascai",
-      "name": "manda 蔡",
       "private": true,
       "since": "2026-07-30T00:04:26.924Z"
     },
