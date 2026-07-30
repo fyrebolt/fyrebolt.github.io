@@ -1,6 +1,6 @@
 {
   "account": "hastinchen",
-  "generatedAt": "2026-07-30T16:28:25.410Z",
+  "generatedAt": "2026-07-30T16:55:40.095Z",
   "sample": false,
   "snapshots": [
     {
@@ -1833,68 +1833,12 @@
       "following": 869
     },
     {
-      "t": "2026-07-30T16:28:25.410Z",
+      "t": "2026-07-30T16:55:40.095Z",
       "followers": 908,
-      "following": 865
+      "following": 869
     }
   ],
   "events": [
-    {
-      "username": "mandascai",
-      "kind": "unfollow",
-      "t": "2026-07-30T16:28:25.410Z",
-      "name": "manda 蔡",
-      "dir": "out"
-    },
-    {
-      "username": "kettle.recipes",
-      "kind": "unfollow",
-      "t": "2026-07-30T16:28:25.410Z",
-      "name": "Kettle Recipes",
-      "dir": "out"
-    },
-    {
-      "username": "bryce.huang",
-      "kind": "unfollow",
-      "t": "2026-07-30T16:28:25.410Z",
-      "name": "Bryce Huang",
-      "dir": "out"
-    },
-    {
-      "username": "alexanderblomq",
-      "kind": "unfollow",
-      "t": "2026-07-30T16:28:25.410Z",
-      "name": "Alexander B.",
-      "dir": "out"
-    },
-    {
-      "username": "aidencadis",
-      "kind": "follow",
-      "t": "2026-07-30T16:28:25.410Z",
-      "name": "Aiden Cadis",
-      "dir": "out"
-    },
-    {
-      "username": "solomons6927",
-      "kind": "follow",
-      "t": "2026-07-30T16:28:25.410Z",
-      "name": "Solomon",
-      "dir": "out"
-    },
-    {
-      "username": "___troy.nichols___",
-      "kind": "follow",
-      "t": "2026-07-30T16:28:25.410Z",
-      "name": "Troy Nichols",
-      "dir": "out"
-    },
-    {
-      "username": "alexndr448",
-      "kind": "follow",
-      "t": "2026-07-30T16:28:25.410Z",
-      "name": "Alex Tsai",
-      "dir": "out"
-    },
     {
       "username": "hrite5h",
       "kind": "unfollow",
@@ -6963,7 +6907,7 @@
     {
       "username": "___troy.nichols___",
       "name": "Troy Nichols",
-      "since": "2026-07-30T16:28:25.410Z"
+      "since": "2026-07-30T16:55:40.095Z"
     },
     {
       "username": "__austtin__",
@@ -7444,6 +7388,12 @@
       "name": "alexa 𐙚",
       "private": true,
       "since": "2025-10-17T20:51:42.000Z"
+    },
+    {
+      "username": "alexanderblomq",
+      "name": "Alexander B.",
+      "private": true,
+      "since": "2026-07-30T16:50:36.870Z"
     },
     {
       "username": "alexndr448",
@@ -8001,6 +7951,12 @@
       "name": "Bryce Dimas",
       "private": true,
       "since": "2024-08-16T15:05:48.000Z"
+    },
+    {
+      "username": "bryce.huang",
+      "name": "Bryce Huang",
+      "private": true,
+      "since": "2026-07-30T16:50:36.870Z"
     },
     {
       "username": "bse_at_ucla",
@@ -9619,6 +9575,11 @@
       "since": "2024-08-24T15:11:16.000Z"
     },
     {
+      "username": "kettle.recipes",
+      "name": "Kettle Recipes",
+      "since": "2026-07-30T16:50:36.870Z"
+    },
+    {
       "username": "kev.zhang1",
       "name": "Kevin",
       "since": "2025-09-23T00:12:25.000Z"
@@ -9887,6 +9848,12 @@
       "name": "Adam Xiong",
       "private": true,
       "since": "2025-09-07T02:08:31.000Z"
+    },
+    {
+      "username": "mandascai",
+      "name": "manda 蔡",
+      "private": true,
+      "since": "2026-07-30T16:50:36.870Z"
     },
     {
       "username": "mankydankybanky",
@@ -10963,7 +10930,7 @@
     {
       "username": "solomons6927",
       "name": "Solomon",
-      "since": "2026-07-30T16:28:25.410Z"
+      "since": "2026-07-30T16:55:40.095Z"
     },
     {
       "username": "sonsynewt",

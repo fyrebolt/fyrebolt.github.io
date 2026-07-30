@@ -12,6 +12,9 @@ import {
   checkCompleteness,
   alreadySucceededToday,
   localDay,
+  verdict,
+  expectedRelationship,
+  stableList,
 } from '../scripts/instagram-pull.mjs';
 
 const P = (username, extra = {}) => ({ username, ...extra });
@@ -234,5 +237,96 @@ test('alreadySucceededToday — the once-daily guard', async (t) => {
   await t.test('just after local midnight is a new day', () => {
     const justAfter = new Date('2026-07-31T00:05:00-07:00');
     assert.equal(alreadySucceededToday(at('2026-07-30T23:50:00-07:00'), justAfter), false);
+  });
+});
+
+test('verdict — the guard against paging churn', async (t) => {
+  // Why this exists: two runs minutes apart both returned 865 following, but
+  // not the same 865. Four accounts fell out of the paged read and four others
+  // appeared, inventing four unfollows and four follows that never happened.
+  // Totals matched exactly, so checkCompleteness could not have caught it.
+  const inbound = (kind) => ({ username: 'x', kind, t: NOW });
+  const outbound = (kind) => ({ username: 'x', kind, t: NOW, dir: 'out' });
+
+  await t.test('inbound events are judged on follows_viewer', () => {
+    assert.equal(expectedRelationship(inbound('follow')).field, 'follows_viewer');
+    assert.equal(verdict(inbound('follow'), { follows_viewer: true }), true);
+    assert.equal(verdict(inbound('follow'), { follows_viewer: false }), false);
+    assert.equal(verdict(inbound('unfollow'), { follows_viewer: false }), true);
+    assert.equal(verdict(inbound('unfollow'), { follows_viewer: true }), false);
+  });
+
+  await t.test('outbound events are judged on followed_by_viewer', () => {
+    assert.equal(expectedRelationship(outbound('follow')).field, 'followed_by_viewer');
+    assert.equal(verdict(outbound('unfollow'), { followed_by_viewer: false }), true);
+    // The real regression: still following them, so the "you unfollowed" is bogus.
+    assert.equal(verdict(outbound('unfollow'), { followed_by_viewer: true }), false);
+    assert.equal(verdict(outbound('follow'), { followed_by_viewer: true }), true);
+  });
+
+  await t.test('the two directions do not read each other’s field', () => {
+    // An inbound verdict must ignore followed_by_viewer entirely, and vice versa.
+    assert.equal(verdict(inbound('unfollow'), { followed_by_viewer: false }), null);
+    assert.equal(verdict(outbound('unfollow'), { follows_viewer: false }), null);
+  });
+
+  await t.test('a deleted account confirms an unfollow but never a follow', () => {
+    assert.equal(verdict(inbound('unfollow'), 'gone'), true);
+    assert.equal(verdict(outbound('unfollow'), 'gone'), true);
+    assert.equal(verdict(inbound('follow'), 'gone'), false);
+  });
+
+  await t.test('an unknown relationship yields null, so the caller drops it', () => {
+    // Better to miss a real change — the next run catches it — than to write
+    // fiction into permanent history.
+    assert.equal(verdict(inbound('unfollow'), {}), null);
+    assert.equal(verdict(inbound('unfollow'), null), null);
+    assert.equal(verdict(inbound('unfollow'), { follows_viewer: undefined }), null);
+    assert.equal(verdict(inbound('unfollow'), { follows_viewer: 'no' }), null, 'non-boolean is not a verdict');
+  });
+});
+
+test('stableList — people leave only when an unfollow is confirmed', async (t) => {
+  // The other half of the paging-churn defect. Rebuilding the list from each
+  // read meant a missed page deleted people, and their reappearance next run
+  // looked like a brand-new follow — which verification cannot disprove,
+  // because "do you follow them?" is true either way.
+  const none = new Set();
+
+  await t.test('someone missing from a read is retained', () => {
+    const out = stableList([P('kept'), P('missedByPaging')], [P('kept')], none);
+    assert.deepEqual(out.map((p) => p.username), ['kept', 'missedByPaging']);
+  });
+
+  await t.test('and therefore never re-appears as a new follow', () => {
+    const afterMiss = stableList([P('a'), P('b')], [P('a')], none);
+    const { gained } = diffFollowers([P('a'), P('b')], afterMiss, NOW);
+    assert.deepEqual(gained, [], 'b was never dropped, so its return is not a follow');
+  });
+
+  await t.test('a confirmed unfollow does remove them', () => {
+    const out = stableList([P('a'), P('leaver')], [P('a')], new Set(['leaver']));
+    assert.deepEqual(out.map((p) => p.username), ['a']);
+  });
+
+  await t.test('genuinely new accounts are added', () => {
+    const out = stableList([P('a')], [P('a'), P('brandNew')], none);
+    assert.deepEqual(out.map((p) => p.username).sort(), ['a', 'brandNew']);
+  });
+
+  await t.test('fresh fields win, but the earliest known date is kept', () => {
+    const out = stableList(
+      [P('a', { since: '2024-01-01T00:00:00.000Z', name: 'Old' })],
+      [P('a', { since: NOW, name: 'New', verified: true })],
+      none,
+    );
+    assert.equal(out[0].since, '2024-01-01T00:00:00.000Z');
+    assert.equal(out[0].name, 'New');
+    assert.equal(out[0].verified, true);
+  });
+
+  await t.test('matching is case-insensitive, so case drift cannot duplicate', () => {
+    const out = stableList([P('Alice')], [P('alice')], none);
+    assert.equal(out.length, 1);
   });
 });

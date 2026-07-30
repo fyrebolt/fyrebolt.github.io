@@ -497,6 +497,7 @@ function TrackerBody({
         setDomain={setDomain}
         selected={pickedDay}
         setSelected={setPickedDay}
+        onOpen={setOpenProfile}
       />
 
       <section className="ig-activity">
@@ -526,7 +527,9 @@ function TrackerBody({
               ))}
             </div>
 
-            {selected && <DayDetail bucket={selected} account={data.account} />}
+            {selected && (
+              <DayDetail bucket={selected} account={data.account} onOpen={setOpenProfile} />
+            )}
           </>
         )}
       </section>
@@ -881,7 +884,15 @@ function Avatar({ username }: { username: string }) {
   );
 }
 
-function DayDetail({ bucket, account }: { bucket: DayBucket; account: string }) {
+function DayDetail({
+  bucket,
+  account,
+  onOpen,
+}: {
+  bucket: DayBucket;
+  account: string;
+  onOpen: (username: string) => void;
+}) {
   return (
     <div className="ig-day-detail">
       <div className="ig-col">
@@ -892,7 +903,7 @@ function DayDetail({ bucket, account }: { bucket: DayBucket; account: string }) 
         {bucket.follows.length ? (
           <ul className="ig-user-list">
             {bucket.follows.map((e) => (
-              <UserRow key={`f-${e.username}`} event={e} />
+              <UserRow key={`f-${e.username}`} event={e} onOpen={onOpen} />
             ))}
           </ul>
         ) : (
@@ -908,7 +919,7 @@ function DayDetail({ bucket, account }: { bucket: DayBucket; account: string }) 
         {bucket.unfollows.length ? (
           <ul className="ig-user-list">
             {bucket.unfollows.map((e) => (
-              <UserRow key={`u-${e.username}`} event={e} />
+              <UserRow key={`u-${e.username}`} event={e} onOpen={onOpen} />
             ))}
           </ul>
         ) : (
@@ -923,7 +934,7 @@ function DayDetail({ bucket, account }: { bucket: DayBucket; account: string }) 
           </div>
           <ul className="ig-user-list">
             {bucket.outbound.map((e) => (
-              <UserRow key={`o-${e.kind}-${e.username}`} event={e} />
+              <UserRow key={`o-${e.kind}-${e.username}`} event={e} onOpen={onOpen} />
             ))}
           </ul>
         </div>
@@ -935,18 +946,19 @@ function DayDetail({ bucket, account }: { bucket: DayBucket; account: string }) 
   );
 }
 
-function UserRow({ event }: { event: FollowEvent }) {
+function UserRow({
+  event,
+  onOpen,
+}: {
+  event: FollowEvent;
+  onOpen: (username: string) => void;
+}) {
   return (
     <li className="ig-user-row">
       <span className={`ig-avatar ${event.dir === 'out' ? 'out' : event.kind}`} aria-hidden>
         {event.username.slice(0, 1).toUpperCase()}
       </span>
-      <a
-        className="ig-user-name"
-        href={`https://instagram.com/${event.username}`}
-        target="_blank"
-        rel="noopener noreferrer"
-      >
+      <button className="ig-user-name" onClick={() => onOpen(event.username)}>
         {event.name ? (
           <>
             {event.name} <span className="ig-user-handle">@{event.username}</span>
@@ -954,7 +966,7 @@ function UserRow({ event }: { event: FollowEvent }) {
         ) : (
           `@${event.username}`
         )}
-      </a>
+      </button>
       <span className={`ig-user-tag ${event.dir === 'out' ? 'out' : event.kind}`}>
         {event.dir === 'out'
           ? `You ${event.kind === 'follow' ? 'followed' : 'unfollowed'}`
@@ -1032,6 +1044,7 @@ function ChartCard({
   setDomain,
   selected,
   setSelected,
+  onOpen,
 }: {
   data: TrackerData;
   range: Range;
@@ -1039,6 +1052,7 @@ function ChartCard({
   setDomain: (d: [number, number] | null) => void;
   selected: string | null;
   setSelected: (k: string | null) => void;
+  onOpen: (username: string) => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hover, setHover] = useState<number | null>(null);
@@ -1272,7 +1286,14 @@ function ChartCard({
         )}
       </p>
 
-      {detail && <DayBreakdown day={detail} trackStart={trackStart} pinned={Boolean(selected)} />}
+      {detail && (
+        <DayBreakdown
+          day={detail}
+          trackStart={trackStart}
+          pinned={Boolean(selected)}
+          onOpen={onOpen}
+        />
+      )}
     </section>
   );
 }
@@ -1284,10 +1305,12 @@ function DayBreakdown({
   day,
   trackStart,
   pinned,
+  onOpen,
 }: {
   day: DayActivity;
   trackStart: string | null;
   pinned: boolean;
+  onOpen: (username: string) => void;
 }) {
   const beforeTracking = trackStart ? new Date(day.key) < new Date(dayKey(trackStart)) : true;
 
@@ -1314,14 +1337,9 @@ function DayBreakdown({
           {day.follows.slice(0, DETAIL_LIMIT).map((p) => (
             <li key={`f-${p.username}`} className="ig-breakdown-row">
               <Avatar username={p.username} />
-              <a
-                className="ig-breakdown-handle"
-                href={`https://instagram.com/${p.username}`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
+              <button className="ig-breakdown-handle" onClick={() => onOpen(p.username)}>
                 {p.name || `@${p.username}`}
-              </a>
+              </button>
               <span className="ig-breakdown-tag pos">followed</span>
             </li>
           ))}
@@ -1338,14 +1356,9 @@ function DayBreakdown({
           {day.outbound.map((e) => (
             <li key={`o-${e.kind}-${e.username}`} className="ig-breakdown-row">
               <Avatar username={e.username} />
-              <a
-                className="ig-breakdown-handle"
-                href={`https://instagram.com/${e.username}`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
+              <button className="ig-breakdown-handle" onClick={() => onOpen(e.username)}>
                 {e.name || `@${e.username}`}
-              </a>
+              </button>
               <span className="ig-breakdown-tag out">
                 you {e.kind === 'follow' ? 'followed' : 'unfollowed'}
               </span>
@@ -1359,14 +1372,9 @@ function DayBreakdown({
           {day.unfollows.map((e) => (
             <li key={`u-${e.username}`} className="ig-breakdown-row">
               <Avatar username={e.username} />
-              <a
-                className="ig-breakdown-handle"
-                href={`https://instagram.com/${e.username}`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
+              <button className="ig-breakdown-handle" onClick={() => onOpen(e.username)}>
                 {e.name || `@${e.username}`}
-              </a>
+              </button>
               <span className="ig-breakdown-tag neg">unfollowed</span>
             </li>
           ))}
