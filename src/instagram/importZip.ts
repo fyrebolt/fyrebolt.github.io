@@ -23,33 +23,65 @@ function basename(path: string): string {
   return path.split('/').pop() || path;
 }
 
-/** Read the followers and following file(s) out of an Instagram export ZIP. */
-export async function parseExportZip(file: File): Promise<ImportedLists> {
-  const buf = new Uint8Array(await file.arrayBuffer());
-
-  let files: Record<string, Uint8Array>;
-  try {
-    files = unzipSync(buf);
-  } catch {
-    throw new Error('That file could not be read as a ZIP. Upload the original .zip from Instagram.');
-  }
+/**
+ * Read the followers/following lists out of an Instagram export.
+ *
+ * Accepts either the original `.zip` or the loose `.json` files from inside it
+ * — people usually unzip before they get here, and re-zipping two files just to
+ * satisfy the importer is a silly thing to ask.
+ */
+export async function parseExport(files: File[]): Promise<ImportedLists> {
+  const texts = await collectTexts(files);
 
   // Match by basename so the "followers_and_following" folder name (which
-  // contains "following") doesn't confuse either pattern.
-  const followers = readList(files, FOLLOWERS_RE);
-  const following = readList(files, FOLLOWING_RE);
+  // itself contains "following") doesn't confuse either pattern.
+  const followers = readList(texts, FOLLOWERS_RE);
+  const following = readList(texts, FOLLOWING_RE);
 
   if (followers.length === 0 && following.length === 0) {
     throw new Error(
-      'No followers or following file found. In the export, choose “Followers and following” and format JSON (not HTML).',
+      'No followers or following data found. Drop in followers_1.json and following.json ' +
+        '(or the original .zip). In the export, choose “Followers and following”, format JSON — not HTML.',
     );
   }
   return { followers, following };
 }
 
+/** Filename → file contents, unwrapping any ZIPs along the way. */
+async function collectTexts(files: File[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  let sawSomethingUsable = false;
+
+  for (const file of files) {
+    if (/\.zip$/i.test(file.name)) {
+      let unzipped: Record<string, Uint8Array>;
+      try {
+        unzipped = unzipSync(new Uint8Array(await file.arrayBuffer()));
+      } catch {
+        throw new Error(`“${file.name}” could not be read as a ZIP.`);
+      }
+      for (const [name, bytes] of Object.entries(unzipped)) {
+        const base = basename(name);
+        if (FOLLOWERS_RE.test(base) || FOLLOWING_RE.test(base)) {
+          out[name] = strFromU8(bytes);
+          sawSomethingUsable = true;
+        }
+      }
+    } else if (/\.json$/i.test(file.name)) {
+      out[file.name] = await file.text();
+      sawSomethingUsable = true;
+    }
+  }
+
+  if (!sawSomethingUsable) {
+    throw new Error('Drop in the .json files from your export (or the original .zip).');
+  }
+  return out;
+}
+
 /** Collect and de-duplicate every entry across the files matching `re`. */
-function readList(files: Record<string, Uint8Array>, re: RegExp): Profile[] {
-  const names = Object.keys(files)
+function readList(texts: Record<string, string>, re: RegExp): Profile[] {
+  const names = Object.keys(texts)
     .filter((n) => re.test(basename(n)))
     .sort();
 
@@ -58,7 +90,7 @@ function readList(files: Record<string, Uint8Array>, re: RegExp): Profile[] {
   for (const name of names) {
     let json: unknown;
     try {
-      json = JSON.parse(strFromU8(files[name]));
+      json = JSON.parse(texts[name]);
     } catch {
       continue;
     }
@@ -118,25 +150,89 @@ function toArray(json: unknown): unknown[] {
  * relationship start dates.
  */
 export function buildFromExport(imported: ImportedLists, prev: TrackerData | null): TrackerData {
-  const nowIso = new Date().toISOString();
-  const account = prev?.account || 'hastinchen';
+  const hasLiveData = Boolean(prev && !prev.sample && prev.followers?.length);
+  return hasLiveData ? backfill(imported, prev!) : coldStart(imported, prev);
+}
 
+/**
+ * Merge an export into existing live data.
+ *
+ * The export is a *historical document*, not a newer reading — Instagram takes
+ * hours to prepare it, so it is already stale on arrival. It is therefore used
+ * only for what it alone knows (when each relationship began, and the shape of
+ * the growth curve); the live lists stay authoritative.
+ *
+ * Critically, no events are derived from it. An export lists only who follows
+ * you *now*, so it can neither prove nor disprove an unfollow — and diffing
+ * against a stale one invents an unfollow for everybody who arrived after
+ * Instagram cut the file.
+ */
+function backfill(imported: ImportedLists, prev: TrackerData): TrackerData {
+  return {
+    ...prev,
+    followers: applyDates(prev.followers ?? [], imported.followers),
+    following: applyDates(prev.following ?? [], imported.following),
+    snapshots: mergeSnapshots(prev.snapshots, reconstructSnapshots(imported.followers)),
+  };
+}
+
+/** First real import: the export *is* the data. */
+function coldStart(imported: ImportedLists, prev: TrackerData | null): TrackerData {
+  const nowIso = new Date().toISOString();
   const byUsername = (a: Profile, b: Profile) => a.username.localeCompare(b.username);
   const followers = [...imported.followers].sort(byUsername);
   const following = [...imported.following].sort(byUsername);
 
-  const snapshots = reconstructSnapshots(followers, following.length, nowIso);
-  const events = diffEvents(followers, prev, nowIso);
+  const snapshots = reconstructSnapshots(followers);
+  // Close the curve with the true current totals, covering entries the export
+  // gave no timestamp for.
+  snapshots.push({ t: nowIso, followers: followers.length, following: following.length });
 
-  return { account, generatedAt: nowIso, sample: false, snapshots, events, followers, following };
+  return {
+    account: prev?.account || 'hastinchen',
+    generatedAt: nowIso,
+    sample: false,
+    snapshots,
+    events: seedRecentFollows(followers),
+    followers,
+    following,
+  };
+}
+
+/**
+ * Copy real relationship dates onto the live list. The export's timestamps are
+ * ground truth; the daily puller can only record when it first *saw* someone,
+ * so anyone it discovered gets stamped with that day instead of the real one.
+ */
+function applyDates(live: Profile[], fromExport: Profile[]): Profile[] {
+  const byName = new Map(
+    fromExport.filter((p) => p.since).map((p) => [p.username.toLowerCase(), p]),
+  );
+  return live.map((p) => {
+    const match = byName.get(p.username.toLowerCase());
+    if (!match) return p; // followed after the export was cut — keep what we have
+    return { ...p, since: match.since, name: p.name ?? match.name };
+  });
+}
+
+/**
+ * Reconstructed history before the first real reading, then the real ones.
+ *
+ * Actual readings always win where they exist: they counted everybody at the
+ * time, whereas the reconstruction counts only followers who are *still* here,
+ * so it can never dip and understates the past.
+ */
+function mergeSnapshots(real: Snapshot[] | undefined, reconstructed: Snapshot[]): Snapshot[] {
+  if (!real?.length) return reconstructed;
+  const earliestReal = Math.min(...real.map((s) => new Date(s.t).getTime()));
+  const history = reconstructed.filter((s) => new Date(s.t).getTime() < earliestReal);
+  return [...history, ...real].sort(
+    (a, b) => new Date(a.t).getTime() - new Date(b.t).getTime(),
+  );
 }
 
 /** Cumulative follower count over time from each follower's start timestamp. */
-function reconstructSnapshots(
-  followers: Profile[],
-  followingTotal: number,
-  nowIso: string,
-): Snapshot[] {
+function reconstructSnapshots(followers: Profile[]): Snapshot[] {
   const times = followers
     .map((f) => f.since)
     .filter((t): t is string => Boolean(t))
@@ -157,44 +253,17 @@ function reconstructSnapshots(
       snapshots[snapshots.length - 1].followers = count;
     }
   }
-  // Final point = the true current totals (covers entries with no timestamp).
-  snapshots.push({ t: nowIso, followers: followers.length, following: followingTotal });
   return snapshots;
 }
 
-/** Compare against the previous real import to produce follow/unfollow events. */
-function diffEvents(
-  followers: Profile[],
-  prev: TrackerData | null,
-  nowIso: string,
-): FollowEvent[] {
-  const hasPrevReal = Boolean(prev && prev.followers && prev.followers.length && !prev.sample);
-
-  if (!hasPrevReal) {
-    // First real import: seed recent follows (last 45 days) from the export so
-    // the daily activity has real data immediately. Unfollows need a baseline.
-    const cutoff = Date.now() - 45 * 24 * 60 * 60 * 1000;
-    return followers
-      .filter((f) => f.since && new Date(f.since).getTime() >= cutoff)
-      .map((f) => ({ username: f.username, kind: 'follow' as const, t: f.since!, name: f.name }))
-      .sort((a, b) => (a.t < b.t ? 1 : -1));
-  }
-
-  const prevSet = new Set(prev!.followers!.map((f) => f.username.toLowerCase()));
-  const curSet = new Set(followers.map((f) => f.username.toLowerCase()));
-  const prevByKey = new Map(prev!.followers!.map((f) => [f.username.toLowerCase(), f]));
-
-  const gained: FollowEvent[] = followers
-    .filter((f) => !prevSet.has(f.username.toLowerCase()))
-    .map((f) => ({ username: f.username, kind: 'follow', t: f.since || nowIso, name: f.name }));
-  const lost: FollowEvent[] = [...prevSet]
-    .filter((u) => !curSet.has(u))
-    .map((u) => {
-      const p = prevByKey.get(u);
-      return { username: p?.username ?? u, kind: 'unfollow' as const, t: nowIso, name: p?.name };
-    });
-
-  return [...gained, ...lost, ...(prev!.events ?? [])]
-    .sort((a, b) => (a.t < b.t ? 1 : -1))
-    .slice(0, 5000);
+/**
+ * Seed the activity feed on a cold start: recent follows only. Unfollows need a
+ * baseline to diff against, and an export has none.
+ */
+function seedRecentFollows(followers: Profile[]): FollowEvent[] {
+  const cutoff = Date.now() - 45 * 24 * 60 * 60 * 1000;
+  return followers
+    .filter((f) => f.since && new Date(f.since).getTime() >= cutoff)
+    .map((f) => ({ username: f.username, kind: 'follow' as const, t: f.since!, name: f.name }))
+    .sort((a, b) => (a.t < b.t ? 1 : -1));
 }
