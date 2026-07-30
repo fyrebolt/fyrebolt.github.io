@@ -39,6 +39,7 @@ import {
   clearToken,
   type AgentStatus,
 } from './agent';
+import ProfileSheet from './ProfileSheet';
 import './instagram.css';
 
 interface ImportState {
@@ -449,6 +450,7 @@ function TrackerBody({
   // Chart zoom + pinned day. Held here so picking a preset can clear the zoom.
   const [domain, setDomain] = useState<[number, number] | null>(null);
   const [pickedDay, setPickedDay] = useState<string | null>(null);
+  const [openProfile, setOpenProfile] = useState<string | null>(null);
 
   const [selectedDay, setSelectedDay] = useState<string>(() => buckets[0]?.key ?? '');
   const selected = buckets.find((b) => b.key === selectedDay) ?? buckets[0];
@@ -518,6 +520,7 @@ function TrackerBody({
                   <span className="ig-day-chip-net">
                     <span className="pos">+{b.follows.length}</span>
                     <span className="neg">−{b.unfollows.length}</span>
+                    {b.outbound.length > 0 && <span className="out">⇢{b.outbound.length}</span>}
                   </span>
                 </button>
               ))}
@@ -528,7 +531,20 @@ function TrackerBody({
         )}
       </section>
 
-      <PeopleSection followers={data.followers ?? []} following={data.following ?? []} />
+      <PeopleSection
+        followers={data.followers ?? []}
+        following={data.following ?? []}
+        onOpen={setOpenProfile}
+      />
+
+      {openProfile && (
+        <ProfileSheet
+          key={openProfile}
+          username={openProfile}
+          data={data}
+          onClose={() => setOpenProfile(null)}
+        />
+      )}
     </div>
   );
 }
@@ -581,7 +597,15 @@ const HINTS: Record<ListKind, string> = {
   ghosts: 'You follow them and they haven’t followed back.',
 };
 
-function PeopleSection({ followers, following }: { followers: Profile[]; following: Profile[] }) {
+function PeopleSection({
+  followers,
+  following,
+  onOpen,
+}: {
+  followers: Profile[];
+  following: Profile[];
+  onOpen: (username: string) => void;
+}) {
   const [kind, setKind] = useState<ListKind>('followers');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('recent');
@@ -679,6 +703,7 @@ function PeopleSection({ followers, following }: { followers: Profile[]; followi
           rows={rows}
           mutualKeys={mutualKeys}
           kind={kind}
+          onOpen={onOpen}
         />
       )}
 
@@ -744,10 +769,12 @@ function VirtualList({
   rows,
   mutualKeys,
   kind,
+  onOpen,
 }: {
   rows: Profile[];
   mutualKeys: Set<string>;
   kind: ListKind;
+  onOpen: (username: string) => void;
 }) {
   const [scrollTop, setScrollTop] = useState(0);
 
@@ -769,6 +796,7 @@ function VirtualList({
               person={p}
               kind={kind}
               mutual={mutualKeys.has(p.username.toLowerCase())}
+              onOpen={onOpen}
             />
           ))}
         </ul>
@@ -781,10 +809,12 @@ function PersonRow({
   person,
   kind,
   mutual,
+  onOpen,
 }: {
   person: Profile;
   kind: ListKind;
   mutual: boolean;
+  onOpen: (username: string) => void;
 }) {
   const since = monthYear(person.since);
   // In the mutuals tab the badge would be on every row, so it earns nothing.
@@ -792,6 +822,11 @@ function PersonRow({
 
   return (
     <li className="ig-person" style={{ height: ROW_H }}>
+      <button
+        className="ig-person-open"
+        onClick={() => onOpen(person.username)}
+        aria-label={`Details for @${person.username}`}
+      />
       <Avatar username={person.username} />
       <span className="ig-person-text">
         <span className="ig-person-top">
@@ -814,14 +849,7 @@ function PersonRow({
           )}
           {person.private && <span className="ig-chip-mini">private</span>}
         </span>
-        <a
-          className="ig-person-handle"
-          href={`https://instagram.com/${person.username}`}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          @{person.username}
-        </a>
+        <span className="ig-person-handle">@{person.username}</span>
       </span>
       {showMutual && <span className="ig-person-badge mutual">mutual</span>}
       {since && <span className="ig-person-since">{since}</span>}
@@ -887,6 +915,19 @@ function DayDetail({ bucket, account }: { bucket: DayBucket; account: string }) 
           <p className="ig-empty">Nobody unfollowed this day. 🎉</p>
         )}
       </div>
+      {bucket.outbound.length > 0 && (
+        <div className="ig-col ig-col-out">
+          <div className="ig-col-head">
+            <span className="ig-col-title">You did</span>
+            <span className="ig-col-badge out">{bucket.outbound.length}</span>
+          </div>
+          <ul className="ig-user-list">
+            {bucket.outbound.map((e) => (
+              <UserRow key={`o-${e.kind}-${e.username}`} event={e} />
+            ))}
+          </ul>
+        </div>
+      )}
       <span className="ig-day-detail-account" aria-hidden>
         @{account}
       </span>
@@ -897,7 +938,7 @@ function DayDetail({ bucket, account }: { bucket: DayBucket; account: string }) 
 function UserRow({ event }: { event: FollowEvent }) {
   return (
     <li className="ig-user-row">
-      <span className={`ig-avatar ${event.kind}`} aria-hidden>
+      <span className={`ig-avatar ${event.dir === 'out' ? 'out' : event.kind}`} aria-hidden>
         {event.username.slice(0, 1).toUpperCase()}
       </span>
       <a
@@ -914,8 +955,12 @@ function UserRow({ event }: { event: FollowEvent }) {
           `@${event.username}`
         )}
       </a>
-      <span className={`ig-user-tag ${event.kind}`}>
-        {event.kind === 'follow' ? 'Followed' : 'Unfollowed'}
+      <span className={`ig-user-tag ${event.dir === 'out' ? 'out' : event.kind}`}>
+        {event.dir === 'out'
+          ? `You ${event.kind === 'follow' ? 'followed' : 'unfollowed'}`
+          : event.kind === 'follow'
+            ? 'Followed'
+            : 'Unfollowed'}
       </span>
     </li>
   );
@@ -1185,13 +1230,19 @@ function ChartCard({
           >
             <span className="ig-tip-date">{fullDate(active.t)}</span>
             <span className="ig-tip-count">{active.followers.toLocaleString()} followers</span>
-            {activeDay && (activeDay.follows.length > 0 || activeDay.unfollows.length > 0) && (
+            {activeDay &&
+              (activeDay.follows.length > 0 ||
+                activeDay.unfollows.length > 0 ||
+                activeDay.outbound.length > 0) && (
               <span className="ig-tip-delta">
                 {activeDay.follows.length > 0 && (
                   <span className="pos">+{activeDay.follows.length}</span>
                 )}
                 {activeDay.unfollows.length > 0 && (
                   <span className="neg">−{activeDay.unfollows.length}</span>
+                )}
+                {activeDay.outbound.length > 0 && (
+                  <span className="out">{activeDay.outbound.length} by you</span>
                 )}
               </span>
             )}
@@ -1240,7 +1291,8 @@ function DayBreakdown({
 }) {
   const beforeTracking = trackStart ? new Date(day.key) < new Date(dayKey(trackStart)) : true;
 
-  if (day.follows.length === 0 && day.unfollows.length === 0) return null;
+  if (day.follows.length === 0 && day.unfollows.length === 0 && day.outbound.length === 0)
+    return null;
 
   return (
     <div className={`ig-breakdown ${pinned ? 'is-pinned' : ''}`}>
@@ -1250,6 +1302,9 @@ function DayBreakdown({
           {day.follows.length > 0 && <span className="pos">+{day.follows.length} followed</span>}
           {day.unfollows.length > 0 && (
             <span className="neg">−{day.unfollows.length} unfollowed</span>
+          )}
+          {day.outbound.length > 0 && (
+            <span className="out">{day.outbound.length} by you</span>
           )}
         </span>
       </div>
@@ -1275,6 +1330,27 @@ function DayBreakdown({
               + {day.follows.length - DETAIL_LIMIT} more
             </li>
           )}
+        </ul>
+      )}
+
+      {day.outbound.length > 0 && (
+        <ul className="ig-breakdown-list">
+          {day.outbound.map((e) => (
+            <li key={`o-${e.kind}-${e.username}`} className="ig-breakdown-row">
+              <Avatar username={e.username} />
+              <a
+                className="ig-breakdown-handle"
+                href={`https://instagram.com/${e.username}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {e.name || `@${e.username}`}
+              </a>
+              <span className="ig-breakdown-tag out">
+                you {e.kind === 'follow' ? 'followed' : 'unfollowed'}
+              </span>
+            </li>
+          ))}
         </ul>
       )}
 

@@ -116,6 +116,58 @@ export async function fetchHistory(token: string): Promise<unknown | null> {
   }
 }
 
+export interface LiveProfile {
+  username: string;
+  fullName?: string;
+  pic?: string;
+  bio?: string;
+  verified?: boolean;
+  private?: boolean;
+  followers: number | null;
+  following: number | null;
+  posts: number | null;
+  notFound?: boolean;
+}
+
+/** Live overview for one account. Null when the agent isn't running. */
+export async function fetchProfileInfo(
+  token: string,
+  username: string,
+): Promise<LiveProfile | null> {
+  try {
+    const res = await withTimeout(
+      `/profile?username=${encodeURIComponent(username)}`,
+      { headers: { 'x-tracker-token': token } },
+      9000,
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as LiveProfile;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch an avatar through the agent and hand back a blob URL.
+ *
+ * Deliberately not an `<img src>` pointing at the agent: that couldn't carry the
+ * token header, which is what forces the CORS preflight the whole security model
+ * rests on. Revoke the returned URL when done.
+ */
+export async function fetchAvatar(token: string, src: string): Promise<string | null> {
+  try {
+    const res = await withTimeout(
+      `/avatar?src=${encodeURIComponent(src)}`,
+      { headers: { 'x-tracker-token': token } },
+      9000,
+    );
+    if (!res.ok) return null;
+    return URL.createObjectURL(await res.blob());
+  } catch {
+    return null;
+  }
+}
+
 /** Poll the current run. Returns null if the agent became unreachable. */
 export async function fetchStatus(token: string): Promise<AgentStatus | null> {
   try {
