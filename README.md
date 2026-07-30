@@ -186,6 +186,43 @@ paged against the count Instagram reports for the profile and refuses to write i
 it's short (or if the follower count halved since the last run). `--force`
 overrides it when a drop is genuinely real.
 
+#### The "Update now" button
+
+The deployed site is static, so the page itself can't pull anything — but a
+browser *on this Mac* can reach `127.0.0.1`, even from an `https://` page
+(loopback is exempt from mixed-content blocking). A small local agent takes
+advantage of that:
+
+```bash
+./scripts/instagram-schedule.sh agent-install
+```
+
+That prints a generated passphrase, which you enter the first time you press
+**Update now**; after that it's remembered in the browser. The button only
+appears when the agent answers, so on your phone — or in anyone else's browser —
+it simply isn't there. While a pull runs it shows live progress, and when it
+finishes the page loads the new numbers straight from the agent rather than
+waiting out the GitHub Pages redeploy.
+
+`agent-status`, `agent-logs` and `agent-uninstall` do what they say.
+
+**How it's kept safe.** CORS does not stop a request from arriving — it only
+stops the *page* reading the response — so any site you visit could fire a
+request at that port. Four things make that harmless:
+
+- `GET /health` has no side effects and reveals nothing but liveness. Everything
+  else needs the token.
+- `POST /pull` requires a custom header, which forces a CORS preflight. The
+  agent refuses the preflight for any origin outside its allowlist, so a hostile
+  page's request dies at the `OPTIONS` and never executes. The origin is checked
+  again on the request itself, since a non-browser client skips CORS entirely.
+- The token is compared in constant time and lives only in `localStorage` for the
+  allowed origin, where no other site can read it.
+- It binds to `127.0.0.1` only (verified unreachable over the LAN), runs one
+  fixed action rather than arbitrary commands, allows a single concurrent run,
+  and enforces a two-minute cooldown so a stuck button can't trigger Instagram's
+  rate limiting.
+
 #### Backfilling real follow dates
 
 The private API doesn't say *when* someone followed you, so accounts first seen by

@@ -91,6 +91,64 @@
 .ig-btn-quiet {
   color: var(--color-text-muted);
 }
+
+/* ===== "Update now" via the local agent ===== */
+.ig-agent-btn {
+  font-variant-numeric: tabular-nums;
+}
+.ig-agent-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-accent);
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--color-fill-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.ig-spinner {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--color-accent) 28%, transparent);
+  border-top-color: var(--color-accent);
+  animation: ig-spin 0.7s linear infinite;
+}
+@keyframes ig-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ig-spinner {
+    animation-duration: 2.4s;
+  }
+}
+.ig-agent-unlock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ig-agent-input {
+  width: 190px;
+  font-size: 13px;
+  padding: 7px 10px;
+}
+.ig-agent-note {
+  font-size: 12.5px;
+  font-weight: 500;
+  align-self: center;
+}
+.ig-agent-note.ok {
+  color: var(--color-primary-green);
+}
+.ig-agent-note.err {
+  color: var(--color-primary-pink);
+}
 .ig-import-msg {
   font-size: 13px;
   margin-top: 10px;
