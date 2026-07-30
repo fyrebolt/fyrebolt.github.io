@@ -265,6 +265,18 @@ export function timeAgo(iso: string): string {
   return `${days} day${days === 1 ? '' : 's'} ago`;
 }
 
+/**
+ * How far behind the data is. The pull is scheduled daily, so anything past ~40
+ * hours means at least one run was missed — usually an expired session cookie.
+ * The site is static and can't check on the job itself, so surfacing the age of
+ * the data is the only way it can flag that tracking has stalled.
+ */
+export function staleness(generatedAt: string): { hours: number; level: 'ok' | 'warn' | 'bad' } {
+  const hours = (Date.now() - new Date(generatedAt).getTime()) / 3_600_000;
+  if (!Number.isFinite(hours) || hours < 40) return { hours, level: 'ok' };
+  return { hours, level: hours < 96 ? 'warn' : 'bad' };
+}
+
 /** Short absolute date for a relationship start, e.g. "Mar 2024". */
 export function monthYear(iso: string | undefined): string {
   if (!iso) return '';

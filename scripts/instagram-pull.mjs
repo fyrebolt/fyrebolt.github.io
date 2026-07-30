@@ -57,6 +57,7 @@ const args = new Set(process.argv.slice(2));
 const DRY_RUN = args.has('--dry-run');
 const COMMIT = args.has('--commit');
 const FORCE = args.has('--force');
+const NO_NOTIFY = args.has('--no-notify');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const jitter = () => DELAY_MIN + Math.random() * (DELAY_MAX - DELAY_MIN);
@@ -65,9 +66,39 @@ function log(...parts) {
   console.log(`[${new Date().toISOString()}]`, ...parts);
 }
 
+/**
+ * Post a macOS notification. This job runs unattended, so a failure otherwise
+ * only lands in a log file nobody opens — you could go a month believing it's
+ * still tracking. Strings are passed as argv rather than interpolated into the
+ * AppleScript source, so quotes or emoji in a message can't break it.
+ */
+function notify(title, subtitle, message) {
+  if (NO_NOTIFY || process.platform !== 'darwin') return;
+  const scpt =
+    'on run argv\n' +
+    'display notification (item 3 of argv) with title (item 1 of argv) ' +
+    'subtitle (item 2 of argv) sound name "Basso"\n' +
+    'end run';
+  try {
+    execFileSync('osascript', ['-e', scpt, title, subtitle, message], {
+      stdio: 'ignore',
+      timeout: 10000,
+    });
+  } catch {
+    /* notifications are a courtesy — never let one fail the run */
+  }
+}
+
 function die(code, message, hint) {
   console.error(`\n✗ ${message}`);
   if (hint) console.error(`\n  ${hint}\n`);
+  // Exit 2 means "needs your attention" (expired cookie, bad config); 1 is
+  // transient (throttled, network) and usually fixes itself by tomorrow.
+  notify(
+    'Instagram Tracker',
+    code === 2 ? 'Action needed — tracking has stopped' : 'Run failed',
+    message,
+  );
   process.exit(code);
 }
 
@@ -157,11 +188,12 @@ async function getJson(url, creds, referer, attempt = 1) {
   }
 
   if (res.status === 401 || res.status === 403) {
+    // Phrased to read well both in a terminal and as a notification body.
     die(
       2,
-      `Instagram rejected the session (HTTP ${res.status}).`,
-      'Your sessionid has expired or been invalidated. Log in to instagram.com in a\n' +
-        '  browser and paste a fresh "cookie:" header into scripts/.instagram-secrets.json.',
+      `Session cookie expired (HTTP ${res.status}) — re-paste it to resume tracking.`,
+      'Log in to instagram.com in a browser, copy a fresh "cookie:" request header,\n' +
+        '  and update scripts/.instagram-secrets.json. Daily tracking is paused until then.',
     );
   }
   if (res.status === 429 || res.status >= 500) {
@@ -436,6 +468,11 @@ function commitAndPush(gainedCount, lostCount) {
   } catch (e) {
     // A failed push shouldn't look like a failed pull — the data is already saved.
     console.error(`\n⚠ history.json was written but git failed: ${e.message}`);
+    notify(
+      'Instagram Tracker',
+      'Data saved, but publishing failed',
+      'The pull succeeded; git could not push. The live site is behind.',
+    );
     process.exitCode = 1;
   }
 }

@@ -142,6 +142,33 @@
   box-shadow: 0 0 0 4px rgba(214, 41, 118, 0.18);
 }
 
+/* Stale-data warning: the daily job has missed at least one run. */
+.ig-banner.is-stale {
+  align-items: flex-start;
+  gap: 12px;
+}
+.ig-banner.is-stale .ig-banner-dot {
+  margin-top: 5px;
+}
+.ig-banner.is-stale.warn {
+  background: linear-gradient(120deg, rgba(255, 149, 0, 0.14), rgba(255, 179, 64, 0.08));
+}
+.ig-banner.is-stale.warn .ig-banner-dot {
+  background: #ff9500;
+  box-shadow: 0 0 0 4px rgba(255, 149, 0, 0.18);
+}
+.ig-banner.is-stale.bad {
+  background: linear-gradient(120deg, rgba(255, 45, 85, 0.16), rgba(214, 41, 118, 0.09));
+}
+.ig-banner.is-stale code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--color-fill-secondary);
+  padding: 1px 5px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+
 /* Hero: big follower count + range control */
 .ig-hero {
   display: flex;
