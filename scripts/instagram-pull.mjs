@@ -388,6 +388,28 @@ export function mergeSince(current, previousList, nowIso, firstRealRun) {
   });
 }
 
+/**
+ * Your own follows/unfollows, from the following-set difference.
+ *
+ * The list is already fetched every run for the mutuals maths, so tracking what
+ * *you* did costs nothing extra. Tagged dir:'out' to keep it distinguishable
+ * from what was done to you.
+ */
+export function diffFollowing(following, prevFollowing, nowIso) {
+  const prevByKey = new Map((prevFollowing ?? []).map((p) => [p.username.toLowerCase(), p]));
+  const curKeys = new Set(following.map((p) => p.username.toLowerCase()));
+
+  const followed = following
+    .filter((p) => !prevByKey.has(p.username.toLowerCase()))
+    .map((p) => ({ username: p.username, kind: 'follow', t: nowIso, name: p.name, dir: 'out' }));
+
+  const unfollowed = [...prevByKey.values()]
+    .filter((p) => !curKeys.has(p.username.toLowerCase()))
+    .map((p) => ({ username: p.username, kind: 'unfollow', t: nowIso, name: p.name, dir: 'out' }));
+
+  return { followed, unfollowed };
+}
+
 /** Follow/unfollow events from the follower-set difference. */
 export function diffFollowers(followers, prevFollowers, nowIso) {
   const prevByKey = new Map((prevFollowers ?? []).map((p) => [p.username.toLowerCase(), p]));
@@ -460,8 +482,17 @@ async function main() {
   const { gained, lost } = firstRealRun
     ? { gained: [], lost: [] }
     : diffFollowers(followers, prev.followers, nowIso);
+  const { followed: youFollowed, unfollowed: youUnfollowed } = firstRealRun
+    ? { followed: [], unfollowed: [] }
+    : diffFollowing(following, prev.following, nowIso);
 
-  const events = [...gained, ...lost, ...(firstRealRun ? [] : prev.events ?? [])]
+  const events = [
+    ...gained,
+    ...lost,
+    ...youFollowed,
+    ...youUnfollowed,
+    ...(firstRealRun ? [] : prev.events ?? []),
+  ]
     .sort((a, b) => (a.t < b.t ? 1 : -1))
     .slice(0, 5000);
 
@@ -486,6 +517,8 @@ async function main() {
   );
   if (gained.length) log(`  new:  ${gained.map((e) => '@' + e.username).join(', ')}`);
   if (lost.length) log(`  lost: ${lost.map((e) => '@' + e.username).join(', ')}`);
+  if (youFollowed.length) log(`  you followed:   ${youFollowed.map((e) => '@' + e.username).join(', ')}`);
+  if (youUnfollowed.length) log(`  you unfollowed: ${youUnfollowed.map((e) => '@' + e.username).join(', ')}`);
   if (firstRealRun) log('first real run — recorded a baseline, diffs start tomorrow');
 
   if (DRY_RUN) {

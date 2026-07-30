@@ -7,6 +7,7 @@
 // an https:// page (loopback is exempt from mixed-content blocking).
 //
 //   GET  /health   → { ok: true }              no token, no side effects
+//   GET  /profile  → live profile overview for one handle       (token required)
 //   GET  /status   → progress of the current/last run          (token required)
 //   GET  /history  → the freshly written history.json          (token required)
 //   POST /pull     → start a pull, returns immediately         (token required)
@@ -71,10 +72,75 @@ function loadConfig() {
     );
     process.exit(2);
   }
+  // The Instagram session, reused for live profile lookups. Same shape the
+  // puller accepts: a whole cookie header, or the individual values.
+  const jar = {};
+  for (const pair of String(raw.cookie ?? '').split(';')) {
+    const i = pair.indexOf('=');
+    if (i > 0) jar[pair.slice(0, i).trim()] = pair.slice(i + 1).trim();
+  }
+  const sessionid = raw.sessionid || jar.sessionid;
+  const csrftoken = raw.csrftoken || jar.csrftoken || '';
+  const parts = [];
+  if (sessionid) parts.push(`sessionid=${sessionid}`);
+  if (raw.ds_user_id || jar.ds_user_id) parts.push(`ds_user_id=${raw.ds_user_id || jar.ds_user_id}`);
+  if (csrftoken) parts.push(`csrftoken=${csrftoken}`);
+
   return {
     token: String(raw.agentToken),
     port: Number(raw.agentPort) || DEFAULT_PORT,
+    igCookie: parts.join('; '),
+    csrftoken,
   };
+}
+
+const IG_APP_ID = '936619743392459';
+const IG_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+/** Short-lived cache so reopening the same profile doesn't re-hit Instagram. */
+const profileCache = new Map();
+const PROFILE_TTL_MS = 5 * 60 * 1000;
+
+/** Live overview for one handle, via the same private endpoint the puller uses. */
+async function fetchProfileInfo(username) {
+  const key = username.toLowerCase();
+  const hit = profileCache.get(key);
+  if (hit && Date.now() - hit.at < PROFILE_TTL_MS) return hit.value;
+
+  const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`;
+  const res = await fetch(url, {
+    headers: {
+      accept: '*/*',
+      'x-ig-app-id': IG_APP_ID,
+      'x-csrftoken': config.csrftoken,
+      'user-agent': IG_UA,
+      referer: `https://www.instagram.com/${username}/`,
+      cookie: config.igCookie,
+    },
+  });
+  if (res.status === 404) return { notFound: true };
+  if (!res.ok) throw new Error(`Instagram returned ${res.status}`);
+
+  const json = await res.json();
+  const u = json?.data?.user;
+  if (!u) return { notFound: true };
+
+  const value = {
+    username: u.username ?? username,
+    fullName: u.full_name || undefined,
+    // Proxied through this agent rather than handed to the page: the CDN URL is
+    // signed and short-lived, and this keeps it off the public site entirely.
+    pic: u.profile_pic_url_hd || u.profile_pic_url || undefined,
+    bio: u.biography || undefined,
+    verified: Boolean(u.is_verified),
+    private: Boolean(u.is_private),
+    followers: u.edge_followed_by?.count ?? null,
+    following: u.edge_follow?.count ?? null,
+    posts: u.edge_owner_to_timeline_media?.count ?? null,
+  };
+  profileCache.set(key, { at: Date.now(), value });
+  return value;
 }
 
 const config = loadConfig();
@@ -234,6 +300,40 @@ const server = createServer((req, res) => {
     } catch (e) {
       return send(res, 500, { error: `could not read history.json: ${e.message}` }, origin);
     }
+  }
+
+  if (req.method === 'GET' && path === '/profile') {
+    if (!authed) return send(res, 401, { error: 'bad token' }, origin);
+    const username = (url.searchParams.get('username') || '').trim();
+    if (!/^[A-Za-z0-9._]{1,40}$/.test(username)) {
+      return send(res, 400, { error: 'bad username' }, origin);
+    }
+    fetchProfileInfo(username)
+      .then((info) => send(res, 200, info, origin))
+      .catch((e) => send(res, 502, { error: e.message }, origin));
+    return;
+  }
+
+  if (req.method === 'GET' && path === '/avatar') {
+    if (!authed) return send(res, 401, { error: 'bad token' }, origin);
+    const src = url.searchParams.get('src') || '';
+    // Only ever proxy Instagram's own CDN, never an arbitrary URL.
+    if (!/^https:\/\/[a-z0-9.-]*(cdninstagram\.com|fbcdn\.net)\//i.test(src)) {
+      return send(res, 400, { error: 'not an instagram cdn url' }, origin);
+    }
+    fetch(src, { headers: { 'user-agent': IG_UA, referer: 'https://www.instagram.com/' } })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`cdn returned ${r.status}`);
+        const buf = Buffer.from(await r.arrayBuffer());
+        res.writeHead(200, {
+          'Content-Type': r.headers.get('content-type') || 'image/jpeg',
+          'Cache-Control': 'private, max-age=300',
+          ...(originAllowed(origin) ? corsHeaders(origin) : {}),
+        });
+        res.end(buf);
+      })
+      .catch((e) => send(res, 502, { error: e.message }, origin));
+    return;
   }
 
   if (req.method === 'POST' && path === '/pull') {

@@ -20,7 +20,7 @@ export interface Snapshot {
   following?: number;
 }
 
-/** A follow / unfollow event detected between two checks (inbound: them → you). */
+/** A follow / unfollow event detected between two checks. */
 export interface FollowEvent {
   username: string;
   kind: 'follow' | 'unfollow';
@@ -28,6 +28,17 @@ export interface FollowEvent {
   t: string;
   /** Display name at detection time, when known. */
   name?: string;
+  /**
+   * Who acted. 'in' — they followed/unfollowed you; 'out' — you followed or
+   * unfollowed them. Absent means 'in', which is what every event recorded
+   * before outbound tracking existed was.
+   */
+  dir?: 'in' | 'out';
+}
+
+/** Events without a direction predate outbound tracking and are inbound. */
+export function isOutbound(e: FollowEvent): boolean {
+  return e.dir === 'out';
 }
 
 /** One account in a followers/following list. */
@@ -138,8 +149,12 @@ export function dayKey(iso: string): string {
 
 export interface DayBucket {
   key: string;
+  /** They followed you. */
   follows: FollowEvent[];
+  /** They unfollowed you. */
   unfollows: FollowEvent[];
+  /** What you did that day — follows and unfollows both, tagged by `kind`. */
+  outbound: FollowEvent[];
 }
 
 /** Group events into per-day buckets, newest day first. */
@@ -149,10 +164,11 @@ export function groupByDay(events: FollowEvent[]): DayBucket[] {
     const key = dayKey(ev.t);
     let bucket = map.get(key);
     if (!bucket) {
-      bucket = { key, follows: [], unfollows: [] };
+      bucket = { key, follows: [], unfollows: [], outbound: [] };
       map.set(key, bucket);
     }
-    if (ev.kind === 'follow') bucket.follows.push(ev);
+    if (isOutbound(ev)) bucket.outbound.push(ev);
+    else if (ev.kind === 'follow') bucket.follows.push(ev);
     else bucket.unfollows.push(ev);
   }
   return [...map.values()].sort((a, b) => (a.key < b.key ? 1 : -1));
@@ -165,6 +181,8 @@ export interface DayActivity {
   follows: Profile[];
   /** Who unfollowed. Only exists from when daily tracking began. */
   unfollows: FollowEvent[];
+  /** What you did that day — your own follows and unfollows. */
+  outbound: FollowEvent[];
 }
 
 /**
@@ -184,7 +202,7 @@ export function buildDayActivity(
   const at = (key: string) => {
     let d = map.get(key);
     if (!d) {
-      d = { key, follows: [], unfollows: [] };
+      d = { key, follows: [], unfollows: [], outbound: [] };
       map.set(key, d);
     }
     return d;
@@ -195,7 +213,8 @@ export function buildDayActivity(
   }
   for (const e of events) {
     const d = at(dayKey(e.t));
-    if (e.kind === 'unfollow') d.unfollows.push(e);
+    if (isOutbound(e)) d.outbound.push(e);
+    else if (e.kind === 'unfollow') d.unfollows.push(e);
   }
   return map;
 }
@@ -275,6 +294,88 @@ export function relationships(followers: Profile[], following: Profile[]): Relat
     fans: followers.filter((p) => !followingKeys.has(p.username.toLowerCase())),
     ghosts: following.filter((p) => !followerKeys.has(p.username.toLowerCase())),
   };
+}
+
+// ===== Per-account insight (the profile popup) =====
+
+/**
+ * Position of each account in a list, ordered oldest-relationship first.
+ *
+ * Only entries carrying a date can be ranked; undated ones are left out rather
+ * than crowded to the end, since a made-up position would read as fact.
+ */
+export function buildRanks(list: Profile[]): Map<string, number> {
+  const dated = list
+    .filter((p) => p.since)
+    .sort((a, b) => new Date(a.since!).getTime() - new Date(b.since!).getTime());
+  const ranks = new Map<string, number>();
+  dated.forEach((p, i) => ranks.set(p.username.toLowerCase(), i + 1));
+  return ranks;
+}
+
+export interface Insight {
+  username: string;
+  name?: string;
+  verified?: boolean;
+  private?: boolean;
+  /** They follow you. */
+  followsYou: boolean;
+  /** You follow them. */
+  youFollow: boolean;
+  /** When they followed you. */
+  followedYouAt?: string;
+  /** When you followed them. */
+  youFollowedAt?: string;
+  /** Their position among your followers, oldest first. */
+  followerRank?: number;
+  followerTotal: number;
+  /** Their position among the accounts you follow, oldest first. */
+  followingRank?: number;
+  followingTotal: number;
+  /** Everything the tracker has recorded about this account. */
+  events: FollowEvent[];
+}
+
+/**
+ * Everything known about one account, pulled from both lists and the event log.
+ *
+ * Ranks are positions among *current* relationships. Anyone who followed and
+ * later left isn't in the data at all, so a true all-time position isn't
+ * recoverable — the UI says "of your N followers" rather than implying otherwise.
+ */
+export function insightFor(
+  username: string,
+  data: TrackerData,
+  followerRanks: Map<string, number>,
+  followingRanks: Map<string, number>,
+): Insight {
+  const key = username.toLowerCase();
+  const asFollower = (data.followers ?? []).find((p) => p.username.toLowerCase() === key);
+  const asFollowing = (data.following ?? []).find((p) => p.username.toLowerCase() === key);
+
+  return {
+    username: asFollower?.username ?? asFollowing?.username ?? username,
+    name: asFollower?.name ?? asFollowing?.name,
+    verified: asFollower?.verified ?? asFollowing?.verified,
+    private: asFollower?.private ?? asFollowing?.private,
+    followsYou: Boolean(asFollower),
+    youFollow: Boolean(asFollowing),
+    followedYouAt: asFollower?.since,
+    youFollowedAt: asFollowing?.since,
+    followerRank: followerRanks.get(key),
+    followerTotal: (data.followers ?? []).length,
+    followingRank: followingRanks.get(key),
+    followingTotal: (data.following ?? []).length,
+    events: data.events.filter((e) => e.username.toLowerCase() === key),
+  };
+}
+
+/** "Mar 14, 2025" — a specific day, for the profile popup. */
+export function exactDate(iso: string | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 export type SortKey = 'recent' | 'oldest' | 'az';

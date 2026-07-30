@@ -14,8 +14,13 @@
 //
 //   • relationship dates — the export's are ground truth
 //   • historical snapshots, but only before the first real reading
-//   • no events, ever: an export lists who follows you *now*, so it can neither
-//     prove nor disprove an unfollow
+//   • no *inbound* events: the export lists who follows you now, so it can
+//     neither prove nor disprove someone having unfollowed you
+//
+// The one exception is recently_unfollowed_profiles.json, which records what
+// *you* unfollowed and when. That's a positive record of an action rather than
+// an absence, so it can't be misread the way a missing follower can, and no
+// later diff can reconstruct it. Those are folded into events as dir:'out'.
 //
 // Usage:
 //   node scripts/instagram-backfill.mjs <dir-or-files...> [--dry-run]
@@ -33,15 +38,7 @@ const HISTORY = resolve(REPO, 'public/instagram/history.json');
 
 const FOLLOWERS_RE = /^followers(_\d+)?\.json$/i;
 const FOLLOWING_RE = /^following(_\d+)?\.json$/i;
-
-const argv = process.argv.slice(2);
-const DRY_RUN = argv.includes('--dry-run');
-const inputs = argv.filter((a) => !a.startsWith('--'));
-
-if (inputs.length === 0) {
-  console.error('usage: node scripts/instagram-backfill.mjs <dir-or-files...> [--dry-run]');
-  process.exit(2);
-}
+const UNFOLLOWED_RE = /^recently_unfollowed_profiles(_\d+)?\.json$/i;
 
 // ===== Read the export =====
 
@@ -52,7 +49,9 @@ function expand(paths) {
     const full = resolve(p);
     if (statSync(full).isDirectory()) {
       for (const name of readdirSync(full)) {
-        if (FOLLOWERS_RE.test(name) || FOLLOWING_RE.test(name)) out.push(join(full, name));
+        if (FOLLOWERS_RE.test(name) || FOLLOWING_RE.test(name) || UNFOLLOWED_RE.test(name)) {
+          out.push(join(full, name));
+        }
       }
     } else {
       out.push(full);
@@ -127,6 +126,53 @@ function readList(files, re) {
   return out;
 }
 
+/**
+ * recently_unfollowed_profiles.json — accounts *you* unfollowed.
+ *
+ * A third shape again: no `string_list_data`, but a `label_values` array of
+ * {label, value} pairs, with the handle under "Username".
+ */
+export function extractUnfollowed(json) {
+  const arr = Array.isArray(json) ? json : (Object.values(json ?? {}).find(Array.isArray) ?? []);
+  const out = [];
+  for (const row of arr) {
+    const labels = new Map(
+      (row?.label_values ?? []).map((l) => [String(l?.label ?? '').toLowerCase(), l?.value]),
+    );
+    const username = String(labels.get('username') ?? '').trim();
+    if (!username) continue;
+    const name = String(labels.get('name') ?? '').trim() || undefined;
+    const t =
+      typeof row?.timestamp === 'number' && row.timestamp > 0
+        ? new Date(row.timestamp * 1000).toISOString()
+        : undefined;
+    if (!t) continue;
+    out.push({ username, kind: 'unfollow', t, name: name === username ? undefined : name, dir: 'out' });
+  }
+  return out;
+}
+
+/**
+ * Fold outbound events in without duplicating what the daily job already saw.
+ * Identity is (direction, kind, handle, day) — the export's timestamp and the
+ * job's detection time differ, so matching on the exact instant would double up.
+ */
+export function mergeOutbound(existing, incoming) {
+  const seen = new Set(
+    (existing ?? []).map((e) => `${e.dir ?? 'in'}|${e.kind}|${e.username.toLowerCase()}|${dayKey(e.t)}`),
+  );
+  const added = incoming.filter((e) => {
+    const id = `${e.dir}|${e.kind}|${e.username.toLowerCase()}|${dayKey(e.t)}`;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return {
+    events: [...(existing ?? []), ...added].sort((a, b) => (a.t < b.t ? 1 : -1)).slice(0, 5000),
+    added: added.length,
+  };
+}
+
 // ===== Merge (mirrors src/instagram/importZip.ts) =====
 
 /** YYYY-MM-DD in local time, matching dayKey() in the app. */
@@ -193,48 +239,82 @@ function mergeSnapshots(real, reconstructed) {
 
 // ===== Main =====
 
-const files = expand(inputs);
-const exportedFollowers = readList(files, FOLLOWERS_RE);
-const exportedFollowing = readList(files, FOLLOWING_RE);
+// ===== Main =====
 
-if (exportedFollowers.length === 0 && exportedFollowing.length === 0) {
-  console.error('✗ No followers_*.json / following_*.json found in the given paths.');
-  process.exit(1);
+function main() {
+  const argv = process.argv.slice(2);
+  const DRY_RUN = argv.includes('--dry-run');
+  const inputs = argv.filter((a) => !a.startsWith('--'));
+
+  if (inputs.length === 0) {
+    console.error('usage: node scripts/instagram-backfill.mjs <dir-or-files...> [--dry-run]');
+    process.exit(2);
+  }
+
+  const files = expand(inputs);
+  const exportedFollowers = readList(files, FOLLOWERS_RE);
+  const exportedFollowing = readList(files, FOLLOWING_RE);
+
+  const outbound = [];
+  for (const file of files.filter((f) => UNFOLLOWED_RE.test(basename(f)))) {
+    try {
+      outbound.push(...extractUnfollowed(JSON.parse(readFileSync(file, 'utf8'))));
+    } catch (e) {
+      console.error(`  ! skipping ${basename(file)}: ${e.message}`);
+    }
+  }
+
+  if (exportedFollowers.length === 0 && exportedFollowing.length === 0 && outbound.length === 0) {
+    console.error('✗ No followers/following/recently_unfollowed files found in the given paths.');
+    process.exit(1);
+  }
+
+  const prev = JSON.parse(readFileSync(HISTORY, 'utf8'));
+  if (prev.sample) {
+    console.error('✗ history.json still holds sample data — run a real pull first.');
+    process.exit(1);
+  }
+
+  const followers = applyDates(prev.followers ?? [], exportedFollowers);
+  const following = applyDates(prev.following ?? [], exportedFollowing);
+  const snapshots = mergeSnapshots(prev.snapshots, reconstructSnapshots(exportedFollowers));
+
+  // Outbound unfollows are the one thing an export knows that the daily diff
+  // can't reconstruct after the fact, so they *are* folded into events — unlike
+  // inbound activity, which the export can neither prove nor disprove.
+  const merged = mergeOutbound(prev.events, outbound);
+
+  const next = {
+    ...prev,
+    followers: followers.out,
+    following: following.out,
+    snapshots,
+    events: merged.events,
+    // generatedAt deliberately untouched — see the header.
+  };
+
+  const distinct = (list) => new Set(list.map((p) => p.since?.slice(0, 10)).filter(Boolean)).size;
+
+  console.log(`export      : ${exportedFollowers.length} followers, ${exportedFollowing.length} following`);
+  console.log(`live        : ${prev.followers?.length ?? 0} followers, ${prev.following?.length ?? 0} following  (unchanged)`);
+  console.log(`dated       : ${followers.dated}/${prev.followers?.length ?? 0} followers, ${following.dated}/${prev.following?.length ?? 0} following`);
+  console.log(`distinct days: followers ${distinct(prev.followers ?? [])} → ${distinct(followers.out)}`);
+  console.log(`snapshots   : ${prev.snapshots?.length ?? 0} → ${snapshots.length}`);
+  console.log(`events      : ${prev.events?.length ?? 0} → ${next.events.length}  (+${merged.added} outbound unfollows; inbound never derived from an export)`);
+  if (snapshots.length) {
+    console.log(`history from: ${snapshots[0].t.slice(0, 10)}  (${snapshots[0].followers} followers)`);
+  }
+
+  if (DRY_RUN) {
+    console.log('\ndry run — history.json not written');
+  } else {
+    writeFileSync(HISTORY, JSON.stringify(next, null, 2) + '\n');
+    console.log(`\nwrote ${HISTORY}`);
+  }
+
 }
 
-const prev = JSON.parse(readFileSync(HISTORY, 'utf8'));
-if (prev.sample) {
-  console.error('✗ history.json still holds sample data — run a real pull first.');
-  process.exit(1);
-}
-
-const followers = applyDates(prev.followers ?? [], exportedFollowers);
-const following = applyDates(prev.following ?? [], exportedFollowing);
-const snapshots = mergeSnapshots(prev.snapshots, reconstructSnapshots(exportedFollowers));
-
-const next = {
-  ...prev,
-  followers: followers.out,
-  following: following.out,
-  snapshots,
-  // events and generatedAt deliberately untouched — see the header.
-};
-
-const distinct = (list) => new Set(list.map((p) => p.since?.slice(0, 10)).filter(Boolean)).size;
-
-console.log(`export      : ${exportedFollowers.length} followers, ${exportedFollowing.length} following`);
-console.log(`live        : ${prev.followers?.length ?? 0} followers, ${prev.following?.length ?? 0} following  (unchanged)`);
-console.log(`dated       : ${followers.dated}/${prev.followers?.length ?? 0} followers, ${following.dated}/${prev.following?.length ?? 0} following`);
-console.log(`distinct days: followers ${distinct(prev.followers ?? [])} → ${distinct(followers.out)}`);
-console.log(`snapshots   : ${prev.snapshots?.length ?? 0} → ${snapshots.length}`);
-console.log(`events      : ${prev.events?.length ?? 0} → ${next.events?.length ?? 0}  (never derived from an export)`);
-if (snapshots.length) {
-  console.log(`history from: ${snapshots[0].t.slice(0, 10)}  (${snapshots[0].followers} followers)`);
-}
-
-if (DRY_RUN) {
-  console.log('\ndry run — history.json not written');
-} else {
-  writeFileSync(HISTORY, JSON.stringify(next, null, 2) + '\n');
-  console.log(`\nwrote ${HISTORY}`);
+// Only run when invoked directly, so the parsers above can be unit-tested.
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  main();
 }
