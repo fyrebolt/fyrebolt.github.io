@@ -1,10 +1,17 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * A soft light-grey circle that trails the pointer with gentle lag.
  * - Skipped entirely on touch / coarse-pointer devices (nothing to replace).
  * - Under prefers-reduced-motion the lag is removed (it tracks 1:1).
  * Purely decorative: it never intercepts pointer events.
+ *
+ * Rendered through a portal to <body>. Its parent stage sets `isolation:
+ * isolate`, which creates a stacking context — so however large the z-index,
+ * the dot could only ever rank *within* the stage, and anything portalled
+ * alongside it (the profile dialog) painted straight over the cursor. At body
+ * level the z-index finally means what it says.
  */
 export default function SquircleCursor() {
   const dotRef = useRef<HTMLDivElement>(null);
@@ -68,7 +75,7 @@ export default function SquircleCursor() {
     };
   }, []);
 
-  return (
+  return createPortal(
     <div
       ref={dotRef}
       aria-hidden
@@ -88,6 +95,7 @@ export default function SquircleCursor() {
         transition: 'opacity 0.25s ease, width 0.25s var(--ease-spring), height 0.25s var(--ease-spring)',
         willChange: 'transform',
       }}
-    />
+    />,
+    document.body,
   );
 }
