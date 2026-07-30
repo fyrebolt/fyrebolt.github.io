@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 
 .claude/worktrees/
+
+# Instagram tracker session cookie — never commit this
+scripts/.instagram-secrets.json
