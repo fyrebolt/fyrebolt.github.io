@@ -105,24 +105,51 @@ function readList(texts: Record<string, string>, re: RegExp): Profile[] {
   return out;
 }
 
-/** Instagram wraps each list as an array of { string_list_data: [{ value, timestamp }] }. */
+interface ExportLink {
+  value?: string;
+  href?: string;
+  timestamp?: number;
+}
+
+interface ExportRow {
+  title?: string;
+  string_list_data?: ExportLink[];
+}
+
+/**
+ * Where the username lives, in priority order.
+ *
+ * The two files are not shaped alike, despite sitting in the same folder:
+ * followers_*.json puts the handle in `value` and leaves `title` empty, while
+ * following.json omits `value` entirely and puts the handle in `title`. Reading
+ * only `value` silently yields zero following.
+ */
+function usernameOf(row: ExportRow, sld: ExportLink | undefined): string | undefined {
+  const fromValue = sld?.value?.trim();
+  if (fromValue) return fromValue;
+  const fromTitle = row?.title?.trim();
+  if (fromTitle) return fromTitle;
+  // Last resort: https://www.instagram.com/<username>
+  const m = sld?.href?.match(/instagram\.com\/([^/?#]+)/i);
+  return m ? decodeURIComponent(m[1]).trim() : undefined;
+}
+
+/** Instagram wraps each list as an array of { title, string_list_data: [...] }. */
 function extractEntries(json: unknown): Profile[] {
   const arr = toArray(json);
   const out: Profile[] = [];
   for (const item of arr) {
-    const row = item as {
-      title?: string;
-      string_list_data?: Array<{ value?: string; timestamp?: number }>;
-    };
+    const row = item as ExportRow;
     const sld = row?.string_list_data?.[0];
-    const username = sld?.value?.trim();
+    const username = usernameOf(row, sld);
     if (!username) continue;
     const since =
       typeof sld?.timestamp === 'number' && sld.timestamp > 0
         ? new Date(sld.timestamp * 1000).toISOString()
         : undefined;
-    const name = row?.title?.trim() || undefined;
-    out.push({ username, name: name === username ? undefined : name, since });
+    const title = row?.title?.trim() || undefined;
+    // In following.json `title` *is* the handle, so it's not a display name.
+    out.push({ username, name: title && title !== username ? title : undefined, since });
   }
   return out;
 }
