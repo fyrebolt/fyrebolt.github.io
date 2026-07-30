@@ -1,6 +1,6 @@
 {
   "account": "hastinchen",
-  "generatedAt": "2026-07-30T05:14:40.871Z",
+  "generatedAt": "2026-07-30T05:21:33.877Z",
   "sample": false,
   "snapshots": [
     {
@@ -9,7 +9,7 @@
       "following": 869
     },
     {
-      "t": "2026-07-30T05:14:40.871Z",
+      "t": "2026-07-30T05:21:33.877Z",
       "followers": 909,
       "following": 869
     }
@@ -5081,11 +5081,6 @@
   ],
   "following": [
     {
-      "username": "___troy.nichols___",
-      "name": "Troy Nichols",
-      "since": "2026-07-30T00:04:26.924Z"
-    },
-    {
       "username": "__austtin__",
       "name": "austin",
       "private": true,
@@ -8411,6 +8406,11 @@
       "name": "Brina.bear23",
       "private": true,
       "since": "2026-07-30T00:04:26.924Z"
+    },
+    {
+      "username": "nihal.gunu",
+      "name": "Nihal Gunukula",
+      "since": "2026-07-30T05:21:33.877Z"
     },
     {
       "username": "nikhil_nagalla25",
