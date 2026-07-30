@@ -410,6 +410,77 @@ export function diffFollowing(following, prevFollowing, nowIso) {
   return { followed, unfollowed };
 }
 
+/**
+ * Which live relationship field settles a candidate event, and what it must say.
+ *
+ * Inbound events are about whether *they* follow you (`follows_viewer`);
+ * outbound about whether *you* follow them (`followed_by_viewer`).
+ */
+export function expectedRelationship(candidate) {
+  return {
+    field: candidate.dir === 'out' ? 'followed_by_viewer' : 'follows_viewer',
+    want: candidate.kind === 'follow',
+  };
+}
+
+/**
+ * Does a candidate event survive contact with the live relationship?
+ *
+ * true  — confirmed, record it
+ * false — contradicted, drop it
+ * null  — couldn't tell; the caller drops it rather than guess
+ *
+ * `rel` is the live user object, or the string 'gone' when the account no
+ * longer resolves — a deleted account can't still be following you, so an
+ * unfollow stands while a follow obviously can't.
+ */
+export function verdict(candidate, rel) {
+  if (rel === 'gone') return candidate.kind === 'unfollow';
+  const { field, want } = expectedRelationship(candidate);
+  const actual = rel?.[field];
+  if (typeof actual !== 'boolean') return null;
+  return actual === want;
+}
+
+/** Above this many candidates, verifying each one would be abusive. */
+const MAX_VERIFY = 40;
+
+/**
+ * Confirm each candidate against Instagram before it becomes permanent history.
+ *
+ * Paging is the reason this exists. Instagram's followers/following endpoints
+ * are eventually consistent: two runs minutes apart returned 865 following each
+ * time, but not the *same* 865 — four accounts dropped out and four different
+ * ones appeared. Diffing that churn invented four unfollows and four follows,
+ * none of which had happened. Comparing totals can't catch it, because the
+ * totals were identical.
+ */
+async function verifyCandidates(candidates, creds) {
+  if (candidates.length === 0) return { kept: [], dropped: [] };
+  if (candidates.length > MAX_VERIFY) {
+    log(`skipping verification: ${candidates.length} candidates exceeds the ${MAX_VERIFY} cap`);
+    return { kept: candidates, dropped: [] };
+  }
+
+  const kept = [];
+  const dropped = [];
+  for (const c of candidates) {
+    let rel;
+    try {
+      const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(c.username)}`;
+      const json = await getJson(url, creds, `https://www.instagram.com/${c.username}/`);
+      rel = json?.data?.user ?? 'gone';
+    } catch {
+      rel = null;
+    }
+    const ok = verdict(c, rel);
+    if (ok === true) kept.push(c);
+    else dropped.push({ ...c, why: ok === false ? 'contradicted' : 'unverifiable' });
+    await sleep(jitter());
+  }
+  return { kept, dropped };
+}
+
 /** Follow/unfollow events from the follower-set difference. */
 export function diffFollowers(followers, prevFollowers, nowIso) {
   const prevByKey = new Map((prevFollowers ?? []).map((p) => [p.username.toLowerCase(), p]));
@@ -424,6 +495,29 @@ export function diffFollowers(followers, prevFollowers, nowIso) {
     .map((p) => ({ username: p.username, kind: 'unfollow', t: nowIso, name: p.name }));
 
   return { gained, lost };
+}
+
+/**
+ * The stored list changes only through confirmed events — never through a read
+ * simply missing someone.
+ *
+ * Rebuilding the list from each read is what made paging churn self-sustaining:
+ * a missed page deleted people, and their reappearance next run looked like a
+ * brand-new follow. Verification alone can't catch that half of it, because
+ * "do you follow them?" is true either way. Holding people until an unfollow is
+ * actually confirmed breaks the cycle at the source.
+ */
+export function stableList(previous, currentRead, confirmedGone) {
+  const byKey = new Map();
+  for (const p of previous ?? []) byKey.set(p.username.toLowerCase(), p);
+  for (const p of currentRead) {
+    const k = p.username.toLowerCase();
+    const old = byKey.get(k);
+    // Fresh profile fields win; the earliest known date is kept.
+    byKey.set(k, old ? { ...p, since: old.since ?? p.since } : p);
+  }
+  for (const k of confirmedGone) byKey.delete(k);
+  return [...byKey.values()].sort((a, b) => a.username.localeCompare(b.username));
 }
 
 /** One snapshot per calendar day — a re-run on the same day replaces it. */
@@ -486,39 +580,60 @@ async function main() {
     ? { followed: [], unfollowed: [] }
     : diffFollowing(following, prev.following, nowIso);
 
-  const events = [
-    ...gained,
-    ...lost,
-    ...youFollowed,
-    ...youUnfollowed,
-    ...(firstRealRun ? [] : prev.events ?? []),
-  ]
+  // Every candidate is checked against the live relationship before it becomes
+  // permanent history — see verifyCandidates for why paging makes this necessary.
+  const candidates = [...gained, ...lost, ...youFollowed, ...youUnfollowed];
+  const { kept, dropped } = await verifyCandidates(candidates, creds);
+  if (dropped.length) {
+    log(`discarded ${dropped.length} unconfirmed change(s): ` +
+      dropped.map((e) => `@${e.username} (${e.dir ?? 'in'} ${e.kind}, ${e.why})`).join(', '));
+  }
+
+  const events = [...kept, ...(firstRealRun ? [] : prev.events ?? [])]
     .sort((a, b) => (a.t < b.t ? 1 : -1))
     .slice(0, 5000);
+
+  // Only a confirmed unfollow removes anyone from the stored lists.
+  const goneFrom = (dir) =>
+    new Set(
+      kept
+        .filter((e) => (e.dir ?? 'in') === dir && e.kind === 'unfollow')
+        .map((e) => e.username.toLowerCase()),
+    );
+  const nextFollowers = stableList(prev?.followers, mergedFollowers, goneFrom('in'));
+  const nextFollowing = stableList(prev?.following, mergedFollowing, goneFrom('out'));
 
   const data = {
     account: creds.account,
     generatedAt: nowIso,
     sample: false,
+    // Snapshot the stored totals, not the raw read — the read fluctuates.
     snapshots: appendSnapshot(firstRealRun ? [] : prev.snapshots, {
       t: nowIso,
-      followers: followers.length,
-      following: following.length,
+      followers: nextFollowers.length,
+      following: nextFollowing.length,
     }),
     events,
-    followers: mergedFollowers.sort((a, b) => a.username.localeCompare(b.username)),
-    following: mergedFollowing.sort((a, b) => a.username.localeCompare(b.username)),
+    followers: nextFollowers,
+    following: nextFollowing,
   };
 
-  const mutuals = countMutuals(followers, following);
+  const confirmed = (dir, kind) =>
+    kept.filter((e) => (e.dir ?? 'in') === dir && e.kind === kind);
+  const mutuals = countMutuals(nextFollowers, nextFollowing);
   log(
-    `followers ${followers.length} · following ${following.length} · mutuals ${mutuals} · ` +
-      `+${gained.length} new · −${lost.length} lost`,
+    `followers ${nextFollowers.length} · following ${nextFollowing.length} · mutuals ${mutuals} · ` +
+      `+${confirmed('in', 'follow').length} new · −${confirmed('in', 'unfollow').length} lost` +
+      (dropped.length ? ` · ${dropped.length} unconfirmed, discarded` : ''),
   );
-  if (gained.length) log(`  new:  ${gained.map((e) => '@' + e.username).join(', ')}`);
-  if (lost.length) log(`  lost: ${lost.map((e) => '@' + e.username).join(', ')}`);
-  if (youFollowed.length) log(`  you followed:   ${youFollowed.map((e) => '@' + e.username).join(', ')}`);
-  if (youUnfollowed.length) log(`  you unfollowed: ${youUnfollowed.map((e) => '@' + e.username).join(', ')}`);
+  for (const [label, list] of [
+    ['new', confirmed('in', 'follow')],
+    ['lost', confirmed('in', 'unfollow')],
+    ['you followed', confirmed('out', 'follow')],
+    ['you unfollowed', confirmed('out', 'unfollow')],
+  ]) {
+    if (list.length) log(`  ${label}: ${list.map((e) => '@' + e.username).join(', ')}`);
+  }
   if (firstRealRun) log('first real run — recorded a baseline, diffs start tomorrow');
 
   if (DRY_RUN) {
@@ -530,7 +645,7 @@ async function main() {
   writeFileSync(OUT, JSON.stringify(data, null, 2) + '\n');
   log(`wrote ${OUT}`);
 
-  if (COMMIT) commitAndPush(gained.length, lost.length);
+  if (COMMIT) commitAndPush(confirmed('in', 'follow').length, confirmed('in', 'unfollow').length);
 }
 
 export function countMutuals(followers, following) {
@@ -538,7 +653,13 @@ export function countMutuals(followers, following) {
   return followers.filter((p) => followingKeys.has(p.username.toLowerCase())).length;
 }
 
-/** Returns a human-readable reason if the read looks partial, else null. */
+/**
+ * Returns a human-readable reason if the read looks partial, else null.
+ *
+ * Note this compares *totals* only. A stable total does not mean a stable set —
+ * paging can return the same number of different accounts — which is what
+ * verifyCandidates exists to catch.
+ */
 export function checkCompleteness(followers, following, profile, prev) {
   if (profile.followerCount && followers.length < profile.followerCount * COMPLETENESS_FLOOR) {
     return `paged ${followers.length} followers but the profile reports ${profile.followerCount}`;

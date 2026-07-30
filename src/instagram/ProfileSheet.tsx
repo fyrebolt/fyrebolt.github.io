@@ -40,7 +40,10 @@ export default function ProfileSheet({
 
   // Escape to dismiss, and move focus into the dialog for keyboard users.
   useEffect(() => {
-    closeRef.current?.focus();
+    // preventScroll matters: without it the browser scrolls the focused button
+    // into view, dragging the page behind the dialog and losing your place in
+    // the list you just clicked from.
+    closeRef.current?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
