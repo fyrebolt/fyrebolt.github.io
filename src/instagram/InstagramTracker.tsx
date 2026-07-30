@@ -24,7 +24,7 @@ import {
   type SortKey,
   type TrackerData,
 } from './data';
-import { parseExportZip, buildFromExport } from './importZip';
+import { parseExport, buildFromExport } from './importZip';
 import {
   probeAgent,
   startPull,
@@ -80,10 +80,10 @@ export default function InstagramTracker() {
     };
   }, []);
 
-  const handleFile = useCallback(async (file: File) => {
+  const handleFiles = useCallback(async (files: File[]) => {
     setImportState({ busy: true });
     try {
-      const imported = await parseExportZip(file);
+      const imported = await parseExport(files);
       const next = buildFromExport(imported, dataRef.current);
       saveLocalData(next);
       setData(next);
@@ -141,7 +141,7 @@ export default function InstagramTracker() {
       <ImportPanel
         data={data}
         state={importState}
-        onFile={handleFile}
+        onFiles={handleFiles}
         onDownload={() => data && downloadHistoryJson(data)}
         onClear={handleClear}
         onPulled={handlePulled}
@@ -167,14 +167,14 @@ function pickFresher(a: TrackerData | null, b: TrackerData | null): TrackerData 
 function ImportPanel({
   data,
   state,
-  onFile,
+  onFiles,
   onDownload,
   onClear,
   onPulled,
 }: {
   data: TrackerData | null;
   state: ImportState;
-  onFile: (file: File) => void;
+  onFiles: (files: File[]) => void;
   onDownload: () => void;
   onClear: () => void;
   onPulled: (fresh: TrackerData) => void;
@@ -187,8 +187,8 @@ function ImportPanel({
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) onFile(file);
+    const files = [...(e.dataTransfer.files ?? [])];
+    if (files.length) onFiles(files);
   };
 
   return (
@@ -204,11 +204,12 @@ function ImportPanel({
       <input
         ref={inputRef}
         type="file"
-        accept=".zip,application/zip"
+        accept=".zip,.json,application/zip,application/json"
+        multiple
         hidden
         onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onFile(f);
+          const files = [...(e.target.files ?? [])];
+          if (files.length) onFiles(files);
           e.target.value = '';
         }}
       />
@@ -240,9 +241,10 @@ function ImportPanel({
             {state.busy ? 'Reading your export…' : 'Import your Instagram data export'}
           </span>
           <span className="ig-import-sub">
-            Drag in the <code>.zip</code>, or click to choose. Export via Accounts Center → Download
-            your information → <em>Followers and following</em> (JSON). Parsed entirely in your
-            browser — this backfills the real follow dates the daily job can’t see.
+            Drag in <code>followers_1.json</code> and <code>following.json</code> — or the whole{' '}
+            <code>.zip</code>. Export via Accounts Center → Download your information →{' '}
+            <em>Followers and following</em> (JSON). Parsed entirely in your browser — this
+            backfills the real follow dates the daily job can’t see.
           </span>
         </button>
       )}
