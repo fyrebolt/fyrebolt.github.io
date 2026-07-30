@@ -13,6 +13,7 @@ import {
   relationships,
   searchProfiles,
   sortProfiles,
+  staleness,
   statsForRange,
   timeAgo,
   type DayBucket,
@@ -249,12 +250,14 @@ function TrackerBody({
 
   return (
     <div className="ig">
-      {data.sample && (
+      {data.sample ? (
         <div className="ig-banner" role="note">
           <span className="ig-banner-dot" aria-hidden />
           Showing sample data. Run the daily pull (or import your export above) to track{' '}
           <strong>@{data.account}</strong> for real.
         </div>
+      ) : (
+        <StaleBanner generatedAt={data.generatedAt} />
       )}
 
       <section className="ig-hero">
@@ -310,6 +313,30 @@ function TrackerBody({
       </section>
 
       <PeopleSection followers={data.followers ?? []} following={data.following ?? []} />
+    </div>
+  );
+}
+
+/**
+ * Warns when the daily pull has clearly stopped. The site can't reach the job,
+ * so the age of the data is the only signal available to it — and a tracker that
+ * has silently stalled is worse than one that says so.
+ */
+function StaleBanner({ generatedAt }: { generatedAt: string }) {
+  const { hours, level } = staleness(generatedAt);
+  if (level === 'ok') return null;
+
+  const days = Math.floor(hours / 24);
+  const age = days >= 1 ? `${days} day${days === 1 ? '' : 's'}` : `${Math.round(hours)} hours`;
+
+  return (
+    <div className={`ig-banner is-stale ${level}`} role="alert">
+      <span className="ig-banner-dot" aria-hidden />
+      <span>
+        <strong>Tracking may have stopped</strong> — last successful pull was {age} ago. The most
+        likely cause is an expired Instagram session cookie. Check with{' '}
+        <code>./scripts/instagram-schedule.sh status</code>.
+      </span>
     </div>
   );
 }
