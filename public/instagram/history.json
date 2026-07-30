@@ -1,6 +1,6 @@
 {
   "account": "hastinchen",
-  "generatedAt": "2026-07-30T00:04:26.924Z",
+  "generatedAt": "2026-07-30T05:14:40.871Z",
   "sample": false,
   "snapshots": [
     {
@@ -9,12 +9,19 @@
       "following": 869
     },
     {
-      "t": "2026-07-30T00:04:26.924Z",
-      "followers": 910,
+      "t": "2026-07-30T05:14:40.871Z",
+      "followers": 909,
       "following": 869
     }
   ],
-  "events": [],
+  "events": [
+    {
+      "username": "hazimsf",
+      "kind": "unfollow",
+      "t": "2026-07-30T05:14:40.871Z",
+      "name": "حازم"
+    }
+  ],
   "followers": [
     {
       "username": "___troy.nichols___",
@@ -2105,12 +2112,6 @@
     {
       "username": "hayden_samala",
       "name": "Hayden Samala",
-      "private": true,
-      "since": "2026-07-30T00:04:26.924Z"
-    },
-    {
-      "username": "hazimsf",
-      "name": "حازم",
       "private": true,
       "since": "2026-07-30T00:04:26.924Z"
     },
@@ -6128,6 +6129,12 @@
       "since": "2026-07-30T00:04:26.924Z"
     },
     {
+      "username": "bryce.huang",
+      "name": "Bryce Huang",
+      "private": true,
+      "since": "2026-07-30T05:14:40.871Z"
+    },
+    {
       "username": "bse_at_ucla",
       "name": "Bruin Software Engineers at UCLA",
       "since": "2026-07-30T00:04:26.924Z"
@@ -6650,6 +6657,12 @@
       "since": "2026-07-30T00:04:26.924Z"
     },
     {
+      "username": "dxx_913",
+      "name": "daniel",
+      "private": true,
+      "since": "2026-07-30T05:14:40.871Z"
+    },
+    {
       "username": "dylan_amador33",
       "name": "Dylan Amador",
       "private": true,
@@ -7074,12 +7087,6 @@
     {
       "username": "hayden_samala",
       "name": "Hayden Samala",
-      "private": true,
-      "since": "2026-07-30T00:04:26.924Z"
-    },
-    {
-      "username": "hazimsf",
-      "name": "حازم",
       "private": true,
       "since": "2026-07-30T00:04:26.924Z"
     },
@@ -8403,11 +8410,6 @@
       "username": "nightmare_princess05",
       "name": "Brina.bear23",
       "private": true,
-      "since": "2026-07-30T00:04:26.924Z"
-    },
-    {
-      "username": "nihal.gunu",
-      "name": "Nihal Gunukula",
       "since": "2026-07-30T00:04:26.924Z"
     },
     {
