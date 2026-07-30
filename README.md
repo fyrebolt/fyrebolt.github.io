@@ -164,17 +164,30 @@ GitHub Actions runners get challenged within days.
    node scripts/instagram-pull.mjs --dry-run
    ```
 
-3. **Schedule it** (launchd, once a day, default 09:20):
+3. **Schedule it** (launchd, first attempt 09:20 by default):
 
    ```bash
    ./scripts/instagram-schedule.sh install
    ```
 
-   `status`, `run`, `logs`, and `uninstall` do what they say. The scheduled job
-   runs with `--commit`, so each day's pull is committed and pushed on its own —
-   which means your follower and following lists are public on the live site.
-   Drop `--commit` from the plist if you'd rather keep the data local and publish
-   by hand.
+   `status`, `run`, `logs`, and `uninstall` do what they say — `status` reports
+   whether today's pull has happened yet. The scheduled job runs with `--commit`,
+   so each day's pull is committed and pushed on its own — which means your
+   follower and following lists are public on the live site. Drop `--commit` from
+   the plist if you'd rather keep the data local and publish by hand.
+
+**Retries, but one pull a day.** The job is scheduled *every hour* from the
+chosen time until midnight (15 attempts by default), while `--once-daily` makes
+it a no-op once a run has already succeeded that day. `history.json` is written
+only on success, so its `generatedAt` is itself the record of the last good run —
+no separate stamp file to drift out of sync. So a Mac asleep at 09:20 still gets
+its pull at 10:20, or whenever it next wakes, and a satisfied day costs one file
+read and no network at all. A *failed* attempt leaves the file untouched, so the
+next hour tries again — meaning a cookie you re-paste at lunchtime recovers the
+same day rather than waiting for tomorrow.
+
+Failure notifications are de-duplicated to one per day per kind, so a dead cookie
+alerts you once instead of fifteen times.
 
 The first run only records a baseline; diffs start the next day. Expect to
 re-paste the cookie every few weeks — the script fails with a clear message
