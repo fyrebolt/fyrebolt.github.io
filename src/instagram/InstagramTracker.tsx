@@ -9,12 +9,18 @@ import {
   clearLocalData,
   downloadHistoryJson,
   filterRange,
-  searchFollowers,
+  monthYear,
+  relationships,
+  searchProfiles,
+  sortProfiles,
   statsForRange,
   timeAgo,
   type DayBucket,
-  type Follower,
+  type FollowEvent,
+  type ListKind,
+  type Profile,
   type Snapshot,
+  type SortKey,
   type TrackerData,
 } from './data';
 import { parseExportZip, buildFromExport } from './importZip';
@@ -40,26 +46,23 @@ export default function InstagramTracker() {
   const [range, setRange] = useState<Range>('30');
   const [importState, setImportState] = useState<ImportState>({ busy: false });
 
+  // Mirrored into a ref so handleFile can diff against the current data without
+  // being re-created (and re-passed) on every update. Written after commit.
   const dataRef = useRef<TrackerData | null>(null);
-  dataRef.current = data;
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
 
   useEffect(() => {
     let cancelled = false;
-    // Prefer locally imported data (from a data-export ZIP) over the committed file.
+    // Prefer locally imported data (from a data-export ZIP) over the committed
+    // file, unless the committed one is newer — the daily job writes that.
     const local = loadLocalData();
-    if (local) {
-      setData(local);
-      setStatus('ready');
-      return;
-    }
-    loadTrackerData().then((d) => {
+    loadTrackerData().then((remote) => {
       if (cancelled) return;
-      if (d) {
-        setData(d);
-        setStatus('ready');
-      } else {
-        setStatus('error');
-      }
+      const best = pickFresher(local, remote);
+      setData(best);
+      setStatus(best ? 'ready' : 'error');
     });
     return () => {
       cancelled = true;
@@ -76,7 +79,9 @@ export default function InstagramTracker() {
       setStatus('ready');
       setImportState({
         busy: false,
-        note: `Imported ${imported.length.toLocaleString()} followers.`,
+        note:
+          `Imported ${imported.followers.length.toLocaleString()} followers and ` +
+          `${imported.following.length.toLocaleString()} following.`,
       });
     } catch (e) {
       setImportState({ busy: false, error: e instanceof Error ? e.message : 'Import failed.' });
@@ -125,6 +130,15 @@ export default function InstagramTracker() {
       {status === 'ready' && data && <TrackerBody data={data} range={range} setRange={setRange} />}
     </AppShell>
   );
+}
+
+/** Whichever source has the more recent successful check wins. */
+function pickFresher(a: TrackerData | null, b: TrackerData | null): TrackerData | null {
+  if (!a) return b;
+  if (!b) return a;
+  const ta = new Date(a.generatedAt).getTime() || 0;
+  const tb = new Date(b.generatedAt).getTime() || 0;
+  return tb > ta ? b : a;
 }
 
 function ImportPanel({
@@ -177,18 +191,17 @@ function ImportPanel({
       {isLive ? (
         <div className="ig-import-live">
           <div className="ig-import-live-text">
-            <strong>Live data</strong> · updated {timeAgo(data!.generatedAt)} · stored in this
-            browser
+            <strong>Live data</strong> · updated {timeAgo(data!.generatedAt)}
           </div>
           <div className="ig-import-actions">
             <button className="ios-btn" onClick={pick} disabled={state.busy}>
-              {state.busy ? 'Importing…' : 'Update with new export'}
+              {state.busy ? 'Importing…' : 'Backfill from export'}
             </button>
             <button className="ios-btn" onClick={onDownload}>
               Download history.json
             </button>
             <button className="ios-btn ig-btn-quiet" onClick={onClear}>
-              Clear
+              Clear local
             </button>
           </div>
         </div>
@@ -203,7 +216,7 @@ function ImportPanel({
           <span className="ig-import-sub">
             Drag in the <code>.zip</code>, or click to choose. Export via Accounts Center → Download
             your information → <em>Followers and following</em> (JSON). Parsed entirely in your
-            browser.
+            browser — this backfills the real follow dates the daily job can’t see.
           </span>
         </button>
       )}
@@ -239,7 +252,7 @@ function TrackerBody({
       {data.sample && (
         <div className="ig-banner" role="note">
           <span className="ig-banner-dot" aria-hidden />
-          Showing sample data. Import your Instagram data export above to track{' '}
+          Showing sample data. Run the daily pull (or import your export above) to track{' '}
           <strong>@{data.account}</strong> for real.
         </div>
       )}
@@ -268,7 +281,9 @@ function TrackerBody({
       <section className="ig-activity">
         <h2 className="ig-section-title">Daily activity</h2>
         {buckets.length === 0 ? (
-          <div className="ig-placeholder small">No follow/unfollow activity recorded yet.</div>
+          <div className="ig-placeholder small">
+            No follow/unfollow activity recorded yet — the first daily run sets the baseline.
+          </div>
         ) : (
           <>
             <div className="ig-day-strip" role="tablist" aria-label="Days with activity">
@@ -294,86 +309,304 @@ function TrackerBody({
         )}
       </section>
 
-      <FollowersSection followers={data.followers ?? []} />
+      <PeopleSection followers={data.followers ?? []} following={data.following ?? []} />
     </div>
   );
 }
 
-const FOLLOWERS_LIMIT = 100;
+// ===== People browser =====
 
-function FollowersSection({ followers }: { followers: Follower[] }) {
+const TABS: Array<{ kind: ListKind; label: string; tone: string }> = [
+  { kind: 'followers', label: 'Followers', tone: 'blue' },
+  { kind: 'following', label: 'Following', tone: 'violet' },
+  { kind: 'mutuals', label: 'Mutuals', tone: 'green' },
+  { kind: 'fans', label: 'You don’t follow back', tone: 'amber' },
+  { kind: 'ghosts', label: 'Don’t follow you back', tone: 'pink' },
+];
+
+const SORT_OPTIONS: Array<{ value: SortKey; label: string }> = [
+  { value: 'recent', label: 'Recent' },
+  { value: 'oldest', label: 'Oldest' },
+  { value: 'az', label: 'A–Z' },
+];
+
+const HINTS: Record<ListKind, string> = {
+  followers: 'Everyone who follows you.',
+  following: 'Everyone you follow.',
+  mutuals: 'You follow each other.',
+  fans: 'They follow you and you haven’t followed back.',
+  ghosts: 'You follow them and they haven’t followed back.',
+};
+
+function PeopleSection({ followers, following }: { followers: Profile[]; following: Profile[] }) {
+  const [kind, setKind] = useState<ListKind>('followers');
   const [query, setQuery] = useState('');
-  const results = useMemo(() => searchFollowers(followers, query), [followers, query]);
-  const shown = results.slice(0, FOLLOWERS_LIMIT);
+  const [sort, setSort] = useState<SortKey>('recent');
+
+  const sets = useMemo(() => relationships(followers, following), [followers, following]);
+  const mutualKeys = useMemo(
+    () => new Set(sets.mutuals.map((p) => p.username.toLowerCase())),
+    [sets.mutuals],
+  );
+
+  const rows = useMemo(
+    () => sortProfiles(searchProfiles(sets[kind], query), sort),
+    [sets, kind, query, sort],
+  );
+
+  if (followers.length === 0 && following.length === 0) {
+    return (
+      <section className="ig-people">
+        <h2 className="ig-section-title">People</h2>
+        <div className="ig-placeholder small">
+          The follower and following lists appear here after the first daily pull, or as soon as you
+          import a data export.
+        </div>
+      </section>
+    );
+  }
+
+  const total = followers.length + following.length;
 
   return (
-    <section className="ig-followers">
-      <div className="ig-followers-head">
-        <h2 className="ig-section-title">Followers</h2>
-        <span className="ig-followers-count">{followers.length.toLocaleString()} total</span>
+    <section className="ig-people">
+      <div className="ig-people-head">
+        <h2 className="ig-section-title">People</h2>
+        <span className="ig-people-sub">{HINTS[kind]}</span>
       </div>
 
-      {followers.length === 0 ? (
-        <div className="ig-placeholder small">
-          The follower list appears here once a live Instagram session is connected.
+      <ReciprocityBar
+        mutuals={sets.mutuals.length}
+        fans={sets.fans.length}
+        ghosts={sets.ghosts.length}
+      />
+
+      <div className="ig-tabs" role="tablist" aria-label="Relationship lists">
+        {TABS.map((t) => (
+          <button
+            key={t.kind}
+            role="tab"
+            aria-selected={t.kind === kind}
+            className={`ig-tab tone-${t.tone} ${t.kind === kind ? 'is-active' : ''}`}
+            onClick={() => {
+              setKind(t.kind);
+              setQuery('');
+            }}
+          >
+            <span className="ig-tab-count">{sets[t.kind].length.toLocaleString()}</span>
+            <span className="ig-tab-label">{t.label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="ig-people-controls">
+        <div className="ig-search">
+          <svg
+            className="ig-search-icon"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden
+          >
+            <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+            <path d="M20 20l-3.2-3.2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+          <input
+            className="ios-input ig-search-input"
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by name or @username"
+            aria-label="Search people"
+          />
         </div>
+        <Segmented options={SORT_OPTIONS} value={sort} onChange={setSort} className="ig-sort" />
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="ig-empty">
+          {query ? `Nobody in this list matches “${query}”.` : 'This list is empty. 🎉'}
+        </p>
       ) : (
-        <>
-          <div className="ig-search">
-            <svg className="ig-search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-              <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
-              <path d="M20 20l-3.2-3.2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-            <input
-              className="ios-input ig-search-input"
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by name or @username"
-              aria-label="Search followers"
-            />
-          </div>
-
-          {results.length === 0 ? (
-            <p className="ig-empty">No followers match “{query}”.</p>
-          ) : (
-            <ul className="ig-follower-list">
-              {shown.map((f) => (
-                <FollowerRow key={f.username} follower={f} />
-              ))}
-            </ul>
-          )}
-
-          {results.length > FOLLOWERS_LIMIT && (
-            <p className="ig-followers-more">
-              Showing {FOLLOWERS_LIMIT} of {results.length.toLocaleString()} — refine your search to
-              narrow it down.
-            </p>
-          )}
-        </>
+        // Keyed on the query so switching tab / search / sort remounts the
+        // scroller, which puts you back at the top of the new list.
+        <VirtualList
+          key={`${kind}|${query}|${sort}`}
+          rows={rows}
+          mutualKeys={mutualKeys}
+          kind={kind}
+        />
       )}
+
+      <p className="ig-people-foot">
+        {rows.length.toLocaleString()} shown
+        {query ? ` of ${sets[kind].length.toLocaleString()}` : ''} · {total.toLocaleString()}{' '}
+        relationships tracked
+      </p>
     </section>
   );
 }
 
-function FollowerRow({ follower }: { follower: Follower }) {
+/** Proportional split of the follow graph into mutual / one-way-in / one-way-out. */
+function ReciprocityBar({
+  mutuals,
+  fans,
+  ghosts,
+}: {
+  mutuals: number;
+  fans: number;
+  ghosts: number;
+}) {
+  const total = mutuals + fans + ghosts;
+  if (total === 0) return null;
+  const pct = (n: number) => `${(n / total) * 100}%`;
+  const mutualRate = Math.round((mutuals / total) * 100);
+
   return (
-    <li className="ig-follower-row">
-      <span className="ig-avatar follow" aria-hidden>
-        {follower.username.slice(0, 1).toUpperCase()}
-      </span>
-      <span className="ig-follower-text">
-        {follower.name ? <span className="ig-follower-name">{follower.name}</span> : null}
+    <div className="ig-recip">
+      <div className="ig-recip-bar" role="img" aria-label={`${mutualRate}% mutual`}>
+        <span className="seg mutual" style={{ width: pct(mutuals) }} />
+        <span className="seg fans" style={{ width: pct(fans) }} />
+        <span className="seg ghosts" style={{ width: pct(ghosts) }} />
+      </div>
+      <div className="ig-recip-legend">
+        <Legend tone="mutual" label="Mutual" value={mutuals} />
+        <Legend tone="fans" label="One-way in" value={fans} />
+        <Legend tone="ghosts" label="One-way out" value={ghosts} />
+        <span className="ig-recip-rate">{mutualRate}% mutual</span>
+      </div>
+    </div>
+  );
+}
+
+function Legend({ tone, label, value }: { tone: string; label: string; value: number }) {
+  return (
+    <span className="ig-legend">
+      <span className={`dot ${tone}`} aria-hidden />
+      {label} <strong>{value.toLocaleString()}</strong>
+    </span>
+  );
+}
+
+const ROW_H = 58;
+const VIEWPORT_H = 464;
+const OVERSCAN = 5;
+
+/**
+ * Windowed list — only the visible slice is in the DOM, so a few thousand rows
+ * scroll as smoothly as a dozen. Rows are a fixed height by design.
+ */
+function VirtualList({
+  rows,
+  mutualKeys,
+  kind,
+}: {
+  rows: Profile[];
+  mutualKeys: Set<string>;
+  kind: ListKind;
+}) {
+  const [scrollTop, setScrollTop] = useState(0);
+
+  const first = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
+  const visible = Math.ceil(VIEWPORT_H / ROW_H) + OVERSCAN * 2;
+  const slice = rows.slice(first, first + visible);
+
+  return (
+    <div
+      className="ig-people-scroll"
+      style={{ height: Math.min(VIEWPORT_H, rows.length * ROW_H) }}
+      onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+    >
+      <div className="ig-people-spacer" style={{ height: rows.length * ROW_H }}>
+        <ul className="ig-people-list" style={{ transform: `translateY(${first * ROW_H}px)` }}>
+          {slice.map((p) => (
+            <PersonRow
+              key={p.username}
+              person={p}
+              kind={kind}
+              mutual={mutualKeys.has(p.username.toLowerCase())}
+            />
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function PersonRow({
+  person,
+  kind,
+  mutual,
+}: {
+  person: Profile;
+  kind: ListKind;
+  mutual: boolean;
+}) {
+  const since = monthYear(person.since);
+  // In the mutuals tab the badge would be on every row, so it earns nothing.
+  const showMutual = mutual && kind !== 'mutuals';
+
+  return (
+    <li className="ig-person" style={{ height: ROW_H }}>
+      <Avatar username={person.username} />
+      <span className="ig-person-text">
+        <span className="ig-person-top">
+          <span className="ig-person-name">{person.name || person.username}</span>
+          {person.verified && (
+            <svg className="ig-verified" viewBox="0 0 24 24" aria-label="Verified" role="img">
+              <path
+                d="M12 2l2.4 1.8 3-.2 1 2.8 2.4 1.8-1 2.8 1 2.8-2.4 1.8-1 2.8-3-.2L12 22l-2.4-1.8-3 .2-1-2.8L3.2 15.8l1-2.8-1-2.8L5.6 8.4l1-2.8 3 .2z"
+                fill="currentColor"
+              />
+              <path
+                d="M8.5 12.2l2.2 2.2 4.6-4.6"
+                stroke="#fff"
+                strokeWidth="2"
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
+          {person.private && <span className="ig-chip-mini">private</span>}
+        </span>
         <a
-          className="ig-follower-handle"
-          href={`https://instagram.com/${follower.username}`}
+          className="ig-person-handle"
+          href={`https://instagram.com/${person.username}`}
           target="_blank"
           rel="noopener noreferrer"
         >
-          @{follower.username}
+          @{person.username}
         </a>
       </span>
+      {showMutual && <span className="ig-person-badge mutual">mutual</span>}
+      {since && <span className="ig-person-since">{since}</span>}
     </li>
+  );
+}
+
+/** Deterministic gradient from the username, so each account keeps its colour. */
+function Avatar({ username }: { username: string }) {
+  const { hue, initial } = useMemo(() => {
+    let acc = 0;
+    for (let i = 0; i < username.length; i++) acc = (acc * 31 + username.charCodeAt(i)) % 360;
+    // Plenty of handles start with . or _ — skip to the first real character so
+    // the avatar doesn't just show punctuation.
+    const letter = [...username].find((c) => /[\p{L}\p{N}]/u.test(c)) ?? username.slice(0, 1);
+    return { hue: acc, initial: letter.toUpperCase() };
+  }, [username]);
+
+  return (
+    <span
+      className="ig-avatar"
+      aria-hidden
+      style={{
+        background: `linear-gradient(150deg, hsl(${hue} 72% 62%), hsl(${(hue + 42) % 360} 68% 46%))`,
+      }}
+    >
+      {initial}
+    </span>
   );
 }
 
@@ -388,7 +621,7 @@ function DayDetail({ bucket, account }: { bucket: DayBucket; account: string }) 
         {bucket.follows.length ? (
           <ul className="ig-user-list">
             {bucket.follows.map((e) => (
-              <UserRow key={`f-${e.username}`} username={e.username} kind="follow" />
+              <UserRow key={`f-${e.username}`} event={e} />
             ))}
           </ul>
         ) : (
@@ -404,7 +637,7 @@ function DayDetail({ bucket, account }: { bucket: DayBucket; account: string }) 
         {bucket.unfollows.length ? (
           <ul className="ig-user-list">
             {bucket.unfollows.map((e) => (
-              <UserRow key={`u-${e.username}`} username={e.username} kind="unfollow" />
+              <UserRow key={`u-${e.username}`} event={e} />
             ))}
           </ul>
         ) : (
@@ -418,21 +651,29 @@ function DayDetail({ bucket, account }: { bucket: DayBucket; account: string }) 
   );
 }
 
-function UserRow({ username, kind }: { username: string; kind: 'follow' | 'unfollow' }) {
+function UserRow({ event }: { event: FollowEvent }) {
   return (
     <li className="ig-user-row">
-      <span className={`ig-avatar ${kind}`} aria-hidden>
-        {username.slice(0, 1).toUpperCase()}
+      <span className={`ig-avatar ${event.kind}`} aria-hidden>
+        {event.username.slice(0, 1).toUpperCase()}
       </span>
       <a
         className="ig-user-name"
-        href={`https://instagram.com/${username}`}
+        href={`https://instagram.com/${event.username}`}
         target="_blank"
         rel="noopener noreferrer"
       >
-        @{username}
+        {event.name ? (
+          <>
+            {event.name} <span className="ig-user-handle">@{event.username}</span>
+          </>
+        ) : (
+          `@${event.username}`
+        )}
       </a>
-      <span className={`ig-user-tag ${kind}`}>{kind === 'follow' ? 'Followed' : 'Unfollowed'}</span>
+      <span className={`ig-user-tag ${event.kind}`}>
+        {event.kind === 'follow' ? 'Followed' : 'Unfollowed'}
+      </span>
     </li>
   );
 }
@@ -449,10 +690,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 function Arrow({ up }: { up: boolean }) {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden style={{ display: 'inline-block' }}>
-      <path
-        d={up ? 'M6 2l4 5H2z' : 'M6 10L2 5h8z'}
-        fill="currentColor"
-      />
+      <path d={up ? 'M6 2l4 5H2z' : 'M6 10L2 5h8z'} fill="currentColor" />
     </svg>
   );
 }
@@ -476,8 +714,7 @@ function FollowerChart({ snapshots }: { snapshots: Snapshot[] }) {
     const lo = vMin - vPad;
     const hi = vMax + vPad;
 
-    const x = (t: number) =>
-      padX + ((t - tMin) / Math.max(1, tMax - tMin)) * (W - padX * 2);
+    const x = (t: number) => padX + ((t - tMin) / Math.max(1, tMax - tMin)) * (W - padX * 2);
     const y = (v: number) => padY + (1 - (v - lo) / Math.max(1, hi - lo)) * (H - padY * 2);
 
     const pts = snapshots.map((s, i) => `${x(times[i])},${y(s.followers)}`);
@@ -492,7 +729,13 @@ function FollowerChart({ snapshots }: { snapshots: Snapshot[] }) {
   }
 
   return (
-    <svg className="ig-chart" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="Follower count over time">
+    <svg
+      className="ig-chart"
+      viewBox={`0 0 ${W} ${H}`}
+      preserveAspectRatio="none"
+      role="img"
+      aria-label="Follower count over time"
+    >
       <defs>
         <linearGradient id="igLine" x1="0" y1="0" x2="1" y2="0">
           <stop offset="0%" stopColor="#feda75" />
@@ -515,7 +758,15 @@ function FollowerChart({ snapshots }: { snapshots: Snapshot[] }) {
         strokeLinecap="round"
         vectorEffect="non-scaling-stroke"
       />
-      <circle cx={geo.last.x} cy={geo.last.y} r="4.5" fill="#fff" stroke="#d62976" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
+      <circle
+        cx={geo.last.x}
+        cy={geo.last.y}
+        r="4.5"
+        fill="#fff"
+        stroke="#d62976"
+        strokeWidth="2.5"
+        vectorEffect="non-scaling-stroke"
+      />
     </svg>
   );
 }

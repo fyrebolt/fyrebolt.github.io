@@ -117,6 +117,88 @@ opens the raw file; **Print again** replays the animation. Swap
 Bio, skills, writing, and contact links. Content lives in
 [`src/about/data.ts`](src/about/data.ts).
 
+### 📸 Instagram Tracker (`/instagram/`)
+
+Tracks who follows and unfollows you, once a day. The site is static, so all the
+data lives in one committed file — [`public/instagram/history.json`](public/instagram/history.json) —
+and the app just renders it.
+
+**People** is the main view: five lists over the same two sets, each searchable
+and sortable (Recent / Oldest / A–Z), windowed so a few thousand rows scroll
+smoothly.
+
+| List | Who's in it |
+| --- | --- |
+| Followers | Everyone who follows you |
+| Following | Everyone you follow |
+| Mutuals | You follow each other |
+| You don't follow back | They follow you, you haven't followed back |
+| Don't follow you back | You follow them, they haven't followed back |
+
+Above the lists, a reciprocity bar splits the whole graph into mutual /
+one-way-in / one-way-out. Below the chart, **Daily activity** buckets every
+detected follow and unfollow by day.
+
+#### Setting up the daily pull
+
+Instagram has **no public API for follower lists** — the Graph API only returns a
+follower *count*, no names. So the pull uses the same private web endpoints
+instagram.com itself calls, authenticated with your own session cookie. Two
+consequences worth knowing up front: it's automated collection (which Instagram's
+ToS disallows), and it runs from your own machine on purpose — datacenter IPs like
+GitHub Actions runners get challenged within days.
+
+1. **Add your session cookie.** Create `scripts/.instagram-secrets.json`
+   (gitignored):
+
+   ```json
+   { "account": "yourhandle", "cookie": "<paste the whole cookie: request header>" }
+   ```
+
+   Get it from instagram.com while logged in: DevTools → Network → click any
+   request to instagram.com → Request Headers → copy the entire `cookie:` value.
+
+2. **Test it without writing anything:**
+
+   ```bash
+   node scripts/instagram-pull.mjs --dry-run
+   ```
+
+3. **Schedule it** (launchd, once a day, default 09:20):
+
+   ```bash
+   ./scripts/instagram-schedule.sh install
+   ```
+
+   `status`, `run`, `logs`, and `uninstall` do what they say. The scheduled job
+   runs with `--commit`, so each day's pull is committed and pushed on its own —
+   which means your follower and following lists are public on the live site.
+   Drop `--commit` from the plist if you'd rather keep the data local and publish
+   by hand.
+
+The first run only records a baseline; diffs start the next day. Expect to
+re-paste the cookie every few weeks — the script fails with a clear message
+rather than silently recording nothing.
+
+**Guard against phantom unfollows.** A throttled or truncated read looks exactly
+like a mass unfollow to a diffing tracker, so the script cross-checks what it
+paged against the count Instagram reports for the profile and refuses to write if
+it's short (or if the follower count halved since the last run). `--force`
+overrides it when a drop is genuinely real.
+
+#### Backfilling real follow dates
+
+The private API doesn't say *when* someone followed you, so accounts first seen by
+the daily job are dated from that day. To get the true dates, request the official
+export (Accounts Center → Download your information → **Followers and following**,
+JSON) and drop the `.zip` onto the tracker. It's unzipped and parsed entirely in
+the browser — nothing is uploaded — and the real dates are merged in, then
+preserved by every later pull. It's also the fastest way to seed the whole thing
+before the first scheduled run.
+
+Sample data ships committed so the app is demoable without any of this; regenerate
+it with `node scripts/gen_sample_instagram.mjs`.
+
 ---
 
 ## Development
@@ -132,7 +214,7 @@ npm run lint      # run ESLint
 ```
 
 Each app is its own Vite entry point (`index.html`, `video/`, `appstore/`,
-`printer/`, `about/`) wired up in [`vite.config.ts`](vite.config.ts).
+`printer/`, `about/`, `instagram/`) wired up in [`vite.config.ts`](vite.config.ts).
 
 ### Project layout
 
@@ -144,7 +226,9 @@ src/
   video/       # Camera video editor (layer model + compositor in src/video/project/)
   printer/     # Résumé PDF viewer
   about/       # About Me
+  instagram/   # Instagram follower tracker
   components/  # shared UI + section components
+scripts/       # instagram-pull.mjs (daily job), instagram-schedule.sh (launchd)
 public/        # static assets served as-is (resume.pdf, fonts, icons)
 ```
 

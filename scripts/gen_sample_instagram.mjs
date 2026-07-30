@@ -102,6 +102,21 @@ const LAST = [
   'Garcia', 'Novak', 'Haddad', 'Singh', 'Moreau', 'Costa', 'Berg', 'Reyes', 'Ito', 'Flores',
 ];
 
+const START = snapshots[0].followers;
+const firstT = new Date(snapshots[0].t).getTime();
+const lastT = new Date(snapshots[snapshots.length - 1].t).getTime();
+
+/** A plausible "since" date: early followers are old, recent ones are recent. */
+const sinceFor = (rank, total) => {
+  if (rank < START) {
+    // Part of the pre-history baseline — spread over the two years before it.
+    const twoYears = 730 * dayMs;
+    return new Date(firstT - randInt(1, twoYears / dayMs) * dayMs).toISOString();
+  }
+  const frac = (rank - START) / Math.max(1, total - START);
+  return new Date(firstT + frac * (lastT - firstT)).toISOString();
+};
+
 const seen = new Set();
 const followerList = [];
 let guard = 0;
@@ -115,16 +130,65 @@ while (followerList.length < currentCount && guard < currentCount * 20) {
   if (seen.has(username)) continue;
   seen.add(username);
   const name = `${FIRST[randInt(0, FIRST.length - 1)]} ${LAST[randInt(0, LAST.length - 1)]}`;
-  followerList.push({ username, name });
+  const entry = { username, name, since: sinceFor(followerList.length, currentCount) };
+  if (rand() < 0.02) entry.verified = true;
+  if (rand() < 0.18) entry.private = true;
+  followerList.push(entry);
 }
 // Fold in the recent event usernames so search results line up with activity.
 for (const ev of events) {
   if (ev.kind === 'follow' && !seen.has(ev.username)) {
     seen.add(ev.username);
-    followerList.push({ username: ev.username, name: '' });
+    followerList.push({ username: ev.username, since: ev.t });
   }
 }
 followerList.sort((a, b) => a.username.localeCompare(b.username));
+
+// Build a following list: most mutuals come from the follower list, plus some
+// accounts that never followed back (big names you follow one-way).
+const FOLLOWING_TOTAL = Math.round(currentCount * 0.68);
+const MUTUAL_SHARE = 0.78;
+const mutualTarget = Math.round(FOLLOWING_TOTAL * MUTUAL_SHARE);
+
+const followingList = [];
+const followingSeen = new Set();
+// Reservoir-free sample: walk the followers and take roughly the share we need.
+const step = followerList.length / mutualTarget;
+for (let i = 0; followingList.length < mutualTarget && i < followerList.length; i++) {
+  if (i % Math.max(1, Math.round(step)) !== 0) continue;
+  const f = followerList[i];
+  followingSeen.add(f.username);
+  // You followed back some time after they followed you.
+  const followedBack = f.since
+    ? new Date(Math.min(lastT, new Date(f.since).getTime() + randInt(0, 30) * dayMs)).toISOString()
+    : undefined;
+  followingList.push({
+    username: f.username,
+    name: f.name || undefined,
+    since: followedBack,
+    ...(f.verified ? { verified: true } : {}),
+    ...(f.private ? { private: true } : {}),
+  });
+}
+// One-way-out: accounts you follow that don't follow you back.
+guard = 0;
+while (followingList.length < FOLLOWING_TOTAL && guard < FOLLOWING_TOTAL * 20) {
+  guard++;
+  const username = `${NOUN[randInt(0, NOUN.length - 1)]}.${ADJ[randInt(0, ADJ.length - 1)]}${randInt(1, 999)}`;
+  if (seen.has(username) || followingSeen.has(username)) continue;
+  followingSeen.add(username);
+  const entry = {
+    username,
+    name: `${FIRST[randInt(0, FIRST.length - 1)]} ${LAST[randInt(0, LAST.length - 1)]}`,
+    since: new Date(firstT - randInt(1, 500) * dayMs).toISOString(),
+  };
+  if (rand() < 0.22) entry.verified = true;
+  followingList.push(entry);
+}
+followingList.sort((a, b) => a.username.localeCompare(b.username));
+
+// Record the following count on the final snapshot so the app has both series.
+snapshots[snapshots.length - 1].following = followingList.length;
 
 const data = {
   account: ACCOUNT,
@@ -133,10 +197,15 @@ const data = {
   snapshots,
   events,
   followers: followerList,
+  following: followingList,
 };
 
 mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, JSON.stringify(data, null, 2) + '\n');
+
+const followingKeys = new Set(followingList.map((p) => p.username.toLowerCase()));
+const mutuals = followerList.filter((p) => followingKeys.has(p.username.toLowerCase())).length;
 console.log(
-  `Wrote ${OUT} — ${snapshots.length} snapshots, ${events.length} events, ${followerList.length} followers.`,
+  `Wrote ${OUT} — ${snapshots.length} snapshots, ${events.length} events, ` +
+    `${followerList.length} followers, ${followingList.length} following, ${mutuals} mutuals.`,
 );
