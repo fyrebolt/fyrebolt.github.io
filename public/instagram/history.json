@@ -1,6 +1,6 @@
 {
   "account": "hastinchen",
-  "generatedAt": "2026-07-30T17:18:24.877Z",
+  "generatedAt": "2026-07-31T00:11:09.207Z",
   "sample": false,
   "snapshots": [
     {
@@ -1834,6 +1834,11 @@
     },
     {
       "t": "2026-07-30T17:18:24.877Z",
+      "followers": 908,
+      "following": 869
+    },
+    {
+      "t": "2026-07-31T00:11:09.207Z",
       "followers": 908,
       "following": 869
     }
@@ -4405,7 +4410,6 @@
     {
       "username": "jolie._.bw",
       "name": "jolie",
-      "private": true,
       "since": "2025-10-17T22:15:29.000Z"
     },
     {
@@ -4729,6 +4733,7 @@
     {
       "username": "kori.bui",
       "name": "Kori Bui",
+      "private": true,
       "since": "2025-12-29T01:54:42.000Z"
     },
     {
@@ -5352,7 +5357,6 @@
     {
       "username": "nick.wong._",
       "name": "nicholas",
-      "private": true,
       "since": "2025-10-02T06:01:48.000Z"
     },
     {
@@ -9352,7 +9356,6 @@
     {
       "username": "jolie._.bw",
       "name": "jolie",
-      "private": true,
       "since": "2025-10-17T22:15:29.000Z"
     },
     {
@@ -9642,6 +9645,7 @@
     {
       "username": "kori.bui",
       "name": "Kori Bui",
+      "private": true,
       "since": "2025-12-29T01:55:39.000Z"
     },
     {
@@ -10200,7 +10204,6 @@
     {
       "username": "nick.wong._",
       "name": "nicholas",
-      "private": true,
       "since": "2025-10-02T06:01:52.000Z"
     },
     {
