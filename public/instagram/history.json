@@ -1,6 +1,6 @@
 {
   "account": "hastinchen",
-  "generatedAt": "2026-07-31T00:11:09.207Z",
+  "generatedAt": "2026-07-31T16:20:32.049Z",
   "sample": false,
   "snapshots": [
     {
@@ -1838,12 +1838,25 @@
       "following": 869
     },
     {
-      "t": "2026-07-31T00:11:09.207Z",
-      "followers": 908,
-      "following": 869
+      "t": "2026-07-31T16:20:32.049Z",
+      "followers": 907,
+      "following": 868
     }
   ],
   "events": [
+    {
+      "username": "t1mmy_01",
+      "kind": "unfollow",
+      "t": "2026-07-31T16:20:32.049Z",
+      "name": "Timothy",
+      "dir": "out"
+    },
+    {
+      "username": "t1mmy_01",
+      "kind": "unfollow",
+      "t": "2026-07-31T16:20:32.049Z",
+      "name": "Timothy"
+    },
     {
       "username": "hrite5h",
       "kind": "unfollow",
@@ -6332,12 +6345,6 @@
       "username": "swaggyraju17",
       "name": "Arrin Sagiraju",
       "since": "2025-05-18T13:39:20.000Z"
-    },
-    {
-      "username": "t1mmy_01",
-      "name": "Timothy",
-      "private": true,
-      "since": "2023-08-09T21:08:11.000Z"
     },
     {
       "username": "taino.mm",
@@ -11131,12 +11138,6 @@
       "username": "swaggyraju17",
       "name": "Arrin Sagiraju",
       "since": "2025-05-18T06:35:54.000Z"
-    },
-    {
-      "username": "t1mmy_01",
-      "name": "Timothy",
-      "private": true,
-      "since": "2023-08-09T21:08:12.000Z"
     },
     {
       "username": "taino.mm",
