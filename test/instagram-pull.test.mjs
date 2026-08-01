@@ -15,6 +15,7 @@ import {
   verdict,
   expectedRelationship,
   stableList,
+  verifyCandidates,
 } from '../scripts/instagram-pull.mjs';
 
 const P = (username, extra = {}) => ({ username, ...extra });
@@ -328,5 +329,87 @@ test('stableList — people leave only when an unfollow is confirmed', async (t)
   await t.test('matching is case-insensitive, so case drift cannot duplicate', () => {
     const out = stableList([P('Alice')], [P('alice')], none);
     assert.equal(out.length, 1);
+  });
+});
+
+test('verifyCandidates — one bad handle must not sink the run', async (t) => {
+  const CREDS = { account: 'me', cookie: 'sessionid=x', csrftoken: 't' };
+  const noPause = () => {};
+  // Responses are keyed by the username in the URL, so each candidate can fail
+  // its own way within a single run.
+  const stubFetch = (byUser) => {
+    globalThis.fetch = async (url) => {
+      const user = new URL(url).searchParams.get('username');
+      const r = byUser[user];
+      if (typeof r === 'function') return r();
+      return {
+        ok: r.status < 400,
+        status: r.status,
+        text: async () => (typeof r.body === 'string' ? r.body : JSON.stringify(r.body)),
+      };
+    };
+  };
+  const realFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const follows = (v) => ({ status: 200, body: { data: { user: { id: '9', follows_viewer: v } } } });
+
+  await t.test('a 400 on one profile drops that candidate and keeps going', async () => {
+    // Exactly the shape that killed the real job: Instagram 400s a profile whose
+    // own business-category schema it can no longer render.
+    stubFetch({
+      quantprof_dot_org: {
+        status: 400,
+        body: { message: 'Asset asset://laser.provider/... has been deleted', status: 'fail' },
+      },
+      bob: follows(true),
+    });
+
+    const { kept, dropped } = await verifyCandidates(
+      [
+        { username: 'quantprof_dot_org', kind: 'follow', t: NOW },
+        { username: 'bob', kind: 'follow', t: NOW },
+      ],
+      CREDS,
+      noPause,
+    );
+
+    assert.deepEqual(kept.map((e) => e.username), ['bob']);
+    assert.deepEqual(dropped.map((e) => [e.username, e.why]), [
+      ['quantprof_dot_org', 'unverifiable'],
+    ]);
+  });
+
+  // A network error takes the same non-fatal path as the 400 above, and covering
+  // it here would mean sitting through 90s of real retry backoff.
+
+  await t.test('but an expired cookie aborts, rather than discarding a real day', async () => {
+    // Swallowing this would mark every candidate "unverifiable" and quietly bin
+    // a whole day of genuine follows and unfollows.
+    stubFetch({ alice: { status: 401, body: {} }, bob: follows(true) });
+
+    await assert.rejects(
+      () =>
+        verifyCandidates(
+          [
+            { username: 'alice', kind: 'follow', t: NOW },
+            { username: 'bob', kind: 'follow', t: NOW },
+          ],
+          CREDS,
+          noPause,
+        ),
+      /Session cookie expired/,
+    );
+  });
+
+  await t.test('a checkpoint page aborts as well', async () => {
+    stubFetch({ alice: { status: 200, body: '<!DOCTYPE html><html>login</html>' } });
+
+    await assert.rejects(
+      () => verifyCandidates([{ username: 'alice', kind: 'follow', t: NOW }], CREDS, noPause),
+      /HTML instead of JSON/,
+    );
   });
 });

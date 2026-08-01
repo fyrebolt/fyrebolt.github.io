@@ -149,18 +149,40 @@ function notifyOncePerDay(kind, title, subtitle, message) {
   notify(title, subtitle, message);
 }
 
+/**
+ * A failure this script knows how to describe.
+ *
+ * `fatal` separates the two kinds, and the distinction earns its keep inside
+ * verifyCandidates: a session-level problem (expired cookie, checkpoint) makes
+ * every request after it meaningless and has to abort the run, while a single
+ * handle that won't resolve is just one candidate we can't confirm.
+ */
+class PullError extends Error {
+  constructor(code, message, hint, fatal) {
+    super(message);
+    this.name = 'PullError';
+    this.code = code;
+    this.hint = hint;
+    this.fatal = fatal;
+  }
+}
+
+/**
+ * Abort the run.
+ *
+ * Throws rather than calling process.exit, which can't be caught and so quietly
+ * turned every try/catch around a request into dead code — one 400 on one
+ * unrelated handle was enough to kill a finished 60-page pull before it wrote.
+ * Reporting lives in the top-level handler instead, so a failure that something
+ * recovers from doesn't announce itself.
+ */
 function die(code, message, hint) {
-  console.error(`\n✗ ${message}`);
-  if (hint) console.error(`\n  ${hint}\n`);
-  // Exit 2 means "needs your attention" (expired cookie, bad config); 1 is
-  // transient (throttled, network) and the next hourly attempt may well succeed.
-  notifyOncePerDay(
-    code === 2 ? 'action' : 'transient',
-    'Instagram Tracker',
-    code === 2 ? 'Action needed — tracking has stopped' : 'Run failed',
-    message,
-  );
-  process.exit(code);
+  throw new PullError(code, message, hint, true);
+}
+
+/** One request failed. Callers may reasonably continue without it. */
+function requestFailed(message) {
+  return new PullError(1, message, undefined, false);
 }
 
 // ===== Credentials =====
@@ -245,7 +267,7 @@ async function getJson(url, creds, referer, attempt = 1) {
       await sleep(wait);
       return getJson(url, creds, referer, attempt + 1);
     }
-    die(1, `Network error after ${attempt} attempts: ${e.message}`);
+    throw requestFailed(`Network error after ${attempt} attempts: ${e.message}`);
   }
 
   if (res.status === 401 || res.status === 403) {
@@ -270,7 +292,10 @@ async function getJson(url, creds, referer, attempt = 1) {
       'Leave it alone for a few hours — the daily schedule will pick it up tomorrow.',
     );
   }
-  if (!res.ok) die(1, `HTTP ${res.status} from ${url}`);
+  // Scoped to this one URL, not the session: Instagram serves a 400 for profiles
+  // whose own data it can't render (a stale business-category schema does it),
+  // and that says nothing about the next request.
+  if (!res.ok) throw requestFailed(`HTTP ${res.status} from ${url}`);
 
   const text = await res.text();
   let json;
@@ -455,7 +480,7 @@ const MAX_VERIFY = 40;
  * none of which had happened. Comparing totals can't catch it, because the
  * totals were identical.
  */
-async function verifyCandidates(candidates, creds) {
+export async function verifyCandidates(candidates, creds, pause = () => sleep(jitter())) {
   if (candidates.length === 0) return { kept: [], dropped: [] };
   if (candidates.length > MAX_VERIFY) {
     log(`skipping verification: ${candidates.length} candidates exceeds the ${MAX_VERIFY} cap`);
@@ -470,13 +495,18 @@ async function verifyCandidates(candidates, creds) {
       const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(c.username)}`;
       const json = await getJson(url, creds, `https://www.instagram.com/${c.username}/`);
       rel = json?.data?.user ?? 'gone';
-    } catch {
+    } catch (e) {
+      // A dead session poisons every remaining verification, so it has to stop
+      // the run — otherwise each candidate reads as "unverifiable" and a whole
+      // day of real follows and unfollows gets silently discarded.
+      if (e instanceof PullError && e.fatal) throw e;
+      log(`could not verify @${c.username} (${e.message})`);
       rel = null;
     }
     const ok = verdict(c, rel);
     if (ok === true) kept.push(c);
     else dropped.push({ ...c, why: ok === false ? 'contradicted' : 'unverifiable' });
-    await sleep(jitter());
+    await pause();
   }
   return { kept, dropped };
 }
@@ -703,6 +733,19 @@ function commitAndPush(gainedCount, lostCount) {
 // Only run when invoked directly, so the pure helpers above can be unit-tested.
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   main().catch((e) => {
+    if (e instanceof PullError) {
+      console.error(`\n✗ ${e.message}`);
+      if (e.hint) console.error(`\n  ${e.hint}\n`);
+      // Exit 2 means "needs your attention" (expired cookie, bad config); 1 is
+      // transient (throttled, network) and the next hourly attempt may well succeed.
+      notifyOncePerDay(
+        e.code === 2 ? 'action' : 'transient',
+        'Instagram Tracker',
+        e.code === 2 ? 'Action needed — tracking has stopped' : 'Run failed',
+        e.message,
+      );
+      process.exit(e.code);
+    }
     console.error('\n✗ Unexpected failure:', e);
     process.exit(1);
   });
