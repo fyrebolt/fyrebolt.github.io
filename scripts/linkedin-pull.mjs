@@ -72,8 +72,22 @@ const DELAY_MAX = 3800;
 /** Extra breather every N pages. */
 const LONG_PAUSE_EVERY = 10;
 const LONG_PAUSE_MS = 11000;
-/** Hard ceiling so a pagination bug can't loop forever. */
-const MAX_PAGES = 200;
+/**
+ * How many pages of connections to read per run.
+ *
+ * Deliberately tiny. LinkedIn stops answering a scripted session after roughly
+ * half a dozen requests — measured, not guessed: three separate runs died at
+ * the same point, and a 1012-connection account needs 26 pages. Paging the
+ * whole list is simply not a thing this API will do any more.
+ *
+ * It doesn't need to. The list is fetched sortType=RECENTLY_ADDED, so page one
+ * *is* the new connections — which is all a daily diff needs. The complete
+ * back-catalogue comes from the official CSV export instead: it's exact, it
+ * carries true dates, and it costs no requests at all.
+ */
+const DEFAULT_MAX_PAGES = 2;
+/** Hard ceiling so a pagination bug can't loop forever, even if configured up. */
+const PAGE_CEILING = 200;
 /** Refuse to write if we paged less than this share of the reported total. */
 const COMPLETENESS_FLOOR = 0.9;
 /** Cap on the stored view log — years of daily pulls before this ever bites. */
@@ -295,6 +309,9 @@ function loadSecrets() {
     // LinkedIn shows only to you. Publishing names to a public repo exposes
     // people who never agreed to that. Opt in explicitly if you want it.
     publishViewers: raw.publishViewers === true,
+    // Raise this only for a one-off backfill on a small account; on any account
+    // of real size the session dies long before the list ends.
+    maxPages: Math.min(Number(raw.maxPages) || DEFAULT_MAX_PAGES, PAGE_CEILING),
   };
 }
 
@@ -457,7 +474,12 @@ async function getJson(url, creds, referer, { soft = false, attempt = 1 } = {}) 
     );
   }
   if (!res.ok) {
-    if (soft) return null;
+    if (soft) {
+      // Silence here is how "page 2 failed" became "no endpoint worked": the
+      // status is the whole diagnosis and it was being swallowed.
+      log(`  HTTP ${res.status} from ${new URL(url).pathname}`);
+      return null;
+    }
     die(1, `HTTP ${res.status} from ${url}`);
   }
 
@@ -789,62 +811,55 @@ async function fetchMe(creds) {
 }
 
 /**
- * Follower count and connection total.
- *
- * connectionsSummary is reliable. The follower count is not: the legacy
- * networkinfo endpoint 404s on current accounts, so several candidates are
- * tried and the first that yields a number wins. Failing all of them is
- * survivable — the connection series is what the graph is really about, and the
- * app already treats a missing follower count as "not recorded this run".
+ * The authoritative connection total. Cheap, reliable, and needed by the
+ * completeness check, so it runs before anything else.
  */
-async function fetchCounts(creds, publicId, meUrn) {
-  const referer = `https://www.linkedin.com/in/${publicId}/`;
-
+async function fetchConnectionCount(creds) {
   const summary = await getJson(`${BASE}/relationships/connectionsSummary`, creds, FEED_REFERER, {
     soft: true,
   });
   dumpDebug('connectionsSummary', summary);
+  return firstNumber(summary, /^numConnections$/i);
+}
 
+/**
+ * The follower count, from whichever surface still answers.
+ *
+ * Deliberately last. The legacy networkinfo endpoint 404s on current accounts,
+ * so this probes several candidates — and each probe is a request against a
+ * session LinkedIn will cut off after a handful of them. Spending that budget
+ * before the connections and profile-view reads meant the two things the
+ * tracker actually exists for were the ones that got refused.
+ *
+ * Failing every candidate is survivable: the app treats a missing follower
+ * count as "not recorded this run" and plots connections regardless.
+ */
+async function fetchFollowerCount(creds, publicId, meUrn) {
+  const referer = `https://www.linkedin.com/in/${publicId}/`;
   const dashUrn = meUrn ? encodeURIComponent(meUrn) : null;
-  const followerCandidates = [
-    [
-      'networkinfo',
-      `${BASE}/identity/profiles/${encodeURIComponent(publicId)}/networkinfo`,
-    ],
-    [
-      'dash-profileNetworkInfo',
-      dashUrn && `${BASE}/identity/dash/profileNetworkInfos/${dashUrn}`,
-    ],
+
+  const candidates = [
+    ['networkinfo', `${BASE}/identity/profiles/${encodeURIComponent(publicId)}/networkinfo`],
+    ['dash-profileNetworkInfo', dashUrn && `${BASE}/identity/dash/profileNetworkInfos/${dashUrn}`],
     [
       'dash-networkinfo-query',
       `${BASE}/identity/dash/profileNetworkInfos?q=memberIdentity&memberIdentity=${encodeURIComponent(publicId)}`,
     ],
-    [
-      'followingState',
-      dashUrn && `${BASE}/identity/dash/followingStates?q=followingStates&followingStateUrns=${dashUrn}`,
-    ],
   ].filter(([, url]) => Boolean(url));
 
-  let followers = null;
-  for (const [name, url] of followerCandidates) {
+  for (const [name, url] of candidates) {
     const json = await getJson(url, creds, referer, { soft: true });
     if (!json) continue;
     dumpDebug(`followers-${name}`, json);
-    followers = firstNumber(json, /^followers?Count$/i);
-    if (followers != null) {
+    const count = firstNumber(json, /^followers?Count$/i);
+    if (count != null) {
       log(`  follower count came from ${name}`);
-      break;
+      return count;
     }
     await sleep(jitter());
   }
-  if (followers == null) {
-    log('  no follower count available from any endpoint — recording connections only');
-  }
-
-  return {
-    followers,
-    connections: firstNumber(summary, /^numConnections$/i),
-  };
+  log('  no follower count available — recording connections only');
+  return null;
 }
 
 export function firstNumber(json, pattern) {
@@ -868,7 +883,7 @@ export function firstNumber(json, pattern) {
  * today, then the legacy one — because which is live has changed more than once
  * and a tracker that stops working silently is worse than useless.
  */
-async function fetchConnections(creds) {
+async function fetchConnections(creds, reported, maxPages) {
   const referer = 'https://www.linkedin.com/mynetwork/invite-connect/connections/';
   const shapes = [
     (start) =>
@@ -880,12 +895,13 @@ async function fetchConnections(creds) {
   for (const [i, shape] of shapes.entries()) {
     const out = new Map();
     let page = 0;
-    let ok = true;
+    let reachedEnd = false;
+    let failed = false;
 
-    while (page < MAX_PAGES) {
+    while (page < maxPages) {
       const json = await getJson(shape(page * PAGE_SIZE), creds, referer, { soft: true });
       if (json == null) {
-        ok = false;
+        failed = true;
         break;
       }
       if (page === 0) dumpDebug(`connections-shape${i}`, json);
@@ -897,18 +913,33 @@ async function fetchConnections(creds) {
 
       page++;
       process.stdout.write(`\r  connections: ${out.size} (page ${page})   `);
-      // An empty page is the end of the list — voyager doesn't reliably report
-      // a total, so running dry is the terminator.
-      if (people.length === 0) break;
+      if (people.length === 0) {
+        // A dry page means the list genuinely ended, not that we gave up.
+        reachedEnd = true;
+        break;
+      }
 
       await sleep(jitter());
       if (page % LONG_PAUSE_EVERY === 0) await sleep(LONG_PAUSE_MS);
     }
     process.stdout.write('\n');
 
-    if (page >= MAX_PAGES) log(`warning: hit the ${MAX_PAGES}-page ceiling on connections`);
-    if (ok && out.size > 0) return [...out.values()];
-    log(`connections: endpoint shape ${i + 1} returned nothing; trying the next one`);
+    // Anything paged is worth keeping, even if a later page failed. Throwing
+    // away 40 real people because page 2 returned an error — and then reporting
+    // "returned nothing" — hid both the data and the actual error.
+    if (out.size > 0) {
+      const complete = reachedEnd && !failed;
+      if (failed) {
+        log(`connections: stopped early — kept ${out.size} of ${reported ?? '?'}`);
+      } else if (!complete) {
+        log(
+          `connections: read the ${out.size} most recent of ${reported ?? '?'} ` +
+            `(${maxPages} page cap) — enough to spot new ones`,
+        );
+      }
+      return { people: [...out.values()], complete };
+    }
+    log(`connections: endpoint shape ${i + 1} returned no people; trying the next one`);
   }
 
   die(
@@ -1018,7 +1049,7 @@ export function earliest(a, b) {
 }
 
 /** Connect/disconnect events from the connection-set difference. */
-export function diffConnections(current, previous, nowIso) {
+export function diffConnections(current, previous, nowIso, sawWholeList = true) {
   const prevByKey = new Map((previous ?? []).map((p) => [p.id.toLowerCase(), p]));
   const curKeys = new Set(current.map((p) => p.id.toLowerCase()));
 
@@ -1026,9 +1057,15 @@ export function diffConnections(current, previous, nowIso) {
     .filter((p) => !prevByKey.has(p.id.toLowerCase()))
     .map((p) => ({ id: p.id, kind: 'connect', t: nowIso, name: p.name, headline: p.headline }));
 
-  const lost = [...prevByKey.values()]
-    .filter((p) => !curKeys.has(p.id.toLowerCase()))
-    .map((p) => ({ id: p.id, kind: 'disconnect', t: nowIso, name: p.name, headline: p.headline }));
+  // Absence is only evidence of a disconnect when the whole list was read. The
+  // daily pull sees one page of a 26-page list, so it may add but never
+  // subtract — otherwise every single run would report a thousand
+  // disconnections and wipe the stored list.
+  const lost = !sawWholeList
+    ? []
+    : [...prevByKey.values()]
+        .filter((p) => !curKeys.has(p.id.toLowerCase()))
+        .map((p) => ({ id: p.id, kind: 'disconnect', t: nowIso, name: p.name, headline: p.headline }));
 
   return { gained, lost };
 }
@@ -1166,22 +1203,34 @@ async function main() {
   const publicId = creds.profile || me.id;
   log(`pulling /in/${publicId}${DRY_RUN ? ' (dry run)' : ''}`);
 
-  const reported = await fetchCounts(creds, publicId, me.urn);
-  log(
-    `reported ${reported.connections ?? '?'} connections · ${reported.followers ?? '?'} followers`,
-  );
+  // Order matters more than it looks: LinkedIn stops answering after a handful
+  // of scripted requests, so the reads the tracker exists for come first and the
+  // nice-to-haves spend whatever budget is left.
+  const reportedConnections = await fetchConnectionCount(creds);
+  log(`reported ${reportedConnections ?? '?'} connections`);
 
-  const connectionsRead = (await fetchConnections(creds)).filter(
-    (p) => p.id.toLowerCase() !== publicId.toLowerCase(),
-  );
+  const read = await fetchConnections(creds, reportedConnections, creds.maxPages);
+  const connectionsRead = read.people.filter((p) => p.id.toLowerCase() !== publicId.toLowerCase());
+  const sawWholeList = read.complete;
   await sleep(jitter());
+
   const { views: viewsRead, counts } = await fetchViewers(creds);
+  await sleep(jitter());
+
+  const reported = {
+    connections: reportedConnections,
+    followers: await fetchFollowerCount(creds, publicId, me.urn),
+  };
   await sleep(jitter());
   const followersRead = (await fetchFollowers(creds)).filter(
     (p) => p.id.toLowerCase() !== publicId.toLowerCase(),
   );
 
-  const shortfall = checkCompleteness(connectionsRead, reported.connections, prev);
+  // Only meaningful when a full read was attempted; a capped read is short by
+  // design, and refusing to write on it would mean never writing at all.
+  const shortfall = sawWholeList
+    ? checkCompleteness(connectionsRead, reported.connections, prev)
+    : null;
   if (shortfall && !FORCE) {
     die(
       1,
@@ -1200,7 +1249,7 @@ async function main() {
 
   const { gained, lost } = firstRealRun
     ? { gained: [], lost: [] }
-    : diffConnections(connectionsRead, prev.connections, nowIso);
+    : diffConnections(connectionsRead, prev.connections, nowIso, sawWholeList);
 
   const events = [...gained, ...lost, ...(firstRealRun ? [] : prev.events ?? [])]
     .sort((a, b) => (a.t < b.t ? 1 : -1))
@@ -1224,7 +1273,12 @@ async function main() {
     snapshots: appendSnapshot(firstRealRun ? [] : prev.snapshots, {
       t: nowIso,
       // Snapshot the stored totals, not the raw read — the read fluctuates.
-      connections: nextConnections.length,
+      // The list we hold, but never below what LinkedIn reports: a capped read
+      // knows about fewer people than you actually have, and the graph should
+      // plot the truth rather than a sampling artefact.
+      connections: sawWholeList
+        ? nextConnections.length
+        : Math.max(nextConnections.length, reported.connections ?? 0),
       followers: reported.followers ?? nextFollowers.length ?? undefined,
       viewsRolling: counts.views ?? undefined,
       searchAppearances: counts.searchAppearances ?? undefined,

@@ -546,3 +546,42 @@ test('describeNetworkError surfaces the real cause', () => {
 
   assert.equal(describeNetworkError(new Error('')), 'unknown error');
 });
+
+test('diffConnections on a partial read', async (t) => {
+  const stored = Array.from({ length: 1000 }, (_, i) => P('person-' + i, { name: 'P' + i }));
+  // What one page of a RECENTLY_ADDED list looks like: the newest 40, of which
+  // one is genuinely new.
+  const onePage = [P('brand-new', { name: 'New Person' }), ...stored.slice(0, 39)];
+
+  await t.test('adds the new connection', () => {
+    const { gained } = diffConnections(onePage, stored, NOW, false);
+    assert.deepEqual(gained.map((e) => e.id), ['brand-new']);
+  });
+
+  await t.test('does NOT invent 961 disconnections', () => {
+    // The whole reason the flag exists: a 1012-connection account needs 26
+    // pages and LinkedIn cuts the session off after ~1, so absence from the
+    // read carries no information at all.
+    const { lost } = diffConnections(onePage, stored, NOW, false);
+    assert.deepEqual(lost, []);
+  });
+
+  await t.test('still detects a real disconnect once the whole list was seen', () => {
+    const full = stored.slice(1);
+    const { lost } = diffConnections(full, stored, NOW, true);
+    assert.deepEqual(lost.map((e) => e.id), ['person-0']);
+  });
+
+  await t.test('defaults to trusting the read, for callers that know it is whole', () => {
+    const { lost } = diffConnections(stored.slice(1), stored, NOW);
+    assert.equal(lost.length, 1);
+  });
+});
+
+test('stableList holds the line on a partial read', () => {
+  // Belt and braces: even with no disconnect events, a one-page read must not
+  // shrink the stored list.
+  const stored = Array.from({ length: 500 }, (_, i) => P('p' + i));
+  const next = stableList(stored, stored.slice(0, 40), new Set());
+  assert.equal(next.length, 500);
+});

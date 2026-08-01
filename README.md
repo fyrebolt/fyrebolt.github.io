@@ -371,12 +371,32 @@ get challenged immediately.
    no-op once a run has succeeded, and `generatedAt` is itself the record of the
    last good run.
 
-**Guard against phantom disconnects.** Voyager's connections endpoint is
-eventually consistent in exactly the way Instagram's followers endpoint is, so a
-truncated read looks like a mass disconnect. The script cross-checks what it
-paged against the count LinkedIn reports and refuses to write if it's short, and
-the stored list only ever shrinks through a confirmed disconnect — never through
-a read simply missing someone. `--force` overrides it when a drop is real.
+#### How the work is split, and why
+
+Measured against a real 1012-connection account: **LinkedIn stops answering a
+scripted session after roughly half a dozen requests.** Three separate runs died
+at the same point. A full page-through of that list needs 26 requests, so it is
+simply not something this API will do any more.
+
+The tool is built around that rather than fighting it:
+
+| Data | Where it comes from | Cost |
+| --- | --- | --- |
+| The full connection list, with exact dates | the official CSV export, imported in-browser | no requests |
+| New connections | one page of `sortType=RECENTLY_ADDED` — the newest are all on page one | 1 request |
+| Profile views | the daily pull, which is the only thing that *must* be scraped | 1–4 requests |
+
+So import the export once for the back catalogue, and let the daily job do the
+one job nothing else can: capturing profile viewers before LinkedIn drops them.
+
+**A partial read can never subtract.** Reading one page of a 26-page list and
+diffing it against the stored list would report a disconnect for every
+connection that simply wasn't on that page. The puller tracks whether it
+actually reached the end of the list, and only lets absence count as evidence
+when it did — so the daily run may add connections but never remove them.
+Disconnects are picked up when a fresh CSV export is imported. The stored list
+also only ever shrinks through a confirmed disconnect, never through a read
+missing someone.
 
 #### Backfilling real connection dates
 
