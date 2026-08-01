@@ -249,6 +249,197 @@ before the first scheduled run.
 Sample data ships committed so the app is demoable without any of this; regenerate
 it with `node scripts/gen_sample_instagram.mjs`.
 
+### 💼 LinkedIn Tracker (`/linkedin/`) — unfinished
+
+> **Status: work in progress. Not on the home screen.**
+>
+> The app is built and works; the data pipeline behind it is not finished.
+> Measured against a real 1012-connection account, LinkedIn stops answering a
+> scripted session after roughly half a dozen requests and then invalidates it —
+> three separate runs died at the same point. That makes the daily profile-view
+> collection, which is the whole reason the tool exists, unreliable.
+>
+> | Piece | State |
+> | --- | --- |
+> | The app: charts, viewer timeline, people lists, person sheet | **works** (verified in-browser) |
+> | Importing the official CSV export → all connections with exact dates | **works**, needs no API |
+> | Reading connections from the API | **works for one page**; full paging is impossible (26 pages needed, ~1 allowed) |
+> | Reading profile views from the API | **untested** — the session dies before reaching it |
+> | Follower counts | **no working endpoint found** |
+>
+> It's reachable at `/linkedin/` and ships committed sample data, so everything
+> below describes real, working UI over invented data. It is deliberately absent
+> from the home screen until the pull is dependable — restore it by adding an
+> entry back to [`src/home/apps.ts`](src/home/apps.ts).
+>
+> **What would finish it:** a way to collect profile views that survives
+> LinkedIn's session limits. Longer backoff and fewer requests per run are the
+> obvious next thing to try. Deliberately *not* on the table: spoofing browser
+> fingerprints to evade bot detection.
+
+The same idea as the Instagram tracker, aimed at a network that works differently.
+Connections are mutual, so there's no follow-back arithmetic; the asymmetry that
+does exist is between connecting and merely following. Data lives in one committed
+file — [`public/linkedin/history.json`](public/linkedin/history.json).
+
+**Who viewed your profile** is the headline view, and it's the reason the app
+exists. LinkedIn shows a free account only its most recent handful of viewers and
+drops them entirely after 90 days, so there's no stable set to diff — there's a
+sliding window you have to keep copying out before it moves. Every run therefore
+*unions* whatever is currently visible into a log that only ever grows. Run it
+daily and after a year you have a view history LinkedIn itself will not show you.
+Miss a week and those views are gone for good, which is why the staleness banner
+here is blunter than the Instagram one.
+
+The section gives you a 30-day bar chart (click a bar to scope the list to that
+day), a rollup of the companies your viewers come from, filters for
+named/anonymous/repeat visitors, and a per-person sheet that cross-references
+someone's visits against when you connected.
+
+| List | Who's in it |
+| --- | --- |
+| Connections | Your 1st-degree connections |
+| Followers | Everyone who follows your posts |
+| Connected + following | Both — the most engaged slice |
+| Following, not connected | They follow you without ever having connected |
+
+#### Viewer privacy
+
+Profile viewers are not a follower list. A follower list is public on the
+platform; who looked at your profile is shown **only to you**, and those people
+never agreed to appear on a public web page. So the puller writes two files:
+
+- `public/linkedin/history.json` — committed and deployed, with viewer names,
+  ids and headlines stripped. Counts, timing, employers and degrees survive, so
+  the public page is still a real tracker.
+- `scripts/.linkedin-private.json` — gitignored, full detail. Drag it onto the
+  page to see the real names on your own machine (it's kept in `localStorage`).
+
+Set `"publishViewers": true` in the secrets file to publish names as well. It's
+off by default deliberately — this is the one place where the Instagram tracker's
+"commit everything" habit would expose someone other than you.
+
+#### Setting up the daily pull
+
+LinkedIn has no public API for connections or profile viewers, so this uses the
+private voyager endpoints linkedin.com's own front-end calls — same arrangement
+and same caveats as Instagram: it's automated collection (which LinkedIn's user
+agreement disallows), and it runs from your own machine because datacenter IPs
+get challenged immediately.
+
+1. **Add your session cookie.** Run the setup script — it prompts for two
+   values and writes `scripts/.linkedin-secrets.json` (gitignored, mode 0600):
+
+   ```bash
+   node scripts/linkedin-setup.mjs
+   ```
+
+   **Paste the whole `Cookie:` header** when it asks. DevTools (⌥⌘I) → Network →
+   reload → click any request to `www.linkedin.com` → Request Headers →
+   right-click the `cookie:` row → Copy value.
+
+   The whole header genuinely matters. `li_at` + `JSESSIONID` alone satisfy some
+   endpoints, but not all of them: LinkedIn answers a request missing `bcookie` /
+   `lidc` with a 302 **back to the same URL**, which Node reports only as the
+   useless "redirect count exceeded". The puller now follows redirects by hand
+   and keeps a cookie jar across them, so it reports what actually happened —
+   but it can only send cookies you gave it.
+
+   Use the setup script rather than hand-editing the JSON, because LinkedIn
+   displays `JSESSIONID` **with double quotes** around it (`"ajax:1234"`) and
+   pasting that verbatim into a JSON string produces a file that won't parse.
+
+   If you can only find the individual cookies: DevTools → **Application** tab
+   (**Storage** in Firefox/Safari) → Cookies → `https://www.linkedin.com`, and
+   copy `li_at` and `JSESSIONID`.
+
+   **Expect to redo this often.** LinkedIn rotates and invalidates sessions used
+   by scripts, sometimes within hours of the first automated request. A dead
+   session shows up as a clean `HTTP 401` with a message telling you to re-paste;
+   it is not a bug in the puller.
+
+   To write the file by hand instead:
+
+   ```json
+   {
+     "profile": "hastinchen",
+     "li_at": "AQED…",
+     "jsessionid": "ajax:1234",
+     "publishViewers": false
+   }
+   ```
+
+   `profile` is the slug in `linkedin.com/in/<slug>`. Pasting the full profile
+   URL works too — the script trims it. Omit it entirely and the job resolves it
+   from the session.
+
+2. **Test it without writing anything:**
+
+   ```bash
+   node scripts/linkedin-pull.mjs --dry-run --debug
+   ```
+
+   `--debug` dumps the raw payloads to `scripts/.linkedin-debug/`. Worth doing
+   on the first run: voyager's decoration ids and field names drift without
+   notice, so the parsers are written structurally (walk the payload looking for
+   anything shaped like a profile or a view record) rather than against fixed
+   paths, and the dumps are how you check what actually came back.
+
+3. **Schedule it** (launchd, first attempt 09:40 by default — offset from the
+   Instagram job so two scrapers don't start in the same minute):
+
+   ```bash
+   ./scripts/linkedin-schedule.sh install
+   ```
+
+   `status`, `run`, `logs`, and `uninstall` do what they say. Retries work the
+   same way as the Instagram job: scheduled hourly, `--once-daily` makes it a
+   no-op once a run has succeeded, and `generatedAt` is itself the record of the
+   last good run.
+
+#### How the work is split, and why
+
+Measured against a real 1012-connection account: **LinkedIn stops answering a
+scripted session after roughly half a dozen requests.** Three separate runs died
+at the same point. A full page-through of that list needs 26 requests, so it is
+simply not something this API will do any more.
+
+The tool is built around that rather than fighting it:
+
+| Data | Where it comes from | Cost |
+| --- | --- | --- |
+| The full connection list, with exact dates | the official CSV export, imported in-browser | no requests |
+| New connections | one page of `sortType=RECENTLY_ADDED` — the newest are all on page one | 1 request |
+| Profile views | the daily pull, which is the only thing that *must* be scraped | 1–4 requests |
+
+So import the export once for the back catalogue, and let the daily job do the
+one job nothing else can: capturing profile viewers before LinkedIn drops them.
+
+**A partial read can never subtract.** Reading one page of a 26-page list and
+diffing it against the stored list would report a disconnect for every
+connection that simply wasn't on that page. The puller tracks whether it
+actually reached the end of the list, and only lets absence count as evidence
+when it did — so the daily run may add connections but never remove them.
+Disconnects are picked up when a fresh CSV export is imported. The stored list
+also only ever shrinks through a confirmed disconnect, never through a read
+missing someone.
+
+#### Backfilling real connection dates
+
+Unusually good on LinkedIn: `Connections.csv` in the official export carries a
+"Connected On" date for **every** connection, so one import reconstructs your
+entire history back to the day you joined. Request it under Settings → Data
+privacy → *Get a copy of your data*, then drop the `.zip` (or the loose `.csv`
+files) onto the page. It's parsed entirely in the browser — and the email column
+the export includes for some connections is dropped at parse time and never
+enters the data model, since this file gets committed publicly.
+
+The export contains no profile viewers. LinkedIn has never included them in the
+archive, which is precisely why the daily pull exists.
+
+Sample data ships committed so the app is demoable without any of this; regenerate
+it with `node scripts/gen_sample_linkedin.mjs`.
+
 ---
 
 ## Development
@@ -264,7 +455,8 @@ npm run lint      # run ESLint
 ```
 
 Each app is its own Vite entry point (`index.html`, `video/`, `appstore/`,
-`printer/`, `about/`, `instagram/`) wired up in [`vite.config.ts`](vite.config.ts).
+`printer/`, `about/`, `instagram/`, `linkedin/`) wired up in
+[`vite.config.ts`](vite.config.ts).
 
 ### Project layout
 
@@ -277,8 +469,9 @@ src/
   printer/     # Résumé PDF viewer
   about/       # About Me
   instagram/   # Instagram follower tracker
+  linkedin/    # LinkedIn tracker (unfinished; not on the home screen)
   components/  # shared UI + section components
-scripts/       # instagram-pull.mjs (daily job), instagram-schedule.sh (launchd)
+scripts/       # daily pull jobs + launchd installers for both trackers
 public/        # static assets served as-is (resume.pdf, fonts, icons)
 ```
 

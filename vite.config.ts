@@ -29,6 +29,8 @@ export default defineConfig({
         about: resolve(__dirname, 'about/index.html'),
         // Instagram Tracker (served at /instagram/)
         instagram: resolve(__dirname, 'instagram/index.html'),
+        // LinkedIn Tracker (served at /linkedin/)
+        linkedin: resolve(__dirname, 'linkedin/index.html'),
       },
     },
   },

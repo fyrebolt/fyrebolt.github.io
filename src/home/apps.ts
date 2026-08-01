@@ -13,7 +13,7 @@ export interface HomeApp {
   /** Emoji glyph drawn on the squircle icon. */
   glyph: string;
   /** Optional built-in vector icon id (e.g. 'instagram'); overrides the emoji glyph. */
-  icon?: 'instagram';
+  icon?: 'instagram' | 'linkedin';
   /** Real, bookmarkable route this icon opens (its own Vite entry point). */
   route: string;
   /** CSS gradient for the icon tile. */
@@ -70,6 +70,12 @@ export const APPS: HomeApp[] = [
       'radial-gradient(circle at 30% 107%, #fdf497 0%, #fdf497 5%, #fd5949 45%, #d6249f 60%, #285aeb 90%)',
     blurb: 'Track my follower count and daily follows/unfollows.',
   },
+  // The LinkedIn tracker is deliberately absent. It still builds and is still
+  // reachable at /linkedin/, but it isn't finished — LinkedIn cuts off a
+  // scripted session after a handful of requests, so the daily pull can't be
+  // relied on yet — and the home screen is for things that work. To put it back,
+  // restore an entry here with `icon: 'linkedin'` (the mark is still in
+  // AppGlyph) and see the README section for what's outstanding.
 ];
 
 export const DOCK_APPS = APPS.filter((a) => a.favorite);
