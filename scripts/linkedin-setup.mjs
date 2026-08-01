@@ -86,7 +86,7 @@ export function normaliseProfile(answer, fallback = 'hastinchen') {
  * is thin, but getting *this* wrong writes a broken credential file that only
  * fails much later, as an unexplained 403.
  */
-export function buildSecrets({ liAt, jsession, profile, publish, existing = {} }) {
+export function buildSecrets({ liAt, jsession, profile, publish, existing = {}, cookie }) {
   const next = {
     ...existing,
     profile,
@@ -94,11 +94,22 @@ export function buildSecrets({ liAt, jsession, profile, publish, existing = {} }
     jsessionid: jsession,
     publishViewers: Boolean(publish),
   };
-  // A whole pasted header left over from a previous run would be stale next to
-  // the explicit values above, and loadSecrets prefers the explicit ones — so
-  // leaving it would just be a confusing dead field.
-  delete next.cookie;
+  if (cookie) {
+    // Kept whole: it carries bcookie / lidc / bscookie, which some endpoints
+    // require and which li_at + JSESSIONID alone cannot stand in for.
+    next.cookie = cookie;
+  } else {
+    // A header left over from a previous run would be stale beside the explicit
+    // values above, so it goes rather than silently overriding them.
+    delete next.cookie;
+  }
   return next;
+}
+
+/** Is this a whole Cookie header rather than one value? */
+export function looksLikeFullHeader(input) {
+  const raw = String(input ?? '').trim();
+  return raw.includes(';') && /(^|[;\s])li_at=/.test(raw);
 }
 
 /** Reject an answer that never came, rather than exiting silently at EOF. */
@@ -114,19 +125,20 @@ async function main() {
 │  LinkedIn Tracker setup                                          │
 ╰──────────────────────────────────────────────────────────────────╯
 
-You need two cookie values from a logged-in linkedin.com tab.
+BEST: paste your whole Cookie header (one step, and it carries the
+extra cookies some LinkedIn endpoints insist on — bcookie, lidc):
 
-  1. Open https://www.linkedin.com and make sure you're logged in.
-  2. Open DevTools:  ⌥⌘I  (or right-click → Inspect)
-  3. Go to the "Application" tab (Chrome/Edge/Arc/Brave)
-     or "Storage" (Firefox/Safari).
-     ▸ In Chrome the tab may be hidden behind the » chevron.
-  4. In the left sidebar: Cookies → https://www.linkedin.com
-  5. Find the rows named  li_at  and  JSESSIONID.
-     Double-click each Value cell and copy it.
+  1. Open https://www.linkedin.com, logged in.
+  2. DevTools (⌥⌘I) → "Network" tab → reload the page.
+  3. Click any request to www.linkedin.com.
+  4. Scroll to "Request Headers" → right-click the "cookie:" row
+     → Copy value.  (It's long — hundreds of characters. Good.)
+  5. Paste the whole thing at the first prompt below.
 
-Paste each below. Quotes, a "li_at=" prefix, or even the whole
-Cookie: header are all fine — this cleans them up.
+FALLBACK: if you can only find the individual cookies, use
+DevTools → "Application" tab (or "Storage" in Firefox/Safari) →
+Cookies → https://www.linkedin.com, and copy li_at, then JSESSIONID.
+Two cookies work for most endpoints but not all.
 `);
 
   if (existsSync(SECRETS)) {
@@ -145,14 +157,22 @@ Cookie: header are all fine — this cleans them up.
 
   const rl = createInterface({ input: stdin, output: stdout });
   try {
-    const liAt = interpret(await ask(rl, 'li_at        : '), 'li_at');
-    if (!liAt) return fail('No li_at value given.');
+    const first = await ask(rl, 'cookie header (or just li_at): ');
+    // A full header is recognisable and strictly better: keep it whole so the
+    // puller can seed its jar with every cookie, not just the two named ones.
+    const wholeHeader = looksLikeFullHeader(first) ? first.trim().replace(/^cookie:\s*/i, '') : null;
+
+    const liAt = interpret(first, 'li_at');
+    if (!liAt) return fail('No li_at found in that.');
     // It's a long opaque token; a short answer means something went wrong.
     if (liAt.length < 20) {
       return fail(`That li_at looks too short (${liAt.length} chars). It's normally 100+.`);
     }
 
-    const jsession = interpret(await ask(rl, 'JSESSIONID   : '), 'JSESSIONID');
+    // A full header already contains JSESSIONID; only ask when it doesn't.
+    const jsession =
+      (wholeHeader && interpret(wholeHeader, 'JSESSIONID')) ||
+      interpret(await ask(rl, 'JSESSIONID   : '), 'JSESSIONID');
     if (!jsession) return fail('No JSESSIONID value given.');
     if (!/^ajax:/i.test(jsession)) {
       console.log(`\n⚠ JSESSIONID usually starts with "ajax:" — got "${jsession}".`);
@@ -177,7 +197,7 @@ Cookie: header are all fine — this cleans them up.
       }
     }
 
-    const next = buildSecrets({ liAt, jsession, profile, publish, existing });
+    const next = buildSecrets({ liAt, jsession, profile, publish, existing, cookie: wholeHeader });
 
     writeFileSync(SECRETS, JSON.stringify(next, null, 2) + '\n');
     chmodSync(SECRETS, 0o600);

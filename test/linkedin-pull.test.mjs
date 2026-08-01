@@ -6,8 +6,14 @@ import {
   alreadySucceededToday,
   appendSnapshot,
   checkCompleteness,
+  absorbCookies,
   collectProfiles,
+  cookieHeader,
   csrfFromJsessionid,
+  describeNetworkError,
+  earliest,
+  epochIso,
+  extractConnections,
   diffConnections,
   extractCounts,
   extractViewers,
@@ -422,4 +428,121 @@ test('localDay uses local time, not UTC', () => {
   // the tracker's "today" must follow the user, not the clock in Greenwich.
   const d = new Date(2026, 6, 30, 23, 30);
   assert.equal(localDay(d), '2026-07-30');
+});
+
+test('epochIso', async (t) => {
+  await t.test('accepts ms and seconds', () => {
+    assert.equal(epochIso(1785442934000), '2026-07-30T20:22:14.000Z');
+    assert.equal(epochIso(1785442934), '2026-07-30T20:22:14.000Z');
+  });
+  await t.test('rejects non-dates', () => {
+    assert.equal(epochIso(42), null);
+    assert.equal(epochIso('2026'), null);
+    assert.equal(epochIso(99999999999999), null);
+  });
+});
+
+test('earliest keeps the older timestamp', () => {
+  // A relationship cannot have started later than we already believed, which is
+  // what lets LinkedIn's real createdAt override an earlier first-seen guess.
+  assert.equal(earliest('2026-07-30T00:00:00Z', '2024-01-01T00:00:00Z'), '2024-01-01T00:00:00Z');
+  assert.equal(earliest(undefined, '2024-01-01T00:00:00Z'), '2024-01-01T00:00:00Z');
+  assert.equal(earliest('2024-01-01T00:00:00Z', undefined), '2024-01-01T00:00:00Z');
+  assert.equal(earliest(undefined, undefined), undefined);
+});
+
+// The real shape of a dash connections page, with invented people.
+const CONNECTIONS_PAYLOAD = {
+  data: { entityUrn: 'urn:li:fsd_connectionList', paging: { count: 40, start: 0 }, '*elements': [] },
+  included: [
+    {
+      $type: 'com.linkedin.voyager.dash.relationships.Connection',
+      entityUrn: 'urn:li:fsd_connection:1',
+      connectedMember: 'urn:li:fsd_profile:AAA',
+      '*connectedMemberResolutionResult': 'urn:li:fsd_profile:AAA',
+      createdAt: 1785442934000,
+    },
+    {
+      $type: 'com.linkedin.voyager.dash.identity.profile.Profile',
+      entityUrn: 'urn:li:fsd_profile:AAA',
+      publicIdentifier: 'ada-lovelace',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      headline: 'Mathematician at Analytical Engines',
+    },
+  ],
+};
+
+test('extractConnections', async (t) => {
+  await t.test('pairs each connection with its profile and its real date', () => {
+    const people = extractConnections(CONNECTIONS_PAYLOAD);
+    assert.equal(people.length, 1);
+    assert.equal(people[0].id, 'ada-lovelace');
+    assert.equal(people[0].name, 'Ada Lovelace');
+    assert.equal(people[0].since, '2026-07-30T20:22:14.000Z');
+  });
+
+  await t.test('falls back to loose profiles only when no pairing exists', () => {
+    const bare = { included: [CONNECTIONS_PAYLOAD.included[1]] };
+    const people = extractConnections(bare);
+    assert.equal(people.length, 1);
+    assert.equal(people[0].since, undefined);
+  });
+
+  await t.test('a paired payload does not sweep in unrelated profiles', () => {
+    // Voyager echoes your own profile into the payload; it is not a connection.
+    const withSelf = {
+      ...CONNECTIONS_PAYLOAD,
+      included: [
+        ...CONNECTIONS_PAYLOAD.included,
+        { $type: '…MiniProfile', entityUrn: 'urn:li:fs_miniProfile:ME', publicIdentifier: 'hastinchen', firstName: 'Hastin' },
+      ],
+    };
+    assert.deepEqual(extractConnections(withSelf).map((p) => p.id), ['ada-lovelace']);
+  });
+});
+
+test('extractViewers ignores connection records', () => {
+  // A Connection has createdAt + connectedMember, which would otherwise read as
+  // "someone viewed you on the day you connected" — 40 phantom views per page.
+  assert.deepEqual(extractViewers(CONNECTIONS_PAYLOAD), []);
+});
+
+test('absorbCookies', async (t) => {
+  await t.test('collects values and keeps the newest', () => {
+    const jar = absorbCookies(['li_at=first; Path=/', 'JSESSIONID="ajax:1"; Path=/'], new Map());
+    absorbCookies(['li_at=second; Path=/; HttpOnly'], jar);
+    assert.equal(jar.get('li_at'), 'second');
+    assert.equal(jar.get('JSESSIONID'), '"ajax:1"');
+  });
+
+  await t.test('honours a deletion', () => {
+    const jar = absorbCookies(['x=1'], new Map());
+    absorbCookies(['x=; Expires=Thu, 01 Jan 1970 00:00:00 GMT'], jar);
+    assert.equal(jar.has('x'), false);
+  });
+
+  await t.test('survives junk and an absent header', () => {
+    const jar = absorbCookies(['novalue', '=orphan'], new Map());
+    assert.equal(jar.size, 0);
+    assert.equal(absorbCookies(undefined, new Map()).size, 0);
+  });
+});
+
+test('cookieHeader serialises the jar', () => {
+  const jar = absorbCookies(['li_at=abc; Path=/', 'lidc="b=X"; Path=/'], new Map());
+  assert.equal(cookieHeader(jar), 'li_at=abc; lidc="b=X"');
+});
+
+test('describeNetworkError surfaces the real cause', () => {
+  // Node reports every transport failure as "fetch failed" and hides the errno
+  // on `cause`, which makes a reset and a DNS failure indistinguishable.
+  const reset = new TypeError('fetch failed');
+  reset.cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+  assert.match(describeNetworkError(reset), /ECONNRESET/);
+
+  const timeout = Object.assign(new Error('The operation was aborted'), { name: 'TimeoutError' });
+  assert.match(describeNetworkError(timeout), /timed out/);
+
+  assert.equal(describeNetworkError(new Error('')), 'unknown error');
 });

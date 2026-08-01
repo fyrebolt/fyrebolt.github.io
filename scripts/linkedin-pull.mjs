@@ -78,6 +78,8 @@ const MAX_PAGES = 200;
 const COMPLETENESS_FLOOR = 0.9;
 /** Cap on the stored view log — years of daily pulls before this ever bites. */
 const MAX_VIEWS = 20000;
+/** Per-request deadline. A stalled socket must not hang a scheduled job. */
+const REQUEST_TIMEOUT_MS = 30000;
 
 const args = new Set(process.argv.slice(2));
 const DRY_RUN = args.has('--dry-run');
@@ -89,6 +91,23 @@ const ONCE_DAILY = args.has('--once-daily');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const jitter = () => DELAY_MIN + Math.random() * (DELAY_MAX - DELAY_MIN);
+
+/**
+ * A usable description of a fetch failure.
+ *
+ * Node's fetch reports every transport problem as the message "fetch failed"
+ * and hides the real errno on `cause`, which makes an ECONNRESET and a DNS
+ * failure indistinguishable in a log you're reading a week later.
+ */
+export function describeNetworkError(e) {
+  const cause = e?.cause;
+  const code = cause?.code ?? e?.code;
+  const detail = cause?.message && cause.message !== e?.message ? cause.message : null;
+  if (e?.name === 'TimeoutError' || code === 'ABORT_ERR') {
+    return `timed out after ${REQUEST_TIMEOUT_MS / 1000}s`;
+  }
+  return [code, detail ?? e?.message].filter(Boolean).join(': ') || 'unknown error';
+}
 
 function log(...parts) {
   console.log(`[${new Date().toISOString()}]`, ...parts);
@@ -238,9 +257,12 @@ function loadSecrets() {
     die(2, `${SECRETS} is not valid JSON: ${e.message}`);
   }
 
-  const jar = raw.cookie ? parseCookieHeader(raw.cookie) : {};
-  const liAt = raw.li_at || jar.li_at;
-  const jsession = raw.jsessionid || jar.JSESSIONID || jar.jsessionid;
+  // Named `pasted`, not `jar`: the module-level cookie jar is a Map, and a
+  // local named `jar` shadowed it here — every jar.set() below hit a plain
+  // object instead of the Map the requests actually read from.
+  const pasted = raw.cookie ? parseCookieHeader(raw.cookie) : {};
+  const liAt = raw.li_at || pasted.li_at;
+  const jsession = raw.jsessionid || pasted.JSESSIONID || pasted.jsessionid;
 
   if (!liAt) {
     die(
@@ -259,9 +281,15 @@ function loadSecrets() {
   }
 
   const csrf = csrfFromJsessionid(jsession);
+
+  // Seed the jar. A whole pasted header carries bcookie / lidc / bscookie too,
+  // which some endpoints require — hence `cookie` being the preferred field.
+  for (const [k, v] of Object.entries(pasted)) jar.set(k, v);
+  jar.set('li_at', liAt);
+  jar.set('JSESSIONID', `"${csrf}"`);
+
   return {
     profile: String(raw.profile ?? '').replace(/^.*\/in\//, '').replace(/\/$/, '').trim(),
-    cookie: `li_at=${liAt}; JSESSIONID="${csrf}"`,
     csrf,
     // Default false: unlike a follower list, profile viewers are information
     // LinkedIn shows only to you. Publishing names to a public repo exposes
@@ -271,6 +299,42 @@ function loadSecrets() {
 }
 
 // ===== HTTP =====
+
+/**
+ * Cookies accumulated across the run.
+ *
+ * Node's fetch has no cookie jar, so without this every request is sent as if
+ * it were the first: rotated `li_at` values are thrown away, and the session /
+ * bot-management cookies LinkedIn sets (`liap`, `li_a`, `__cf_bm`) never come
+ * back. LinkedIn answers a request missing them with a 302 *to the same URL*,
+ * which is how the run died with Node's opaque "redirect count exceeded" —
+ * an HTTP client that discards Set-Cookie simply cannot complete this handshake.
+ */
+const jar = new Map();
+
+/** Merge a response's Set-Cookie headers into the jar. */
+export function absorbCookies(setCookieLines, into) {
+  for (const line of setCookieLines ?? []) {
+    const pair = String(line).split(';')[0];
+    const idx = pair.indexOf('=');
+    if (idx < 1) continue;
+    const name = pair.slice(0, idx).trim();
+    const value = pair.slice(idx + 1).trim();
+    if (!name) continue;
+    // An expiry in the past is a deletion, not a value.
+    if (/expires=Thu, 01 Jan 1970/i.test(line) || /max-age=0(;|$)/i.test(line)) {
+      into.delete(name);
+      continue;
+    }
+    into.set(name, value);
+  }
+  return into;
+}
+
+/** Serialise a jar into a Cookie header. */
+export function cookieHeader(map) {
+  return [...map.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+}
 
 function headers(creds, referer) {
   return {
@@ -283,8 +347,42 @@ function headers(creds, referer) {
     'x-li-lang': 'en_US',
     'user-agent': UA,
     referer,
-    cookie: creds.cookie,
+    // The jar starts from the pasted cookie and is updated by every response.
+    cookie: cookieHeader(jar),
   };
+}
+
+/** Raised when LinkedIn keeps redirecting a request to itself. */
+class RedirectLoop extends Error {}
+
+/**
+ * Fetch, following redirects by hand so cookies are carried across each hop.
+ *
+ * `redirect: 'follow'` would drop the Set-Cookie values the intermediate hops
+ * hand out, which is exactly what LinkedIn's session handshake depends on — and
+ * when it fails, Node reports only "redirect count exceeded", which says
+ * nothing about why. Doing it manually means the jar is updated at every hop
+ * and a genuine loop is named as such.
+ */
+async function fetchFollowing(url, creds, referer, maxHops = 5) {
+  let target = url;
+  for (let hop = 0; hop < maxHops; hop++) {
+    const res = await fetch(target, {
+      headers: headers(creds, referer),
+      redirect: 'manual',
+      // Without a deadline a stalled socket hangs the whole run indefinitely,
+      // which on a scheduled job means it never reports anything at all.
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    absorbCookies(res.headers.getSetCookie?.() ?? [], jar);
+
+    if (res.status < 300 || res.status >= 400) return res;
+
+    const location = res.headers.get('location');
+    if (!location) return res;
+    target = new URL(location, target).toString();
+  }
+  throw new RedirectLoop(`still redirecting after ${maxHops} hops`);
 }
 
 /**
@@ -298,16 +396,36 @@ function headers(creds, referer) {
 async function getJson(url, creds, referer, { soft = false, attempt = 1 } = {}) {
   let res;
   try {
-    res = await fetch(url, { headers: headers(creds, referer) });
+    res = await fetchFollowing(url, creds, referer);
   } catch (e) {
+    if (e instanceof RedirectLoop) {
+      if (soft) return null;
+      die(
+        2,
+        'LinkedIn is bouncing this request in a redirect loop instead of answering.',
+        'The session cookie is being rejected for API calls. Two things fix this, in order:\n\n' +
+          '  1. Re-run `node scripts/linkedin-setup.mjs` and paste the WHOLE cookie header\n' +
+          '     (DevTools → Network → any www.linkedin.com request → Request Headers →\n' +
+          '     copy the entire "cookie:" value). li_at and JSESSIONID alone are enough for\n' +
+          '     some endpoints but not all of them — bcookie and lidc matter too.\n\n' +
+          '  2. If it persists, LinkedIn has rate-limited this session. Leave it several\n' +
+          '     hours; the daily schedule will pick it up.',
+      );
+    }
+    const why = describeNetworkError(e);
     if (attempt <= 3) {
       const wait = 15000 * attempt;
-      log(`network error (${e.message}); retrying in ${wait / 1000}s`);
+      log(`network error (${why}); retrying in ${wait / 1000}s`);
       await sleep(wait);
       return getJson(url, creds, referer, { soft, attempt: attempt + 1 });
     }
     if (soft) return null;
-    die(1, `Network error after ${attempt} attempts: ${e.message}`);
+    die(
+      1,
+      `Network error after ${attempt} attempts: ${why}`,
+      'If this says ECONNRESET or UND_ERR_SOCKET, LinkedIn dropped the connection —\n' +
+        '  usually rate limiting. Leave it a few hours; the schedule retries tomorrow.',
+    );
   }
 
   if (res.status === 401 || res.status === 403) {
@@ -451,19 +569,73 @@ function stripUndefined(obj) {
 }
 
 /** The first plausible epoch-ms timestamp on a node, as ISO. */
+export function epochIso(raw) {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
+  // Accept seconds or milliseconds; reject anything outside a sane window so an
+  // unrelated numeric field (a count, an id) can't masquerade as a date.
+  const ms = raw > 1e12 ? raw : raw > 1e9 ? raw * 1000 : null;
+  if (ms == null) return null;
+  const d = new Date(ms);
+  // LinkedIn launched in 2003, and nothing has been viewed tomorrow.
+  if (d.getFullYear() < 2003 || d.getTime() > Date.now() + 86_400_000) return null;
+  return d.toISOString();
+}
+
 export function viewTimeOf(node) {
   for (const key of ['viewedAt', 'lastViewedAt', 'viewTime', 'time', 'createdAt', 'occurredAt']) {
-    const raw = node[key];
-    if (typeof raw !== 'number' || !Number.isFinite(raw)) continue;
-    // Accept seconds or milliseconds; reject anything outside a sane window so
-    // an unrelated numeric field (a count, an id) can't masquerade as a date.
-    const ms = raw > 1e12 ? raw : raw > 1e9 ? raw * 1000 : null;
-    if (ms == null) continue;
-    const d = new Date(ms);
-    if (d.getFullYear() < 2003 || d.getTime() > Date.now() + 86_400_000) continue;
-    return d.toISOString();
+    const iso = epochIso(node[key]);
+    if (iso) return iso;
   }
   return null;
+}
+
+/**
+ * Does this node look like a Connection record rather than anything else?
+ *
+ * The dash connections endpoint returns these paired with a Profile: a
+ * `createdAt` (the moment you connected — genuinely useful) plus a pointer to
+ * the person. Recognising them matters twice over: it's how real connection
+ * dates get read, and it's how they're kept *out* of the profile-view log,
+ * since a bare `createdAt` next to a `connectedMember` would otherwise satisfy
+ * the "looks like a view record" test.
+ */
+export function isConnectionNode(node) {
+  if (typeof node.$type === 'string' && /relationships\.Connection$/.test(node.$type)) return true;
+  return (
+    typeof node.createdAt === 'number' &&
+    (typeof node.connectedMember === 'string' ||
+      typeof node['*connectedMemberResolutionResult'] === 'string')
+  );
+}
+
+/**
+ * Connections with the date you actually connected.
+ *
+ * This is better than anything the tracker could infer: LinkedIn hands over the
+ * true `createdAt` for every connection, so the very first run dates all of
+ * them correctly instead of recording an undated baseline and waiting for a CSV
+ * import to fill the history in.
+ */
+export function extractConnections(json) {
+  const byUrn = indexByUrn(json);
+  const dated = new Map();
+
+  walk(json, (node) => {
+    if (!isConnectionNode(node)) return;
+    const urn = node['*connectedMemberResolutionResult'] ?? node.connectedMember;
+    const target = typeof urn === 'string' ? byUrn.get(urn) : null;
+    if (!target || !isProfileNode(target)) return;
+    const person = toPerson(target);
+    const since = epochIso(node.createdAt);
+    dated.set(person.id.toLowerCase(), since ? { ...person, since } : person);
+  });
+
+  // Only fall back to "every profile in the payload" when the pairing found
+  // nothing at all — on a healthy response the paired set is authoritative, and
+  // mixing in loose profiles would sweep up your own and anyone else LinkedIn
+  // happened to mention.
+  if (dated.size > 0) return [...dated.values()];
+  return collectProfiles(json);
 }
 
 /**
@@ -508,6 +680,9 @@ export function extractViewers(json) {
   const out = [];
 
   walk(json, (node) => {
+    // A Connection carries createdAt + connectedMember, which would otherwise
+    // read as "someone viewed you on the day you connected".
+    if (isConnectionNode(node)) return;
     const t = viewTimeOf(node);
     if (!t) return;
 
@@ -604,28 +779,71 @@ async function fetchMe(creds) {
         '  or re-copy the cookie header.',
     );
   }
-  return people[0];
+  // The dash endpoints key off urn:li:fsd_profile:…, which the MiniProfile
+  // carries as dashEntityUrn (its own entityUrn is the older fs_miniProfile).
+  let dashUrn = null;
+  walk(json, (node) => {
+    if (!dashUrn && typeof node.dashEntityUrn === 'string') dashUrn = node.dashEntityUrn;
+  });
+  return { ...people[0], urn: dashUrn };
 }
 
-/** Follower count and connection total. Both are best-effort but usually present. */
-async function fetchCounts(creds, publicId) {
+/**
+ * Follower count and connection total.
+ *
+ * connectionsSummary is reliable. The follower count is not: the legacy
+ * networkinfo endpoint 404s on current accounts, so several candidates are
+ * tried and the first that yields a number wins. Failing all of them is
+ * survivable — the connection series is what the graph is really about, and the
+ * app already treats a missing follower count as "not recorded this run".
+ */
+async function fetchCounts(creds, publicId, meUrn) {
   const referer = `https://www.linkedin.com/in/${publicId}/`;
-  const network = await getJson(
-    `${BASE}/identity/profiles/${encodeURIComponent(publicId)}/networkinfo`,
-    creds,
-    referer,
-    { soft: true },
-  );
-  dumpDebug('networkinfo', network);
 
   const summary = await getJson(`${BASE}/relationships/connectionsSummary`, creds, FEED_REFERER, {
     soft: true,
   });
   dumpDebug('connectionsSummary', summary);
 
+  const dashUrn = meUrn ? encodeURIComponent(meUrn) : null;
+  const followerCandidates = [
+    [
+      'networkinfo',
+      `${BASE}/identity/profiles/${encodeURIComponent(publicId)}/networkinfo`,
+    ],
+    [
+      'dash-profileNetworkInfo',
+      dashUrn && `${BASE}/identity/dash/profileNetworkInfos/${dashUrn}`,
+    ],
+    [
+      'dash-networkinfo-query',
+      `${BASE}/identity/dash/profileNetworkInfos?q=memberIdentity&memberIdentity=${encodeURIComponent(publicId)}`,
+    ],
+    [
+      'followingState',
+      dashUrn && `${BASE}/identity/dash/followingStates?q=followingStates&followingStateUrns=${dashUrn}`,
+    ],
+  ].filter(([, url]) => Boolean(url));
+
+  let followers = null;
+  for (const [name, url] of followerCandidates) {
+    const json = await getJson(url, creds, referer, { soft: true });
+    if (!json) continue;
+    dumpDebug(`followers-${name}`, json);
+    followers = firstNumber(json, /^followers?Count$/i);
+    if (followers != null) {
+      log(`  follower count came from ${name}`);
+      break;
+    }
+    await sleep(jitter());
+  }
+  if (followers == null) {
+    log('  no follower count available from any endpoint — recording connections only');
+  }
+
   return {
-    followers: firstNumber(network, /^followersCount$/i),
-    connections: firstNumber(summary, /^numConnections$/i) ?? firstNumber(network, /^connectionsCount$/i),
+    followers,
+    connections: firstNumber(summary, /^numConnections$/i),
   };
 }
 
@@ -672,8 +890,9 @@ async function fetchConnections(creds) {
       }
       if (page === 0) dumpDebug(`connections-shape${i}`, json);
 
-      const people = collectProfiles(json);
-      // Voyager echoes your own profile in the payload; it isn't a connection.
+      // extractConnections pairs each Connection record with the profile it
+      // points at, which is what carries the real "connected on" date.
+      const people = extractConnections(json);
       for (const p of people) out.set(p.id.toLowerCase(), p);
 
       page++;
@@ -782,9 +1001,20 @@ export function mergeSince(current, previousList, nowIso, firstRealRun) {
   const prevByKey = new Map((previousList ?? []).map((p) => [p.id.toLowerCase(), p]));
   return current.map((p) => {
     const prev = prevByKey.get(p.id.toLowerCase());
-    const since = prev?.since ?? (firstRealRun ? undefined : nowIso);
+    // Earliest wins. A relationship can't have started later than we already
+    // believed, and this is what lets LinkedIn's own `createdAt` override a
+    // first-seen guess recorded by an earlier run.
+    const known = earliest(prev?.since, p.since);
+    const since = known ?? (firstRealRun ? undefined : nowIso);
     return since ? { ...p, since } : p;
   });
+}
+
+/** The earlier of two optional ISO timestamps. */
+export function earliest(a, b) {
+  if (!a) return b ?? undefined;
+  if (!b) return a;
+  return new Date(a) <= new Date(b) ? a : b;
 }
 
 /** Connect/disconnect events from the connection-set difference. */
@@ -820,7 +1050,7 @@ export function stableList(previous, currentRead, confirmedGone) {
     const k = p.id.toLowerCase();
     const old = byKey.get(k);
     // Fresh profile fields win; the earliest known date is kept.
-    byKey.set(k, old ? { ...old, ...p, since: old.since ?? p.since } : p);
+    byKey.set(k, old ? { ...old, ...p, since: earliest(old.since, p.since) } : p);
   }
   for (const k of confirmedGone) byKey.delete(k);
   return [...byKey.values()].sort((a, b) => a.id.localeCompare(b.id));
@@ -936,7 +1166,7 @@ async function main() {
   const publicId = creds.profile || me.id;
   log(`pulling /in/${publicId}${DRY_RUN ? ' (dry run)' : ''}`);
 
-  const reported = await fetchCounts(creds, publicId);
+  const reported = await fetchCounts(creds, publicId, me.urn);
   log(
     `reported ${reported.connections ?? '?'} connections · ${reported.followers ?? '?'} followers`,
   );

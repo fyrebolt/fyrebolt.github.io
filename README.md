@@ -308,19 +308,29 @@ get challenged immediately.
    node scripts/linkedin-setup.mjs
    ```
 
-   To find the two values: open linkedin.com logged in → DevTools (⌥⌘I) →
-   **Application** tab (**Storage** in Firefox/Safari) → Cookies →
-   `https://www.linkedin.com` → copy the values of `li_at` and `JSESSIONID`.
+   **Paste the whole `Cookie:` header** when it asks. DevTools (⌥⌘I) → Network →
+   reload → click any request to `www.linkedin.com` → Request Headers →
+   right-click the `cookie:` row → Copy value.
+
+   The whole header genuinely matters. `li_at` + `JSESSIONID` alone satisfy some
+   endpoints, but not all of them: LinkedIn answers a request missing `bcookie` /
+   `lidc` with a 302 **back to the same URL**, which Node reports only as the
+   useless "redirect count exceeded". The puller now follows redirects by hand
+   and keeps a cookie jar across them, so it reports what actually happened —
+   but it can only send cookies you gave it.
 
    Use the setup script rather than hand-editing the JSON, because LinkedIn
    displays `JSESSIONID` **with double quotes** around it (`"ajax:1234"`) and
    pasting that verbatim into a JSON string produces a file that won't parse.
-   The script strips them, along with a `name=` prefix, a `Cookie:` prefix, or a
-   whole pasted header — paste whichever of those you happen to have.
 
-   Both values are needed. `li_at` alone gets a 403: voyager rejects any request
-   whose `csrf-token` header doesn't match `JSESSIONID`, and that's the single
-   most common reason a hand-built request fails.
+   If you can only find the individual cookies: DevTools → **Application** tab
+   (**Storage** in Firefox/Safari) → Cookies → `https://www.linkedin.com`, and
+   copy `li_at` and `JSESSIONID`.
+
+   **Expect to redo this often.** LinkedIn rotates and invalidates sessions used
+   by scripts, sometimes within hours of the first automated request. A dead
+   session shows up as a clean `HTTP 401` with a message telling you to re-paste;
+   it is not a bug in the puller.
 
    To write the file by hand instead:
 
