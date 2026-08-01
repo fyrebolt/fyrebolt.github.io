@@ -13,7 +13,7 @@ export interface HomeApp {
   /** Emoji glyph drawn on the squircle icon. */
   glyph: string;
   /** Optional built-in vector icon id (e.g. 'instagram'); overrides the emoji glyph. */
-  icon?: 'instagram';
+  icon?: 'instagram' | 'linkedin';
   /** Real, bookmarkable route this icon opens (its own Vite entry point). */
   route: string;
   /** CSS gradient for the icon tile. */
@@ -69,6 +69,15 @@ export const APPS: HomeApp[] = [
     gradient:
       'radial-gradient(circle at 30% 107%, #fdf497 0%, #fdf497 5%, #fd5949 45%, #d6249f 60%, #285aeb 90%)',
     blurb: 'Track my follower count and daily follows/unfollows.',
+  },
+  {
+    id: 'linkedin',
+    label: 'LinkedIn',
+    glyph: '💼',
+    icon: 'linkedin',
+    route: '/linkedin/',
+    gradient: 'linear-gradient(160deg, #1b8ad8 0%, #0a66c2 55%, #004182 100%)',
+    blurb: 'Track who views my profile, plus connections and followers.',
   },
 ];
 
