@@ -30,3 +30,17 @@ scripts/.instagram-secrets.json
 
 # Instagram tracker run-state (notification de-duplication)
 scripts/.instagram-state.json
+
+# LinkedIn tracker session cookie — never commit this
+scripts/.linkedin-secrets.json
+
+# LinkedIn tracker run-state (notification de-duplication)
+scripts/.linkedin-state.json
+
+# The full-detail LinkedIn log, including the names of everyone who viewed the
+# profile. The published history.json withholds these on purpose — see
+# "publishViewers" in scripts/linkedin-pull.mjs.
+scripts/.linkedin-private.json
+
+# Raw voyager payloads dumped by `linkedin-pull.mjs --debug`
+scripts/.linkedin-debug/
