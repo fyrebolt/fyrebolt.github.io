@@ -249,6 +249,126 @@ before the first scheduled run.
 Sample data ships committed so the app is demoable without any of this; regenerate
 it with `node scripts/gen_sample_instagram.mjs`.
 
+### 💼 LinkedIn Tracker (`/linkedin/`)
+
+The same idea as the Instagram tracker, aimed at a network that works differently.
+Connections are mutual, so there's no follow-back arithmetic; the asymmetry that
+does exist is between connecting and merely following. Data lives in one committed
+file — [`public/linkedin/history.json`](public/linkedin/history.json).
+
+**Who viewed your profile** is the headline view, and it's the reason the app
+exists. LinkedIn shows a free account only its most recent handful of viewers and
+drops them entirely after 90 days, so there's no stable set to diff — there's a
+sliding window you have to keep copying out before it moves. Every run therefore
+*unions* whatever is currently visible into a log that only ever grows. Run it
+daily and after a year you have a view history LinkedIn itself will not show you.
+Miss a week and those views are gone for good, which is why the staleness banner
+here is blunter than the Instagram one.
+
+The section gives you a 30-day bar chart (click a bar to scope the list to that
+day), a rollup of the companies your viewers come from, filters for
+named/anonymous/repeat visitors, and a per-person sheet that cross-references
+someone's visits against when you connected.
+
+| List | Who's in it |
+| --- | --- |
+| Connections | Your 1st-degree connections |
+| Followers | Everyone who follows your posts |
+| Connected + following | Both — the most engaged slice |
+| Following, not connected | They follow you without ever having connected |
+
+#### Viewer privacy
+
+Profile viewers are not a follower list. A follower list is public on the
+platform; who looked at your profile is shown **only to you**, and those people
+never agreed to appear on a public web page. So the puller writes two files:
+
+- `public/linkedin/history.json` — committed and deployed, with viewer names,
+  ids and headlines stripped. Counts, timing, employers and degrees survive, so
+  the public page is still a real tracker.
+- `scripts/.linkedin-private.json` — gitignored, full detail. Drag it onto the
+  page to see the real names on your own machine (it's kept in `localStorage`).
+
+Set `"publishViewers": true` in the secrets file to publish names as well. It's
+off by default deliberately — this is the one place where the Instagram tracker's
+"commit everything" habit would expose someone other than you.
+
+#### Setting up the daily pull
+
+LinkedIn has no public API for connections or profile viewers, so this uses the
+private voyager endpoints linkedin.com's own front-end calls — same arrangement
+and same caveats as Instagram: it's automated collection (which LinkedIn's user
+agreement disallows), and it runs from your own machine because datacenter IPs
+get challenged immediately.
+
+1. **Add your session cookie.** Create `scripts/.linkedin-secrets.json`
+   (gitignored):
+
+   ```json
+   {
+     "profile": "hastinchen",
+     "cookie": "<paste the whole cookie: request header>",
+     "publishViewers": false
+   }
+   ```
+
+   `profile` is the slug in `linkedin.com/in/<slug>`. Pasting the full profile
+   URL works too — the script trims it. Omit it entirely and the job resolves it
+   from the session.
+
+   Get it from linkedin.com while logged in: DevTools → Network → click any
+   request to `www.linkedin.com` → Request Headers → copy the entire `cookie:`
+   value. Copy the **whole** header, not just `li_at` — voyager rejects any
+   request whose `csrf-token` doesn't match `JSESSIONID`, and that's the single
+   most common reason a hand-built request comes back 403.
+
+2. **Test it without writing anything:**
+
+   ```bash
+   node scripts/linkedin-pull.mjs --dry-run --debug
+   ```
+
+   `--debug` dumps the raw payloads to `scripts/.linkedin-debug/`. Worth doing
+   on the first run: voyager's decoration ids and field names drift without
+   notice, so the parsers are written structurally (walk the payload looking for
+   anything shaped like a profile or a view record) rather than against fixed
+   paths, and the dumps are how you check what actually came back.
+
+3. **Schedule it** (launchd, first attempt 09:40 by default — offset from the
+   Instagram job so two scrapers don't start in the same minute):
+
+   ```bash
+   ./scripts/linkedin-schedule.sh install
+   ```
+
+   `status`, `run`, `logs`, and `uninstall` do what they say. Retries work the
+   same way as the Instagram job: scheduled hourly, `--once-daily` makes it a
+   no-op once a run has succeeded, and `generatedAt` is itself the record of the
+   last good run.
+
+**Guard against phantom disconnects.** Voyager's connections endpoint is
+eventually consistent in exactly the way Instagram's followers endpoint is, so a
+truncated read looks like a mass disconnect. The script cross-checks what it
+paged against the count LinkedIn reports and refuses to write if it's short, and
+the stored list only ever shrinks through a confirmed disconnect — never through
+a read simply missing someone. `--force` overrides it when a drop is real.
+
+#### Backfilling real connection dates
+
+Unusually good on LinkedIn: `Connections.csv` in the official export carries a
+"Connected On" date for **every** connection, so one import reconstructs your
+entire history back to the day you joined. Request it under Settings → Data
+privacy → *Get a copy of your data*, then drop the `.zip` (or the loose `.csv`
+files) onto the page. It's parsed entirely in the browser — and the email column
+the export includes for some connections is dropped at parse time and never
+enters the data model, since this file gets committed publicly.
+
+The export contains no profile viewers. LinkedIn has never included them in the
+archive, which is precisely why the daily pull exists.
+
+Sample data ships committed so the app is demoable without any of this; regenerate
+it with `node scripts/gen_sample_linkedin.mjs`.
+
 ---
 
 ## Development
@@ -264,7 +384,8 @@ npm run lint      # run ESLint
 ```
 
 Each app is its own Vite entry point (`index.html`, `video/`, `appstore/`,
-`printer/`, `about/`, `instagram/`) wired up in [`vite.config.ts`](vite.config.ts).
+`printer/`, `about/`, `instagram/`, `linkedin/`) wired up in
+[`vite.config.ts`](vite.config.ts).
 
 ### Project layout
 
@@ -277,8 +398,9 @@ src/
   printer/     # Résumé PDF viewer
   about/       # About Me
   instagram/   # Instagram follower tracker
+  linkedin/    # LinkedIn tracker (connections, followers, profile viewers)
   components/  # shared UI + section components
-scripts/       # instagram-pull.mjs (daily job), instagram-schedule.sh (launchd)
+scripts/       # daily pull jobs + launchd installers for both trackers
 public/        # static assets served as-is (resume.pdf, fonts, icons)
 ```
 
