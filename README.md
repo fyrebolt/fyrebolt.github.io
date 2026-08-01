@@ -301,13 +301,34 @@ and same caveats as Instagram: it's automated collection (which LinkedIn's user
 agreement disallows), and it runs from your own machine because datacenter IPs
 get challenged immediately.
 
-1. **Add your session cookie.** Create `scripts/.linkedin-secrets.json`
-   (gitignored):
+1. **Add your session cookie.** Run the setup script — it prompts for two
+   values and writes `scripts/.linkedin-secrets.json` (gitignored, mode 0600):
+
+   ```bash
+   node scripts/linkedin-setup.mjs
+   ```
+
+   To find the two values: open linkedin.com logged in → DevTools (⌥⌘I) →
+   **Application** tab (**Storage** in Firefox/Safari) → Cookies →
+   `https://www.linkedin.com` → copy the values of `li_at` and `JSESSIONID`.
+
+   Use the setup script rather than hand-editing the JSON, because LinkedIn
+   displays `JSESSIONID` **with double quotes** around it (`"ajax:1234"`) and
+   pasting that verbatim into a JSON string produces a file that won't parse.
+   The script strips them, along with a `name=` prefix, a `Cookie:` prefix, or a
+   whole pasted header — paste whichever of those you happen to have.
+
+   Both values are needed. `li_at` alone gets a 403: voyager rejects any request
+   whose `csrf-token` header doesn't match `JSESSIONID`, and that's the single
+   most common reason a hand-built request fails.
+
+   To write the file by hand instead:
 
    ```json
    {
      "profile": "hastinchen",
-     "cookie": "<paste the whole cookie: request header>",
+     "li_at": "AQED…",
+     "jsessionid": "ajax:1234",
      "publishViewers": false
    }
    ```
@@ -315,12 +336,6 @@ get challenged immediately.
    `profile` is the slug in `linkedin.com/in/<slug>`. Pasting the full profile
    URL works too — the script trims it. Omit it entirely and the job resolves it
    from the session.
-
-   Get it from linkedin.com while logged in: DevTools → Network → click any
-   request to `www.linkedin.com` → Request Headers → copy the entire `cookie:`
-   value. Copy the **whole** header, not just `li_at` — voyager rejects any
-   request whose `csrf-token` doesn't match `JSESSIONID`, and that's the single
-   most common reason a hand-built request comes back 403.
 
 2. **Test it without writing anything:**
 
