@@ -48,6 +48,10 @@ function InstagramMark({ size }: { size: number }) {
 /**
  * The lowercase "in" wordmark, drawn in white to sit on the blue tile.
  *
+ * Currently unused: the LinkedIn tracker is unfinished and off the home screen
+ * (see apps.ts). Kept so restoring it is a one-line change rather than a
+ * redraw.
+ *
  * Solid fills rather than strokes, unlike the Instagram mark next door: the
  * counter of the `n` is small enough that a stroked version turns to mush at
  * dock size.

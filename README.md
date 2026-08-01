@@ -249,7 +249,33 @@ before the first scheduled run.
 Sample data ships committed so the app is demoable without any of this; regenerate
 it with `node scripts/gen_sample_instagram.mjs`.
 
-### 💼 LinkedIn Tracker (`/linkedin/`)
+### 💼 LinkedIn Tracker (`/linkedin/`) — unfinished
+
+> **Status: work in progress. Not on the home screen.**
+>
+> The app is built and works; the data pipeline behind it is not finished.
+> Measured against a real 1012-connection account, LinkedIn stops answering a
+> scripted session after roughly half a dozen requests and then invalidates it —
+> three separate runs died at the same point. That makes the daily profile-view
+> collection, which is the whole reason the tool exists, unreliable.
+>
+> | Piece | State |
+> | --- | --- |
+> | The app: charts, viewer timeline, people lists, person sheet | **works** (verified in-browser) |
+> | Importing the official CSV export → all connections with exact dates | **works**, needs no API |
+> | Reading connections from the API | **works for one page**; full paging is impossible (26 pages needed, ~1 allowed) |
+> | Reading profile views from the API | **untested** — the session dies before reaching it |
+> | Follower counts | **no working endpoint found** |
+>
+> It's reachable at `/linkedin/` and ships committed sample data, so everything
+> below describes real, working UI over invented data. It is deliberately absent
+> from the home screen until the pull is dependable — restore it by adding an
+> entry back to [`src/home/apps.ts`](src/home/apps.ts).
+>
+> **What would finish it:** a way to collect profile views that survives
+> LinkedIn's session limits. Longer backoff and fewer requests per run are the
+> obvious next thing to try. Deliberately *not* on the table: spoofing browser
+> fingerprints to evade bot detection.
 
 The same idea as the Instagram tracker, aimed at a network that works differently.
 Connections are mutual, so there's no follow-back arithmetic; the asymmetry that
@@ -443,7 +469,7 @@ src/
   printer/     # Résumé PDF viewer
   about/       # About Me
   instagram/   # Instagram follower tracker
-  linkedin/    # LinkedIn tracker (connections, followers, profile viewers)
+  linkedin/    # LinkedIn tracker (unfinished; not on the home screen)
   components/  # shared UI + section components
 scripts/       # daily pull jobs + launchd installers for both trackers
 public/        # static assets served as-is (resume.pdf, fonts, icons)

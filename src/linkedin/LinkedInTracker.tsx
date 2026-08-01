@@ -287,6 +287,8 @@ function TrackerBody({
 
   return (
     <div className="li">
+      <UnfinishedNotice />
+
       {data.sample ? (
         <div className="li-banner" role="note">
           <span className="li-banner-dot" aria-hidden />
@@ -388,6 +390,32 @@ function HeroStat({
           {delta.toLocaleString()} <span className="li-delta-sub">· {rangeLabel}</span>
         </span>
       )}
+    </div>
+  );
+}
+
+/**
+ * States plainly that this isn't finished.
+ *
+ * The page is deployed and reachable even though it's off the home screen, so
+ * someone can land here cold. Everything below renders real, working UI over
+ * sample data, which is exactly the kind of thing that reads as a live tracker
+ * unless it says otherwise.
+ */
+function UnfinishedNotice() {
+  return (
+    <div className="li-banner is-unfinished" role="note">
+      <span className="li-banner-dot" aria-hidden />
+      <span>
+        <strong>Unfinished — a work in progress.</strong> The app itself works, but the daily pull
+        behind it doesn’t yet: LinkedIn cuts off a scripted session after a handful of requests, so
+        profile-view collection isn’t reliable. Connections can be loaded from the official data
+        export (above), which needs no API at all. Details in the{' '}
+        <a href="https://github.com/fyrebolt/fyrebolt.github.io#-linkedin-tracker-linkedin-unfinished">
+          README
+        </a>
+        .
+      </span>
     </div>
   );
 }

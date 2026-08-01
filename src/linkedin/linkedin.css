@@ -189,6 +189,13 @@
   border-radius: 50%;
   background: var(--color-primary-orange);
 }
+.li-banner.is-unfinished {
+  background: rgba(255, 149, 0, 0.13);
+  color: var(--color-text-primary);
+}
+.li-banner.is-unfinished a {
+  color: #0a66c2;
+}
 .li-banner.is-redacted {
   background: rgba(10, 102, 194, 0.09);
 }
