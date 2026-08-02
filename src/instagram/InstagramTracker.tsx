@@ -4,6 +4,7 @@ import { Segmented } from '../ios';
 import {
   buildDayActivity,
   dayKey,
+  exactDate,
   groupByDay,
   loadTrackerData,
   loadLocalData,
@@ -40,6 +41,7 @@ import {
   type AgentStatus,
 } from './agent';
 import ProfileSheet from './ProfileSheet';
+import Avatar from './Avatar';
 import './instagram.css';
 
 interface ImportState {
@@ -860,30 +862,6 @@ function PersonRow({
   );
 }
 
-/** Deterministic gradient from the username, so each account keeps its colour. */
-function Avatar({ username }: { username: string }) {
-  const { hue, initial } = useMemo(() => {
-    let acc = 0;
-    for (let i = 0; i < username.length; i++) acc = (acc * 31 + username.charCodeAt(i)) % 360;
-    // Plenty of handles start with . or _ — skip to the first real character so
-    // the avatar doesn't just show punctuation.
-    const letter = [...username].find((c) => /[\p{L}\p{N}]/u.test(c)) ?? username.slice(0, 1);
-    return { hue: acc, initial: letter.toUpperCase() };
-  }, [username]);
-
-  return (
-    <span
-      className="ig-avatar"
-      aria-hidden
-      style={{
-        background: `linear-gradient(150deg, hsl(${hue} 72% 62%), hsl(${(hue + 42) % 360} 68% 46%))`,
-      }}
-    >
-      {initial}
-    </span>
-  );
-}
-
 function DayDetail({
   bucket,
   account,
@@ -1152,7 +1130,7 @@ function ChartCard({
     <section className="ig-card ig-chart-card">
       <div className="ig-chart-head">
         <span className="ig-chart-span">
-          {fullDate(visible[0].t)} — {fullDate(visible[visible.length - 1].t)}
+          {exactDate(visible[0].t)} — {exactDate(visible[visible.length - 1].t)}
           <span className="ig-chart-count"> · {visible.length} points</span>
         </span>
         {domain && (
@@ -1242,7 +1220,7 @@ function ChartCard({
             // hangs off the card there, badly so on a narrow screen.
             style={tipPosition((geo.x(new Date(active.t).getTime()) / W) * 100)}
           >
-            <span className="ig-tip-date">{fullDate(active.t)}</span>
+            <span className="ig-tip-date">{exactDate(active.t)}</span>
             <span className="ig-tip-count">{active.followers.toLocaleString()} followers</span>
             {activeDay &&
               (activeDay.follows.length > 0 ||
@@ -1320,7 +1298,7 @@ function DayBreakdown({
   return (
     <div className={`ig-breakdown ${pinned ? 'is-pinned' : ''}`}>
       <div className="ig-breakdown-head">
-        <span className="ig-breakdown-date">{fullDate(day.key)}</span>
+        <span className="ig-breakdown-date">{exactDate(day.key)}</span>
         <span className="ig-breakdown-tally">
           {day.follows.length > 0 && <span className="pos">+{day.follows.length} followed</span>}
           {day.unfollows.length > 0 && (
@@ -1395,13 +1373,6 @@ function tipPosition(pct: number): React.CSSProperties {
   if (pct < 22) return { left: 0, transform: 'none' };
   if (pct > 78) return { left: '100%', transform: 'translateX(-100%)' };
   return { left: `${pct}%`, transform: 'translateX(-50%)' };
-}
-
-function fullDate(iso: string): string {
-  const d = /^\d{4}-\d{2}-\d{2}$/.test(iso)
-    ? new Date(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)))
-    : new Date(iso);
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function shortDate(key: string): string {

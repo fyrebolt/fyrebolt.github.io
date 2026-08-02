@@ -383,25 +383,35 @@ export function mergeSince(current, previousList, nowIso, firstRealRun) {
 }
 
 /**
- * Your own follows/unfollows, from the following-set difference.
+ * Follow/unfollow events from the difference between two readings of one list.
  *
- * The list is already fetched every run for the mutuals maths, so tracking what
- * *you* did costs nothing extra. Tagged dir:'out' to keep it distinguishable
- * from what was done to you.
+ * `dir` says whose action it was: 'in' for the followers list (what was done to
+ * you), 'out' for the following list (what you did). Only outbound events carry
+ * the tag — an event without one is inbound, which is what everything recorded
+ * before outbound tracking existed was.
+ *
+ * The following list is already fetched every run for the mutuals maths, so
+ * tracking what *you* did costs nothing extra.
  */
-export function diffFollowing(following, prevFollowing, nowIso) {
-  const prevByKey = new Map((prevFollowing ?? []).map((p) => [p.username.toLowerCase(), p]));
-  const curKeys = new Set(following.map((p) => p.username.toLowerCase()));
+export function diffList(current, previous, nowIso, dir) {
+  const prevByKey = new Map((previous ?? []).map((p) => [p.username.toLowerCase(), p]));
+  const curKeys = new Set(current.map((p) => p.username.toLowerCase()));
+  const event = (p, kind) => ({
+    username: p.username,
+    kind,
+    t: nowIso,
+    name: p.name,
+    ...(dir === 'out' ? { dir } : {}),
+  });
 
-  const followed = following
-    .filter((p) => !prevByKey.has(p.username.toLowerCase()))
-    .map((p) => ({ username: p.username, kind: 'follow', t: nowIso, name: p.name, dir: 'out' }));
-
-  const unfollowed = [...prevByKey.values()]
-    .filter((p) => !curKeys.has(p.username.toLowerCase()))
-    .map((p) => ({ username: p.username, kind: 'unfollow', t: nowIso, name: p.name, dir: 'out' }));
-
-  return { followed, unfollowed };
+  return {
+    added: current
+      .filter((p) => !prevByKey.has(p.username.toLowerCase()))
+      .map((p) => event(p, 'follow')),
+    removed: [...prevByKey.values()]
+      .filter((p) => !curKeys.has(p.username.toLowerCase()))
+      .map((p) => event(p, 'unfollow')),
+  };
 }
 
 /**
@@ -477,22 +487,6 @@ export async function verifyCandidates(candidates, creds, pause = () => sleep(ji
     await pause();
   }
   return { kept, dropped };
-}
-
-/** Follow/unfollow events from the follower-set difference. */
-export function diffFollowers(followers, prevFollowers, nowIso) {
-  const prevByKey = new Map((prevFollowers ?? []).map((p) => [p.username.toLowerCase(), p]));
-  const curKeys = new Set(followers.map((p) => p.username.toLowerCase()));
-
-  const gained = followers
-    .filter((p) => !prevByKey.has(p.username.toLowerCase()))
-    .map((p) => ({ username: p.username, kind: 'follow', t: nowIso, name: p.name }));
-
-  const lost = [...prevByKey.values()]
-    .filter((p) => !curKeys.has(p.username.toLowerCase()))
-    .map((p) => ({ username: p.username, kind: 'unfollow', t: nowIso, name: p.name }));
-
-  return { gained, lost };
 }
 
 /**
@@ -571,16 +565,13 @@ async function main() {
   const mergedFollowers = mergeSince(followers, prev?.followers, nowIso, firstRealRun);
   const mergedFollowing = mergeSince(following, prev?.following, nowIso, firstRealRun);
 
-  const { gained, lost } = firstRealRun
-    ? { gained: [], lost: [] }
-    : diffFollowers(followers, prev.followers, nowIso);
-  const { followed: youFollowed, unfollowed: youUnfollowed } = firstRealRun
-    ? { followed: [], unfollowed: [] }
-    : diffFollowing(following, prev.following, nowIso);
+  const empty = { added: [], removed: [] };
+  const inbound = firstRealRun ? empty : diffList(followers, prev.followers, nowIso, 'in');
+  const outbound = firstRealRun ? empty : diffList(following, prev.following, nowIso, 'out');
 
   // Every candidate is checked against the live relationship before it becomes
   // permanent history — see verifyCandidates for why paging makes this necessary.
-  const candidates = [...gained, ...lost, ...youFollowed, ...youUnfollowed];
+  const candidates = [...inbound.added, ...inbound.removed, ...outbound.added, ...outbound.removed];
   const { kept, dropped } = await verifyCandidates(candidates, creds);
   if (dropped.length) {
     log(`discarded ${dropped.length} unconfirmed change(s): ` +

@@ -8,6 +8,7 @@ import {
   type TrackerData,
 } from './data';
 import { fetchAvatar, fetchProfileInfo, loadToken, probeAgent, type LiveProfile } from './agent';
+import Avatar from './Avatar';
 
 /**
  * Profile popup.
@@ -116,7 +117,7 @@ export default function ProfileSheet({
         </button>
 
         <header className="ig-sheet-head">
-          <SheetAvatar username={insight.username} src={avatar} />
+          <Avatar username={insight.username} src={avatar} className="ig-sheet-avatar" />
           <div className="ig-sheet-id">
             {displayName && <span className="ig-sheet-name">{displayName}</span>}
             <a
@@ -275,34 +276,5 @@ function Count({ label, value }: { label: string; value: number | null }) {
       <span className="ig-sheet-count-value">{value == null ? '—' : value.toLocaleString()}</span>
       <span className="ig-sheet-count-label">{label}</span>
     </div>
-  );
-}
-
-/** Live picture when the agent supplied one, else the stable gradient initial. */
-function SheetAvatar({ username, src }: { username: string; src: string | null }) {
-  const { hue, initial } = useMemo(() => {
-    let acc = 0;
-    for (let i = 0; i < username.length; i++) acc = (acc * 31 + username.charCodeAt(i)) % 360;
-    const letter = [...username].find((c) => /[\p{L}\p{N}]/u.test(c)) ?? username.slice(0, 1);
-    return { hue: acc, initial: letter.toUpperCase() };
-  }, [username]);
-
-  const [broken, setBroken] = useState(false);
-
-  if (src && !broken) {
-    return (
-      <img className="ig-sheet-avatar" src={src} alt="" onError={() => setBroken(true)} />
-    );
-  }
-  return (
-    <span
-      className="ig-sheet-avatar"
-      aria-hidden
-      style={{
-        background: `linear-gradient(150deg, hsl(${hue} 72% 62%), hsl(${(hue + 42) % 360} 68% 46%))`,
-      }}
-    >
-      {initial}
-    </span>
   );
 }
