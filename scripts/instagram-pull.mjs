@@ -31,16 +31,18 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import {
+  buildSession,
+  igHeaders,
+  profileInfoUrl,
+  profileReferer,
+} from './lib/instagram-session.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '..');
 const SECRETS = resolve(__dirname, '.instagram-secrets.json');
 const STATE = resolve(__dirname, '.instagram-state.json');
 const OUT = resolve(REPO, 'public/instagram/history.json');
-
-const IG_APP_ID = '936619743392459';
-const UA =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 /** Page size. Instagram caps the web followers endpoint around 50. */
 const PAGE_SIZE = 50;
@@ -209,13 +211,8 @@ function loadSecrets() {
   const account = String(raw.account || '').replace(/^@/, '').trim();
   if (!account) die(2, 'Set "account" (your handle, without the @) in the secrets file.');
 
-  // Accept either a raw Cookie header or the three individual values.
-  const jar = raw.cookie ? parseCookieHeader(raw.cookie) : {};
-  const sessionid = raw.sessionid || jar.sessionid;
-  const dsUserId = raw.ds_user_id || jar.ds_user_id;
-  const csrftoken = raw.csrftoken || jar.csrftoken || '';
-
-  if (!sessionid) {
+  const session = buildSession(raw);
+  if (!session.sessionid) {
     die(
       2,
       'No sessionid in the secrets file.',
@@ -223,43 +220,16 @@ function loadSecrets() {
     );
   }
 
-  const cookieParts = [`sessionid=${sessionid}`];
-  if (dsUserId) cookieParts.push(`ds_user_id=${dsUserId}`);
-  if (csrftoken) cookieParts.push(`csrftoken=${csrftoken}`);
-
-  return { account, cookie: cookieParts.join('; '), csrftoken };
-}
-
-export function parseCookieHeader(header) {
-  const jar = {};
-  for (const pair of String(header).split(';')) {
-    const idx = pair.indexOf('=');
-    if (idx < 1) continue;
-    jar[pair.slice(0, idx).trim()] = pair.slice(idx + 1).trim();
-  }
-  return jar;
+  return { account, ...session };
 }
 
 // ===== HTTP =====
-
-function headers(creds, referer) {
-  return {
-    accept: '*/*',
-    'accept-language': 'en-US,en;q=0.9',
-    'x-ig-app-id': IG_APP_ID,
-    'x-csrftoken': creds.csrftoken,
-    'x-requested-with': 'XMLHttpRequest',
-    'user-agent': UA,
-    referer,
-    cookie: creds.cookie,
-  };
-}
 
 /** GET JSON with backoff on throttling, and clear failures on auth problems. */
 async function getJson(url, creds, referer, attempt = 1) {
   let res;
   try {
-    res = await fetch(url, { headers: headers(creds, referer) });
+    res = await fetch(url, { headers: igHeaders(creds, referer) });
   } catch (e) {
     if (attempt <= 3) {
       const wait = 15000 * attempt;
@@ -324,8 +294,7 @@ async function getJson(url, creds, referer, attempt = 1) {
 
 /** Numeric id + authoritative follower/following counts for the handle. */
 async function fetchProfile(creds) {
-  const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(creds.account)}`;
-  const json = await getJson(url, creds, `https://www.instagram.com/${creds.account}/`);
+  const json = await getJson(profileInfoUrl(creds.account), creds, profileReferer(creds.account));
   const user = json?.data?.user;
   if (!user?.id) {
     die(
@@ -492,8 +461,7 @@ export async function verifyCandidates(candidates, creds, pause = () => sleep(ji
   for (const c of candidates) {
     let rel;
     try {
-      const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(c.username)}`;
-      const json = await getJson(url, creds, `https://www.instagram.com/${c.username}/`);
+      const json = await getJson(profileInfoUrl(c.username), creds, profileReferer(c.username));
       rel = json?.data?.user ?? 'gone';
     } catch (e) {
       // A dead session poisons every remaining verification, so it has to stop

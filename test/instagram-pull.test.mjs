@@ -2,8 +2,8 @@
 // Run with `npm test` (node:test — no dependencies).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { parseCookieHeader, buildSession } from '../scripts/lib/instagram-session.mjs';
 import {
-  parseCookieHeader,
   mergeSince,
   diffFollowers,
   diffFollowing,
@@ -46,6 +46,30 @@ test('parseCookieHeader', async (t) => {
     // Easy mistake when copying from devtools; the first pair is mangled but
     // sessionid still parses, which is all that matters.
     assert.equal(parseCookieHeader('cookie: mid=a; sessionid=xyz').sessionid, 'xyz');
+  });
+});
+
+test('buildSession — the cookie both the pull and the agent send', async (t) => {
+  await t.test('assembles the three values out of a pasted header', () => {
+    const s = buildSession({
+      cookie: 'mid=Z; csrftoken=tok123; ds_user_id=48291; sessionid=48291%3AAbC',
+    });
+    assert.equal(s.sessionid, '48291%3AAbC');
+    assert.equal(s.csrftoken, 'tok123');
+    assert.equal(s.cookie, 'sessionid=48291%3AAbC; ds_user_id=48291; csrftoken=tok123');
+  });
+
+  await t.test('explicit fields win over the pasted header', () => {
+    const s = buildSession({ cookie: 'sessionid=from_header', sessionid: 'explicit' });
+    assert.equal(s.sessionid, 'explicit');
+    assert.equal(s.cookie, 'sessionid=explicit');
+  });
+
+  await t.test('missing credentials are reported, not faked', () => {
+    const s = buildSession({});
+    assert.equal(s.sessionid, undefined);
+    assert.equal(s.cookie, '');
+    assert.equal(s.csrftoken, '');
   });
 });
 

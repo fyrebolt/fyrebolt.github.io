@@ -35,6 +35,13 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual, randomBytes } from 'node:crypto';
+import {
+  IG_UA,
+  buildSession,
+  igHeaders,
+  profileInfoUrl,
+  profileReferer,
+} from './lib/instagram-session.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '..');
@@ -72,31 +79,14 @@ function loadConfig() {
     );
     process.exit(2);
   }
-  // The Instagram session, reused for live profile lookups. Same shape the
-  // puller accepts: a whole cookie header, or the individual values.
-  const jar = {};
-  for (const pair of String(raw.cookie ?? '').split(';')) {
-    const i = pair.indexOf('=');
-    if (i > 0) jar[pair.slice(0, i).trim()] = pair.slice(i + 1).trim();
-  }
-  const sessionid = raw.sessionid || jar.sessionid;
-  const csrftoken = raw.csrftoken || jar.csrftoken || '';
-  const parts = [];
-  if (sessionid) parts.push(`sessionid=${sessionid}`);
-  if (raw.ds_user_id || jar.ds_user_id) parts.push(`ds_user_id=${raw.ds_user_id || jar.ds_user_id}`);
-  if (csrftoken) parts.push(`csrftoken=${csrftoken}`);
-
   return {
     token: String(raw.agentToken),
     port: Number(raw.agentPort) || DEFAULT_PORT,
-    igCookie: parts.join('; '),
-    csrftoken,
+    // The Instagram session, reused for live profile lookups — assembled exactly
+    // as the puller does it, from the same secrets file.
+    session: buildSession(raw),
   };
 }
-
-const IG_APP_ID = '936619743392459';
-const IG_UA =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 /** Short-lived cache so reopening the same profile doesn't re-hit Instagram. */
 const profileCache = new Map();
@@ -108,16 +98,8 @@ async function fetchProfileInfo(username) {
   const hit = profileCache.get(key);
   if (hit && Date.now() - hit.at < PROFILE_TTL_MS) return hit.value;
 
-  const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`;
-  const res = await fetch(url, {
-    headers: {
-      accept: '*/*',
-      'x-ig-app-id': IG_APP_ID,
-      'x-csrftoken': config.csrftoken,
-      'user-agent': IG_UA,
-      referer: `https://www.instagram.com/${username}/`,
-      cookie: config.igCookie,
-    },
+  const res = await fetch(profileInfoUrl(username), {
+    headers: igHeaders(config.session, profileReferer(username)),
   });
   if (res.status === 404) return { notFound: true };
   if (!res.ok) throw new Error(`Instagram returned ${res.status}`);
