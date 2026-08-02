@@ -6,21 +6,16 @@
 // below is taken from a genuine export.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractUnfollowed, mergeOutbound } from '../scripts/instagram-backfill.mjs';
+import {
+  collectProfiles,
+  extractUnfollowed,
+  mergeOutbound,
+  usernameOf,
+} from '../src/instagram/exportFormat.js';
 
-/** Mirrors usernameOf() in the parsers; kept in sync deliberately. */
-const usernameOf = (row, sld) => {
-  const v = sld?.value?.trim();
-  if (v) return v;
-  const t = row?.title?.trim();
-  if (t) return t;
-  const m = sld?.href?.match(/instagram\.com\/([^/?#]+)/i);
-  return m ? decodeURIComponent(m[1]).trim() : undefined;
-};
-const nameOf = (row, username) => {
-  const t = row?.title?.trim() || undefined;
-  return t && t !== username ? t : undefined;
-};
+/** The display name a row yields, read back off the parsed entry. */
+const nameOf = (row, username) =>
+  collectProfiles([[{ ...row, string_list_data: [{ value: username }] }]])[0]?.name;
 
 test('username extraction across the real file shapes', async (t) => {
   await t.test('followers_1.json: handle in value, title empty', () => {

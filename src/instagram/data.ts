@@ -10,6 +10,8 @@
 //
 // The app just loads whichever is newer and renders it.
 
+import { dayKey } from './exportFormat.js';
+
 /** A single reading of the account's counts at a point in time. */
 export interface Snapshot {
   /** ISO timestamp of the reading. */
@@ -138,14 +140,10 @@ export function downloadHistoryJson(data: TrackerData): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** YYYY-MM-DD in the viewer's local time. */
-export function dayKey(iso: string): string {
-  const d = new Date(iso);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
+// dayKey lives in exportFormat.js — that module has to stay import-free so Node
+// can run it straight from the scripts, so it owns the helper and the data model
+// re-exports it (see the import at the top of this file).
+export { dayKey };
 
 export interface DayBucket {
   key: string;
