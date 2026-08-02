@@ -31,16 +31,18 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import {
+  buildSession,
+  igHeaders,
+  profileInfoUrl,
+  profileReferer,
+} from './lib/instagram-session.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '..');
 const SECRETS = resolve(__dirname, '.instagram-secrets.json');
 const STATE = resolve(__dirname, '.instagram-state.json');
 const OUT = resolve(REPO, 'public/instagram/history.json');
-
-const IG_APP_ID = '936619743392459';
-const UA =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 /** Page size. Instagram caps the web followers endpoint around 50. */
 const PAGE_SIZE = 50;
@@ -209,13 +211,8 @@ function loadSecrets() {
   const account = String(raw.account || '').replace(/^@/, '').trim();
   if (!account) die(2, 'Set "account" (your handle, without the @) in the secrets file.');
 
-  // Accept either a raw Cookie header or the three individual values.
-  const jar = raw.cookie ? parseCookieHeader(raw.cookie) : {};
-  const sessionid = raw.sessionid || jar.sessionid;
-  const dsUserId = raw.ds_user_id || jar.ds_user_id;
-  const csrftoken = raw.csrftoken || jar.csrftoken || '';
-
-  if (!sessionid) {
+  const session = buildSession(raw);
+  if (!session.sessionid) {
     die(
       2,
       'No sessionid in the secrets file.',
@@ -223,43 +220,16 @@ function loadSecrets() {
     );
   }
 
-  const cookieParts = [`sessionid=${sessionid}`];
-  if (dsUserId) cookieParts.push(`ds_user_id=${dsUserId}`);
-  if (csrftoken) cookieParts.push(`csrftoken=${csrftoken}`);
-
-  return { account, cookie: cookieParts.join('; '), csrftoken };
-}
-
-export function parseCookieHeader(header) {
-  const jar = {};
-  for (const pair of String(header).split(';')) {
-    const idx = pair.indexOf('=');
-    if (idx < 1) continue;
-    jar[pair.slice(0, idx).trim()] = pair.slice(idx + 1).trim();
-  }
-  return jar;
+  return { account, ...session };
 }
 
 // ===== HTTP =====
-
-function headers(creds, referer) {
-  return {
-    accept: '*/*',
-    'accept-language': 'en-US,en;q=0.9',
-    'x-ig-app-id': IG_APP_ID,
-    'x-csrftoken': creds.csrftoken,
-    'x-requested-with': 'XMLHttpRequest',
-    'user-agent': UA,
-    referer,
-    cookie: creds.cookie,
-  };
-}
 
 /** GET JSON with backoff on throttling, and clear failures on auth problems. */
 async function getJson(url, creds, referer, attempt = 1) {
   let res;
   try {
-    res = await fetch(url, { headers: headers(creds, referer) });
+    res = await fetch(url, { headers: igHeaders(creds, referer) });
   } catch (e) {
     if (attempt <= 3) {
       const wait = 15000 * attempt;
@@ -324,8 +294,7 @@ async function getJson(url, creds, referer, attempt = 1) {
 
 /** Numeric id + authoritative follower/following counts for the handle. */
 async function fetchProfile(creds) {
-  const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(creds.account)}`;
-  const json = await getJson(url, creds, `https://www.instagram.com/${creds.account}/`);
+  const json = await getJson(profileInfoUrl(creds.account), creds, profileReferer(creds.account));
   const user = json?.data?.user;
   if (!user?.id) {
     die(
@@ -414,25 +383,35 @@ export function mergeSince(current, previousList, nowIso, firstRealRun) {
 }
 
 /**
- * Your own follows/unfollows, from the following-set difference.
+ * Follow/unfollow events from the difference between two readings of one list.
  *
- * The list is already fetched every run for the mutuals maths, so tracking what
- * *you* did costs nothing extra. Tagged dir:'out' to keep it distinguishable
- * from what was done to you.
+ * `dir` says whose action it was: 'in' for the followers list (what was done to
+ * you), 'out' for the following list (what you did). Only outbound events carry
+ * the tag — an event without one is inbound, which is what everything recorded
+ * before outbound tracking existed was.
+ *
+ * The following list is already fetched every run for the mutuals maths, so
+ * tracking what *you* did costs nothing extra.
  */
-export function diffFollowing(following, prevFollowing, nowIso) {
-  const prevByKey = new Map((prevFollowing ?? []).map((p) => [p.username.toLowerCase(), p]));
-  const curKeys = new Set(following.map((p) => p.username.toLowerCase()));
+export function diffList(current, previous, nowIso, dir) {
+  const prevByKey = new Map((previous ?? []).map((p) => [p.username.toLowerCase(), p]));
+  const curKeys = new Set(current.map((p) => p.username.toLowerCase()));
+  const event = (p, kind) => ({
+    username: p.username,
+    kind,
+    t: nowIso,
+    name: p.name,
+    ...(dir === 'out' ? { dir } : {}),
+  });
 
-  const followed = following
-    .filter((p) => !prevByKey.has(p.username.toLowerCase()))
-    .map((p) => ({ username: p.username, kind: 'follow', t: nowIso, name: p.name, dir: 'out' }));
-
-  const unfollowed = [...prevByKey.values()]
-    .filter((p) => !curKeys.has(p.username.toLowerCase()))
-    .map((p) => ({ username: p.username, kind: 'unfollow', t: nowIso, name: p.name, dir: 'out' }));
-
-  return { followed, unfollowed };
+  return {
+    added: current
+      .filter((p) => !prevByKey.has(p.username.toLowerCase()))
+      .map((p) => event(p, 'follow')),
+    removed: [...prevByKey.values()]
+      .filter((p) => !curKeys.has(p.username.toLowerCase()))
+      .map((p) => event(p, 'unfollow')),
+  };
 }
 
 /**
@@ -492,8 +471,7 @@ export async function verifyCandidates(candidates, creds, pause = () => sleep(ji
   for (const c of candidates) {
     let rel;
     try {
-      const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(c.username)}`;
-      const json = await getJson(url, creds, `https://www.instagram.com/${c.username}/`);
+      const json = await getJson(profileInfoUrl(c.username), creds, profileReferer(c.username));
       rel = json?.data?.user ?? 'gone';
     } catch (e) {
       // A dead session poisons every remaining verification, so it has to stop
@@ -509,22 +487,6 @@ export async function verifyCandidates(candidates, creds, pause = () => sleep(ji
     await pause();
   }
   return { kept, dropped };
-}
-
-/** Follow/unfollow events from the follower-set difference. */
-export function diffFollowers(followers, prevFollowers, nowIso) {
-  const prevByKey = new Map((prevFollowers ?? []).map((p) => [p.username.toLowerCase(), p]));
-  const curKeys = new Set(followers.map((p) => p.username.toLowerCase()));
-
-  const gained = followers
-    .filter((p) => !prevByKey.has(p.username.toLowerCase()))
-    .map((p) => ({ username: p.username, kind: 'follow', t: nowIso, name: p.name }));
-
-  const lost = [...prevByKey.values()]
-    .filter((p) => !curKeys.has(p.username.toLowerCase()))
-    .map((p) => ({ username: p.username, kind: 'unfollow', t: nowIso, name: p.name }));
-
-  return { gained, lost };
 }
 
 /**
@@ -603,16 +565,13 @@ async function main() {
   const mergedFollowers = mergeSince(followers, prev?.followers, nowIso, firstRealRun);
   const mergedFollowing = mergeSince(following, prev?.following, nowIso, firstRealRun);
 
-  const { gained, lost } = firstRealRun
-    ? { gained: [], lost: [] }
-    : diffFollowers(followers, prev.followers, nowIso);
-  const { followed: youFollowed, unfollowed: youUnfollowed } = firstRealRun
-    ? { followed: [], unfollowed: [] }
-    : diffFollowing(following, prev.following, nowIso);
+  const empty = { added: [], removed: [] };
+  const inbound = firstRealRun ? empty : diffList(followers, prev.followers, nowIso, 'in');
+  const outbound = firstRealRun ? empty : diffList(following, prev.following, nowIso, 'out');
 
   // Every candidate is checked against the live relationship before it becomes
   // permanent history — see verifyCandidates for why paging makes this necessary.
-  const candidates = [...gained, ...lost, ...youFollowed, ...youUnfollowed];
+  const candidates = [...inbound.added, ...inbound.removed, ...outbound.added, ...outbound.removed];
   const { kept, dropped } = await verifyCandidates(candidates, creds);
   if (dropped.length) {
     log(`discarded ${dropped.length} unconfirmed change(s): ` +

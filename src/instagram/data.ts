@@ -10,6 +10,8 @@
 //
 // The app just loads whichever is newer and renders it.
 
+import { dayKey } from './exportFormat.js';
+
 /** A single reading of the account's counts at a point in time. */
 export interface Snapshot {
   /** ISO timestamp of the reading. */
@@ -138,14 +140,10 @@ export function downloadHistoryJson(data: TrackerData): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** YYYY-MM-DD in the viewer's local time. */
-export function dayKey(iso: string): string {
-  const d = new Date(iso);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
+// dayKey lives in exportFormat.js — that module has to stay import-free so Node
+// can run it straight from the scripts, so it owns the helper and the data model
+// re-exports it (see the import at the top of this file).
+export { dayKey };
 
 export interface DayBucket {
   key: string;
@@ -370,10 +368,16 @@ export function insightFor(
   };
 }
 
-/** "Mar 14, 2025" — a specific day, for the profile popup. */
+/**
+ * "Mar 14, 2025" — one specific day. Takes either an ISO instant or a
+ * YYYY-MM-DD day key, and yields '' for anything it can't read.
+ */
 export function exactDate(iso: string | undefined): string {
   if (!iso) return '';
-  const d = new Date(iso);
+  // A bare day key means a *local* day: new Date('2026-07-30') reads it as UTC
+  // midnight, which renders as the 29th anywhere west of Greenwich.
+  const key = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  const d = key ? new Date(+key[1], +key[2] - 1, +key[3]) : new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 }

@@ -58,16 +58,28 @@ async function withTimeout(path: string, init: RequestInit, ms: number): Promise
   }
 }
 
+/**
+ * JSON from one of the agent's read endpoints, or null.
+ *
+ * Every read here answers the same question — "is the agent there, and did it
+ * say yes?" — so they all collapse to null on a refused connection, a timeout,
+ * a bad token or a non-200. The UI treats all of those the same way: no agent,
+ * no live extras.
+ */
+async function read<T>(path: string, token: string | null, ms: number): Promise<T | null> {
+  try {
+    const res = await withTimeout(path, token ? { headers: { 'x-tracker-token': token } } : {}, ms);
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 /** Is the agent running on this machine? Never throws. */
 export async function probeAgent(): Promise<boolean> {
-  try {
-    const res = await withTimeout('/health', {}, PROBE_MS);
-    if (!res.ok) return false;
-    const body = (await res.json()) as { agent?: string };
-    return body.agent === 'instagram-tracker';
-  } catch {
-    return false;
-  }
+  const body = await read<{ agent?: string }>('/health', null, PROBE_MS);
+  return body?.agent === 'instagram-tracker';
 }
 
 export type StartResult =
@@ -107,13 +119,7 @@ export async function startPull(token: string): Promise<StartResult> {
  * waiting out the GitHub Pages redeploy.
  */
 export async function fetchHistory(token: string): Promise<unknown | null> {
-  try {
-    const res = await withTimeout('/history', { headers: { 'x-tracker-token': token } }, 8000);
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
+  return read('/history', token, 8000);
 }
 
 export interface LiveProfile {
@@ -134,17 +140,7 @@ export async function fetchProfileInfo(
   token: string,
   username: string,
 ): Promise<LiveProfile | null> {
-  try {
-    const res = await withTimeout(
-      `/profile?username=${encodeURIComponent(username)}`,
-      { headers: { 'x-tracker-token': token } },
-      9000,
-    );
-    if (!res.ok) return null;
-    return (await res.json()) as LiveProfile;
-  } catch {
-    return null;
-  }
+  return read<LiveProfile>(`/profile?username=${encodeURIComponent(username)}`, token, 9000);
 }
 
 /**
@@ -170,11 +166,5 @@ export async function fetchAvatar(token: string, src: string): Promise<string | 
 
 /** Poll the current run. Returns null if the agent became unreachable. */
 export async function fetchStatus(token: string): Promise<AgentStatus | null> {
-  try {
-    const res = await withTimeout('/status', { headers: { 'x-tracker-token': token } }, 5000);
-    if (!res.ok) return null;
-    return (await res.json()) as AgentStatus;
-  } catch {
-    return null;
-  }
+  return read<AgentStatus>('/status', token, 5000);
 }

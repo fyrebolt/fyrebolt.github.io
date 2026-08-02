@@ -2,11 +2,10 @@
 // Run with `npm test` (node:test — no dependencies).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { parseCookieHeader, buildSession } from '../scripts/lib/instagram-session.mjs';
 import {
-  parseCookieHeader,
   mergeSince,
-  diffFollowers,
-  diffFollowing,
+  diffList,
   appendSnapshot,
   countMutuals,
   checkCompleteness,
@@ -49,6 +48,30 @@ test('parseCookieHeader', async (t) => {
   });
 });
 
+test('buildSession — the cookie both the pull and the agent send', async (t) => {
+  await t.test('assembles the three values out of a pasted header', () => {
+    const s = buildSession({
+      cookie: 'mid=Z; csrftoken=tok123; ds_user_id=48291; sessionid=48291%3AAbC',
+    });
+    assert.equal(s.sessionid, '48291%3AAbC');
+    assert.equal(s.csrftoken, 'tok123');
+    assert.equal(s.cookie, 'sessionid=48291%3AAbC; ds_user_id=48291; csrftoken=tok123');
+  });
+
+  await t.test('explicit fields win over the pasted header', () => {
+    const s = buildSession({ cookie: 'sessionid=from_header', sessionid: 'explicit' });
+    assert.equal(s.sessionid, 'explicit');
+    assert.equal(s.cookie, 'sessionid=explicit');
+  });
+
+  await t.test('missing credentials are reported, not faked', () => {
+    const s = buildSession({});
+    assert.equal(s.sessionid, undefined);
+    assert.equal(s.cookie, '');
+    assert.equal(s.csrftoken, '');
+  });
+});
+
 test('mergeSince', async (t) => {
   await t.test('first real run leaves everyone undated', () => {
     // Better undated than every follower falsely claiming to have joined today.
@@ -76,52 +99,61 @@ test('mergeSince', async (t) => {
   });
 });
 
-test('diffFollowers (inbound)', async (t) => {
+test('diffList (inbound — the followers list)', async (t) => {
   await t.test('detects a gain and a loss in the same run', () => {
-    const { gained, lost } = diffFollowers(
+    const { added, removed } = diffList(
       [P('stays'), P('arrives')],
       [P('stays'), P('leaves', { name: 'Lee' })],
       NOW,
+      'in',
     );
-    assert.deepEqual(gained.map((e) => e.username), ['arrives']);
-    assert.deepEqual(lost.map((e) => e.username), ['leaves']);
-    assert.equal(lost[0].kind, 'unfollow');
-    assert.equal(lost[0].name, 'Lee', 'name is carried from the previous state');
+    assert.deepEqual(added.map((e) => e.username), ['arrives']);
+    assert.deepEqual(removed.map((e) => e.username), ['leaves']);
+    assert.equal(removed[0].kind, 'unfollow');
+    assert.equal(removed[0].name, 'Lee', 'name is carried from the previous state');
+  });
+
+  await t.test('inbound events carry no dir at all', () => {
+    // Absent means inbound, which is what every event recorded before outbound
+    // tracking existed was — writing dir:'in' would make old and new differ.
+    const { added } = diffList([P('a')], [], NOW, 'in');
+    assert.ok(!('dir' in added[0]));
   });
 
   await t.test('a username case change is not a follow+unfollow pair', () => {
-    const { gained, lost } = diffFollowers([P('Alice')], [P('alice')], NOW);
-    assert.deepEqual(gained, []);
-    assert.deepEqual(lost, []);
+    const { added, removed } = diffList([P('Alice')], [P('alice')], NOW, 'in');
+    assert.deepEqual(added, []);
+    assert.deepEqual(removed, []);
   });
 
-  await t.test('no baseline means everyone counts as gained', () => {
-    const { gained, lost } = diffFollowers([P('a'), P('b')], [], NOW);
-    assert.equal(gained.length, 2);
-    assert.equal(lost.length, 0);
+  await t.test('no baseline means everyone counts as added', () => {
+    const { added, removed } = diffList([P('a'), P('b')], [], NOW, 'in');
+    assert.equal(added.length, 2);
+    assert.equal(removed.length, 0);
   });
 });
 
-test('diffFollowing (outbound)', async (t) => {
+test('diffList (outbound — the following list)', async (t) => {
   await t.test('tags your own actions with dir "out"', () => {
-    const { followed, unfollowed } = diffFollowing(
+    const { added, removed } = diffList(
       [P('kept'), P('newlyFollowed')],
       [P('kept'), P('dropped', { name: 'Dee' })],
       NOW,
+      'out',
     );
-    assert.deepEqual(followed.map((e) => e.username), ['newlyFollowed']);
-    assert.deepEqual(unfollowed.map((e) => e.username), ['dropped']);
-    assert.ok(followed.every((e) => e.dir === 'out'));
-    assert.ok(unfollowed.every((e) => e.dir === 'out'));
-    assert.equal(followed[0].kind, 'follow');
-    assert.equal(unfollowed[0].kind, 'unfollow');
-    assert.equal(unfollowed[0].name, 'Dee');
+    assert.deepEqual(added.map((e) => e.username), ['newlyFollowed']);
+    assert.deepEqual(removed.map((e) => e.username), ['dropped']);
+    assert.ok(added.every((e) => e.dir === 'out'));
+    assert.ok(removed.every((e) => e.dir === 'out'));
+    assert.equal(added[0].kind, 'follow');
+    assert.equal(removed[0].kind, 'unfollow');
+    assert.equal(removed[0].name, 'Dee');
   });
 
   await t.test('is case-insensitive like the inbound diff', () => {
-    const { followed, unfollowed } = diffFollowing([P('Someone')], [P('someone')], NOW);
-    assert.deepEqual(followed, []);
-    assert.deepEqual(unfollowed, []);
+    const { added, removed } = diffList([P('Someone')], [P('someone')], NOW, 'out');
+    assert.deepEqual(added, []);
+    assert.deepEqual(removed, []);
   });
 });
 
@@ -301,8 +333,8 @@ test('stableList — people leave only when an unfollow is confirmed', async (t)
 
   await t.test('and therefore never re-appears as a new follow', () => {
     const afterMiss = stableList([P('a'), P('b')], [P('a')], none);
-    const { gained } = diffFollowers([P('a'), P('b')], afterMiss, NOW);
-    assert.deepEqual(gained, [], 'b was never dropped, so its return is not a follow');
+    const { added } = diffList([P('a'), P('b')], afterMiss, NOW, 'in');
+    assert.deepEqual(added, [], 'b was never dropped, so its return is not a follow');
   });
 
   await t.test('a confirmed unfollow does remove them', () => {

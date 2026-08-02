@@ -7,17 +7,26 @@
 //
 // This is the bootstrap path: it backfills real relationship start dates that
 // the live API can't give us. scripts/instagram-pull.mjs takes over day to day.
+//
+// The file format itself, and the maths for folding an export into the history,
+// live in exportFormat.js — shared with scripts/instagram-backfill.mjs so the
+// two importers can't disagree about what an export says.
 
 import { unzipSync, strFromU8 } from 'fflate';
-import { dayKey, type Profile, type FollowEvent, type Snapshot, type TrackerData } from './data';
+import {
+  FOLLOWERS_RE,
+  FOLLOWING_RE,
+  applyDates,
+  collectProfiles,
+  mergeSnapshots,
+  reconstructSnapshots,
+} from './exportFormat.js';
+import type { Profile, FollowEvent, TrackerData } from './data';
 
 export interface ImportedLists {
   followers: Profile[];
   following: Profile[];
 }
-
-const FOLLOWERS_RE = /^followers(_\d+)?\.json$/i;
-const FOLLOWING_RE = /^following(_\d+)?\.json$/i;
 
 function basename(path: string): string {
   return path.split('/').pop() || path;
@@ -79,96 +88,19 @@ async function collectTexts(files: File[]): Promise<Record<string, string>> {
   return out;
 }
 
-/** Collect and de-duplicate every entry across the files matching `re`. */
+/** Every entry across the files matching `re`, in filename order, de-duplicated. */
 function readList(texts: Record<string, string>, re: RegExp): Profile[] {
-  const names = Object.keys(texts)
+  const docs = Object.keys(texts)
     .filter((n) => re.test(basename(n)))
-    .sort();
-
-  const seen = new Set<string>();
-  const out: Profile[] = [];
-  for (const name of names) {
-    let json: unknown;
-    try {
-      json = JSON.parse(texts[name]);
-    } catch {
-      continue;
-    }
-    for (const entry of extractEntries(json)) {
-      const key = entry.username.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        out.push(entry);
+    .sort()
+    .map((name) => {
+      try {
+        return JSON.parse(texts[name]) as unknown;
+      } catch {
+        return null; // a truncated or HTML file — the others may still be fine
       }
-    }
-  }
-  return out;
-}
-
-interface ExportLink {
-  value?: string;
-  href?: string;
-  timestamp?: number;
-}
-
-interface ExportRow {
-  title?: string;
-  string_list_data?: ExportLink[];
-}
-
-/**
- * Where the username lives, in priority order.
- *
- * The two files are not shaped alike, despite sitting in the same folder:
- * followers_*.json puts the handle in `value` and leaves `title` empty, while
- * following.json omits `value` entirely and puts the handle in `title`. Reading
- * only `value` silently yields zero following.
- */
-function usernameOf(row: ExportRow, sld: ExportLink | undefined): string | undefined {
-  const fromValue = sld?.value?.trim();
-  if (fromValue) return fromValue;
-  const fromTitle = row?.title?.trim();
-  if (fromTitle) return fromTitle;
-  // Last resort: https://www.instagram.com/<username>
-  const m = sld?.href?.match(/instagram\.com\/([^/?#]+)/i);
-  return m ? decodeURIComponent(m[1]).trim() : undefined;
-}
-
-/** Instagram wraps each list as an array of { title, string_list_data: [...] }. */
-function extractEntries(json: unknown): Profile[] {
-  const arr = toArray(json);
-  const out: Profile[] = [];
-  for (const item of arr) {
-    const row = item as ExportRow;
-    const sld = row?.string_list_data?.[0];
-    const username = usernameOf(row, sld);
-    if (!username) continue;
-    const since =
-      typeof sld?.timestamp === 'number' && sld.timestamp > 0
-        ? new Date(sld.timestamp * 1000).toISOString()
-        : undefined;
-    const title = row?.title?.trim() || undefined;
-    // In following.json `title` *is* the handle, so it's not a display name.
-    out.push({ username, name: title && title !== username ? title : undefined, since });
-  }
-  return out;
-}
-
-/**
- * Handle top-level arrays plus the object wrappers Instagram uses
- * (`relationships_followers`, `relationships_following`).
- */
-function toArray(json: unknown): unknown[] {
-  if (Array.isArray(json)) return json;
-  if (json && typeof json === 'object') {
-    const obj = json as Record<string, unknown>;
-    for (const key of ['relationships_followers', 'relationships_following']) {
-      if (Array.isArray(obj[key])) return obj[key] as unknown[];
-    }
-    const firstArray = Object.values(obj).find((v) => Array.isArray(v));
-    if (Array.isArray(firstArray)) return firstArray;
-  }
-  return [];
+    });
+  return collectProfiles(docs);
 }
 
 /**
@@ -197,8 +129,8 @@ export function buildFromExport(imported: ImportedLists, prev: TrackerData | nul
 function backfill(imported: ImportedLists, prev: TrackerData): TrackerData {
   return {
     ...prev,
-    followers: applyDates(prev.followers ?? [], imported.followers),
-    following: applyDates(prev.following ?? [], imported.following),
+    followers: applyDates(prev.followers ?? [], imported.followers).profiles,
+    following: applyDates(prev.following ?? [], imported.following).profiles,
     snapshots: mergeSnapshots(prev.snapshots, reconstructSnapshots(imported.followers)),
   };
 }
@@ -224,63 +156,6 @@ function coldStart(imported: ImportedLists, prev: TrackerData | null): TrackerDa
     followers,
     following,
   };
-}
-
-/**
- * Copy real relationship dates onto the live list. The export's timestamps are
- * ground truth; the daily puller can only record when it first *saw* someone,
- * so anyone it discovered gets stamped with that day instead of the real one.
- */
-function applyDates(live: Profile[], fromExport: Profile[]): Profile[] {
-  const byName = new Map(
-    fromExport.filter((p) => p.since).map((p) => [p.username.toLowerCase(), p]),
-  );
-  return live.map((p) => {
-    const match = byName.get(p.username.toLowerCase());
-    if (!match) return p; // followed after the export was cut — keep what we have
-    return { ...p, since: match.since, name: p.name ?? match.name };
-  });
-}
-
-/**
- * Reconstructed history before the first real reading, then the real ones.
- *
- * Actual readings always win where they exist: they counted everybody at the
- * time, whereas the reconstruction counts only followers who are *still* here,
- * so it can never dip and understates the past.
- */
-function mergeSnapshots(real: Snapshot[] | undefined, reconstructed: Snapshot[]): Snapshot[] {
-  if (!real?.length) return reconstructed;
-  const earliestReal = Math.min(...real.map((s) => new Date(s.t).getTime()));
-  const history = reconstructed.filter((s) => new Date(s.t).getTime() < earliestReal);
-  return [...history, ...real].sort(
-    (a, b) => new Date(a.t).getTime() - new Date(b.t).getTime(),
-  );
-}
-
-/** Cumulative follower count over time from each follower's start timestamp. */
-function reconstructSnapshots(followers: Profile[]): Snapshot[] {
-  const times = followers
-    .map((f) => f.since)
-    .filter((t): t is string => Boolean(t))
-    .map((t) => new Date(t).getTime())
-    .sort((a, b) => a - b);
-
-  const snapshots: Snapshot[] = [];
-  let count = 0;
-  let lastDay = '';
-  for (const t of times) {
-    count++;
-    const iso = new Date(t).toISOString();
-    const dk = dayKey(iso);
-    if (dk !== lastDay) {
-      snapshots.push({ t: iso, followers: count });
-      lastDay = dk;
-    } else {
-      snapshots[snapshots.length - 1].followers = count;
-    }
-  }
-  return snapshots;
 }
 
 /**
