@@ -132,6 +132,14 @@
   font-size: 12px;
   color: var(--color-text-muted);
 }
+.ig-live-done {
+  color: var(--color-primary-green);
+  font-weight: 600;
+}
+.ig-live-pending {
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
 @media (max-width: 520px) {
   .ig-live-details {
     grid-template-columns: 1fr;
