@@ -1,6 +1,6 @@
 {
   "account": "hastinchen",
-  "generatedAt": "2026-07-31T16:20:32.049Z",
+  "generatedAt": "2026-08-04T05:34:19.605Z",
   "sample": false,
   "snapshots": [
     {
@@ -1841,21 +1841,162 @@
       "t": "2026-07-31T16:20:32.049Z",
       "followers": 907,
       "following": 868
+    },
+    {
+      "t": "2026-08-04T05:34:19.605Z",
+      "followers": 912,
+      "following": 874
     }
   ],
   "events": [
     {
-      "username": "t1mmy_01",
+      "username": "ownyourpage.co",
       "kind": "unfollow",
-      "t": "2026-07-31T16:20:32.049Z",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Logan Thomas",
+      "dir": "out"
+    },
+    {
+      "username": "ashtnwebb",
+      "kind": "unfollow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "ashton",
+      "dir": "out"
+    },
+    {
+      "username": "alexthepear",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Alexander Peras",
+      "dir": "out"
+    },
+    {
+      "username": "gryffinnlol",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Gryffinn",
+      "dir": "out"
+    },
+    {
+      "username": "hrite5h",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Hritesh",
+      "dir": "out"
+    },
+    {
+      "username": "sis.seren",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "sören ♡̶",
+      "dir": "out"
+    },
+    {
+      "username": "t1mmy_01",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
       "name": "Timothy",
       "dir": "out"
+    },
+    {
+      "username": "loganthomas_music",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Logan Thomas",
+      "dir": "out"
+    },
+    {
+      "username": "thewizardjoey",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "joey",
+      "dir": "out"
+    },
+    {
+      "username": "rushil.arun",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Rushil Arun",
+      "dir": "out"
+    },
+    {
+      "username": "edwardkim459",
+      "kind": "unfollow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Edward Kim / working job"
+    },
+    {
+      "username": "ashtnwebb",
+      "kind": "unfollow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "ashton"
+    },
+    {
+      "username": "aaronkpropst",
+      "kind": "unfollow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Aaron Propst"
+    },
+    {
+      "username": "t1mmy_01",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Timothy"
+    },
+    {
+      "username": "hrite5h",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Hritesh"
+    },
+    {
+      "username": "sis.seren",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "sören ♡̶"
+    },
+    {
+      "username": "loganthomas_music",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Logan Thomas"
+    },
+    {
+      "username": "alexthepear",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Alexander Peras"
+    },
+    {
+      "username": "gryffinnlol",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Gryffinn"
+    },
+    {
+      "username": "thewizardjoey",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "joey"
+    },
+    {
+      "username": "rushil.arun",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Rushil Arun"
     },
     {
       "username": "t1mmy_01",
       "kind": "unfollow",
       "t": "2026-07-31T16:20:32.049Z",
       "name": "Timothy"
+    },
+    {
+      "username": "t1mmy_01",
+      "kind": "unfollow",
+      "t": "2026-07-31T16:20:32.049Z",
+      "name": "Timothy",
+      "dir": "out"
     },
     {
       "username": "hrite5h",
@@ -2164,11 +2305,6 @@
       "since": "2025-09-23T22:56:48.000Z"
     },
     {
-      "username": "aaronkpropst",
-      "name": "Aaron Propst",
-      "since": "2025-08-22T17:54:21.000Z"
-    },
-    {
       "username": "aaronmeezman",
       "name": "Aaron Meezan",
       "private": true,
@@ -2403,6 +2539,12 @@
       "username": "alexpiscotty25",
       "name": "Alex Piscotty",
       "since": "2023-11-02T01:33:08.000Z"
+    },
+    {
+      "username": "alexthepear",
+      "name": "Alexander Peras",
+      "private": true,
+      "since": "2026-08-04T05:34:19.605Z"
     },
     {
       "username": "alexx.nnguyen",
@@ -2672,12 +2814,6 @@
       "name": "Mr.Krabs",
       "private": true,
       "since": "2026-03-04T00:21:52.000Z"
-    },
-    {
-      "username": "ashtnwebb",
-      "name": "ashton",
-      "private": true,
-      "since": "2025-03-12T04:41:43.000Z"
     },
     {
       "username": "asiankidflash",
@@ -3536,11 +3672,6 @@
       "since": "2024-07-22T17:26:09.000Z"
     },
     {
-      "username": "edwardkim459",
-      "name": "Edward Kim / working job",
-      "since": "2025-07-02T06:36:52.000Z"
-    },
-    {
       "username": "ehopefeldon",
       "name": "Emily Feldon",
       "private": true,
@@ -3885,6 +4016,11 @@
       "since": "2025-01-11T03:09:32.000Z"
     },
     {
+      "username": "gryffinnlol",
+      "name": "Gryffinn",
+      "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
       "username": "guy_nutman",
       "name": "Guy",
       "private": true,
@@ -4001,6 +4137,12 @@
       "username": "howarblee",
       "name": "Howard",
       "since": "2025-04-26T21:16:13.000Z"
+    },
+    {
+      "username": "hrite5h",
+      "name": "Hritesh",
+      "private": true,
+      "since": "2026-08-04T05:34:19.605Z"
     },
     {
       "username": "htshnndkmr",
@@ -4286,6 +4428,7 @@
     {
       "username": "jay_enugula",
       "name": "Jay Enugula",
+      "private": true,
       "since": "2026-02-26T00:01:36.000Z"
     },
     {
@@ -4339,7 +4482,6 @@
     {
       "username": "jeannejudy107",
       "name": "Jeanne",
-      "private": true,
       "since": "2024-10-21T21:03:09.000Z"
     },
     {
@@ -4944,6 +5086,11 @@
       "since": "2025-09-26T03:46:35.000Z"
     },
     {
+      "username": "loganthomas_music",
+      "name": "Logan Thomas",
+      "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
       "username": "lt_irl",
       "name": "lesdong",
       "private": true,
@@ -5182,6 +5329,7 @@
     {
       "username": "michaerhuang",
       "name": "Michael Huang",
+      "private": true,
       "since": "2026-03-08T11:49:32.000Z"
     },
     {
@@ -5665,7 +5813,7 @@
     },
     {
       "username": "rak.rwai",
-      "name": "®️ e s h a ®️ d 🌪️🩸",
+      "name": "®️",
       "since": "2026-05-02T22:08:56.000Z"
     },
     {
@@ -5829,6 +5977,12 @@
       "since": "2023-07-23T04:30:50.000Z"
     },
     {
+      "username": "rushil.arun",
+      "name": "Rushil Arun",
+      "private": true,
+      "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
       "username": "ryan_levering_",
       "name": "Ryan Levering",
       "since": "2025-10-14T01:19:57.000Z"
@@ -5864,7 +6018,6 @@
     {
       "username": "ryann.wuu_",
       "name": "ryan wu",
-      "private": true,
       "since": "2026-04-25T00:43:50.000Z"
     },
     {
@@ -6121,6 +6274,11 @@
       "since": "2024-09-10T14:48:26.000Z"
     },
     {
+      "username": "sis.seren",
+      "name": "sören ♡̶",
+      "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
       "username": "skylar.matthewss",
       "name": "skylar",
       "since": "2025-05-08T18:34:40.000Z"
@@ -6347,6 +6505,12 @@
       "since": "2025-05-18T13:39:20.000Z"
     },
     {
+      "username": "t1mmy_01",
+      "name": "Timothy",
+      "private": true,
+      "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
       "username": "taino.mm",
       "name": "taino",
       "since": "2024-08-04T03:30:36.000Z"
@@ -6443,6 +6607,11 @@
       "name": "Ari",
       "private": true,
       "since": "2026-04-03T02:01:21.000Z"
+    },
+    {
+      "username": "thewizardjoey",
+      "name": "joey",
+      "since": "2026-08-04T05:34:19.605Z"
     },
     {
       "username": "thisjustin3007",
@@ -6760,6 +6929,7 @@
     {
       "username": "wuidsquard",
       "name": "Dillon Han",
+      "private": true,
       "since": "2025-09-25T01:44:21.000Z"
     },
     {
@@ -7417,6 +7587,12 @@
       "since": "2023-11-02T02:09:25.000Z"
     },
     {
+      "username": "alexthepear",
+      "name": "Alexander Peras",
+      "private": true,
+      "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
       "username": "alexx.nnguyen",
       "name": "Alex Nguyen",
       "since": "2026-04-25T00:17:51.000Z"
@@ -7668,12 +7844,6 @@
       "name": "Mr.Krabs",
       "private": true,
       "since": "2026-03-04T00:22:04.000Z"
-    },
-    {
-      "username": "ashtnwebb",
-      "name": "ashton",
-      "private": true,
-      "since": "2025-03-12T04:41:40.000Z"
     },
     {
       "username": "asiankidflash",
@@ -8847,6 +9017,11 @@
       "since": "2025-01-31T04:24:59.000Z"
     },
     {
+      "username": "gryffinnlol",
+      "name": "Gryffinn",
+      "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
       "username": "guy_nutman",
       "name": "Guy",
       "private": true,
@@ -8963,6 +9138,12 @@
       "username": "howarblee",
       "name": "Howard",
       "since": "2026-03-12T07:38:15.000Z"
+    },
+    {
+      "username": "hrite5h",
+      "name": "Hritesh",
+      "private": true,
+      "since": "2026-08-04T05:34:19.605Z"
     },
     {
       "username": "htshnndkmr",
@@ -9226,6 +9407,7 @@
     {
       "username": "jay_enugula",
       "name": "Jay Enugula",
+      "private": true,
       "since": "2026-02-25T23:13:05.000Z"
     },
     {
@@ -9279,7 +9461,6 @@
     {
       "username": "jeannejudy107",
       "name": "Jeanne",
-      "private": true,
       "since": "2024-10-22T04:01:12.000Z"
     },
     {
@@ -9828,6 +10009,11 @@
       "since": "2025-09-26T03:46:33.000Z"
     },
     {
+      "username": "loganthomas_music",
+      "name": "Logan Thomas",
+      "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
       "username": "lt_irl",
       "name": "lesdong",
       "private": true,
@@ -10028,6 +10214,7 @@
     {
       "username": "michaerhuang",
       "name": "Michael Huang",
+      "private": true,
       "since": "2026-03-04T20:46:55.000Z"
     },
     {
@@ -10332,12 +10519,6 @@
       "name": "Ori",
       "private": true,
       "since": "2024-09-23T14:23:23.000Z"
-    },
-    {
-      "username": "ownyourpage.co",
-      "name": "Logan Thomas",
-      "private": true,
-      "since": "2026-06-06T07:05:03.000Z"
     },
     {
       "username": "pa._.ialyssapa._.i",
@@ -10650,6 +10831,12 @@
       "since": "2023-07-23T06:34:35.000Z"
     },
     {
+      "username": "rushil.arun",
+      "name": "Rushil Arun",
+      "private": true,
+      "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
       "username": "ryan_levering_",
       "name": "Ryan Levering",
       "since": "2025-10-14T01:36:23.000Z"
@@ -10680,7 +10867,6 @@
     {
       "username": "ryann.wuu_",
       "name": "ryan wu",
-      "private": true,
       "since": "2026-04-25T00:43:48.000Z"
     },
     {
@@ -10922,6 +11108,11 @@
       "since": "2024-09-10T07:23:27.000Z"
     },
     {
+      "username": "sis.seren",
+      "name": "sören ♡̶",
+      "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
       "username": "sleep_is_lyfe512",
       "private": true,
       "since": "2026-07-17T06:21:19.000Z"
@@ -11140,6 +11331,12 @@
       "since": "2025-05-18T06:35:54.000Z"
     },
     {
+      "username": "t1mmy_01",
+      "name": "Timothy",
+      "private": true,
+      "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
       "username": "taino.mm",
       "name": "taino",
       "since": "2024-08-04T02:52:42.000Z"
@@ -11241,6 +11438,11 @@
       "name": "Ari",
       "private": true,
       "since": "2026-04-03T02:01:49.000Z"
+    },
+    {
+      "username": "thewizardjoey",
+      "name": "joey",
+      "since": "2026-08-04T05:34:19.605Z"
     },
     {
       "username": "thisjustin3007",
@@ -11591,6 +11793,7 @@
     {
       "username": "wuidsquard",
       "name": "Dillon Han",
+      "private": true,
       "since": "2025-09-25T01:43:19.000Z"
     },
     {
