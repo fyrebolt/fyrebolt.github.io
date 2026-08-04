@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { timeAgo, type TrackerData } from './data';
 import {
+  describeWindow,
+  formatClock,
+  formatDayLabel,
+  formatRelative,
+  nextAttempt,
+  zoneAbbrev,
+} from './schedule';
+import {
   probeAgent,
   startPull,
   fetchStatus,
@@ -35,6 +43,7 @@ export default function ImportPanel({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const isLive = Boolean(data && !data.sample);
 
   const pick = () => inputRef.current?.click();
@@ -71,8 +80,19 @@ export default function ImportPanel({
       {isLive ? (
         <div className="ig-import-live">
           <div className="ig-import-live-text">
-            <strong>Live data</strong> · updated {timeAgo(data!.generatedAt)}
+            <button
+              className="ig-live-toggle"
+              aria-expanded={showDetails}
+              onClick={() => setShowDetails((v) => !v)}
+            >
+              <strong>Live data</strong>
+              <span className="ig-live-caret" aria-hidden>
+                {showDetails ? '▴' : '▾'}
+              </span>
+            </button>{' '}
+            · updated {timeAgo(data!.generatedAt)}
           </div>
+          {showDetails && <CollectionDetails data={data!} />}
           <div className="ig-import-actions">
             <UpdateNow onPulled={onPulled} />
             <button className="ios-btn" onClick={pick} disabled={state.busy}>
@@ -106,6 +126,92 @@ export default function ImportPanel({
       {state.error && <p className="ig-import-msg err">{state.error}</p>}
       {state.note && !state.error && <p className="ig-import-msg ok">{state.note}</p>}
     </section>
+  );
+}
+
+/**
+ * What's behind the green "Live data" badge: when this reading was taken, how,
+ * and when the next one is due.
+ *
+ * The schedule is whatever the pull last read out of its own LaunchAgent, so
+ * everything here is reported rather than assumed — a file written by a manual
+ * run carries no schedule, and this says so instead of inventing a time.
+ */
+function CollectionDetails({ data }: { data: TrackerData }) {
+  // The countdown is the point of the panel, so it can't be frozen at the
+  // moment it opened. A minute is finer than anything displayed here changes.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const collected = new Date(data.generatedAt);
+  const next = nextAttempt(data.schedule, data.generatedAt, now);
+  const zone = next ? zoneAbbrev(next.at, data.schedule?.timeZone) : '';
+  const dayLabel = next ? formatDayLabel(next.at, now, data.schedule?.timeZone) : '';
+  const clock = next ? formatClock(next.at, data.schedule?.timeZone) : '';
+
+  return (
+    <dl className="ig-live-details">
+      <dt>Collected</dt>
+      <dd>
+        {collected.toLocaleString([], {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        })}{' '}
+        <span className="ig-live-dim">({timeAgo(data.generatedAt)})</span>
+      </dd>
+
+      <dt>How</dt>
+      <dd>
+        {data.schedule
+          ? 'Scheduled pull on the Mac at home — read from instagram.com with a saved session, then committed to this site.'
+          : 'Pulled by hand — read from instagram.com with a saved session, then committed to this site.'}
+      </dd>
+
+      <dt>Holdings</dt>
+      <dd>
+        {data.followers?.length ?? 0} followers · {data.following?.length ?? 0} following
+      </dd>
+
+      <dt>Next attempt</dt>
+      <dd>
+        {next ? (
+          <>
+            <strong>
+              {dayLabel === 'today' ? clock : `${dayLabel} at ${clock}`}
+              {zone ? ` ${zone}` : ''}
+            </strong>{' '}
+            <span className="ig-live-dim">({formatRelative(next.at, now)})</span>
+            <span className="ig-live-note">
+              {next.satisfied
+                ? 'Today’s pull is already in, so the job will no-op until then.'
+                : 'Today’s pull hasn’t landed yet — this is the next retry.'}
+            </span>
+          </>
+        ) : (
+          <span className="ig-live-dim">
+            No schedule on file. Install it with{' '}
+            <code>./scripts/instagram-schedule.sh install</code> — the next pull records it here.
+          </span>
+        )}
+      </dd>
+
+      {data.schedule && (
+        <>
+          <dt>Schedule</dt>
+          <dd>
+            {describeWindow(data.schedule, now)}
+            <span className="ig-live-note">
+              Retries, not repeats: it stops as soon as one succeeds, so at most one pull a day.
+            </span>
+          </dd>
+        </>
+      )}
+    </dl>
   );
 }
 

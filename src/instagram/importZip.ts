@@ -151,6 +151,8 @@ function coldStart(imported: ImportedLists, prev: TrackerData | null): TrackerDa
     account: prev?.account || 'hastinchen',
     generatedAt: nowIso,
     sample: false,
+    // An import doesn't change what the daily job is installed to do.
+    schedule: prev?.schedule,
     snapshots,
     events: seedRecentFollows(followers),
     followers,
