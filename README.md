@@ -16,6 +16,21 @@ server. Tap an icon on the home screen to open an app; use the **Home** button i
 each app's top bar to come back. The layout is responsive: on a phone the iPad
 frame becomes a full-screen surface, and on a desktop it sits centered as a device.
 
+### The apps at a glance
+
+| App | Route | What it does |
+| --- | --- | --- |
+| 🏠 **Home screen** | `/` | The iPad home screen itself — the icon grid and dock that launch everything else. |
+| 🛍️ **App Store** | `/appstore/` | Portfolio of projects, laid out like Apple's App Store. |
+| 🎥 **Camera** | `/video/` | Layer-based video editor. Decoding, compositing and MP4 export all happen in the browser. |
+| 🖨️ **Printer** | `/printer/` | Renders the résumé PDF to a canvas with a "printing" animation. |
+| 👋 **About Me** | `/about/` | Bio, skills, writing, and contact links. |
+| 📸 **Instagram Tracker** | `/instagram/` | Who follows and unfollows you, diffed once a day from one committed history file. |
+| 💼 **LinkedIn Tracker** | `/linkedin/` | The same idea for LinkedIn, built around profile views. **Unfinished** — deliberately not on the home screen. |
+
+Each app has its own section below. For the scripts that feed the two trackers,
+see [Command-line tools](#command-line-tools).
+
 ### 🏠 Home screen (`/`)
 
 The iPad home screen. Four app icons in a grid plus a dock of favorites. Each icon
@@ -442,6 +457,41 @@ it with `node scripts/gen_sample_linkedin.mjs`.
 
 ---
 
+## Command-line tools
+
+Everything in `scripts/` runs on your own machine. The deployed site is static
+and never executes any of it — these are what produce the data files it renders.
+There's no build step; run each from the repo root.
+
+| Tool | What it does |
+| --- | --- |
+| `instagram-pull.mjs` | **The Instagram daily job.** Resolves your user id, pages your follower and following lists through Instagram's private endpoints, diffs them against the previous run, and writes `public/instagram/history.json`. Refuses to write a read that looks partial, so a throttled fetch can't masquerade as a mass unfollow. |
+| `instagram-agent.mjs` | **The server behind "Update now."** A tiny token-authenticated HTTP listener bound to `127.0.0.1:4599` that runs exactly one fixed action — a pull — so the static page can trigger one. Installed as a login item rather than run by hand. |
+| `instagram-backfill.mjs` | **Real follow dates, once.** Folds the timestamps from the official Instagram export into the committed `history.json`, so every visitor sees them instead of each browser importing its own copy. Takes the export directory or loose JSON files, plus `--dry-run`. |
+| `instagram-schedule.sh` | **launchd installer** for the two above. `install [HH:MM]`, `uninstall`, `status`, `run`, `logs` drive the daily job; `agent-install`, `agent-uninstall`, `agent-status`, `agent-logs` drive the agent. `status` answers the question you actually have: has today's pull happened yet? |
+| `linkedin-setup.mjs` | **Interactive credential setup.** Prompts for two values and writes `scripts/.linkedin-secrets.json` at mode 0600. Use it instead of hand-editing: LinkedIn shows `JSESSIONID` wrapped in double quotes, and pasting that verbatim produces JSON that won't parse. |
+| `linkedin-pull.mjs` | **The LinkedIn daily job.** Unions whatever profile viewers are currently visible into a log that only ever grows, picks up new connections from a single page of recently-added, and writes both the public `history.json` (viewer identities stripped) and the gitignored private one. |
+| `linkedin-schedule.sh` | **launchd installer** for the LinkedIn job — same `install`/`uninstall`/`status`/`run`/`logs` subcommands, no agent. Defaults to 09:40 so the two scrapers never start in the same minute. |
+| `gen_sample_instagram.mjs`<br>`gen_sample_linkedin.mjs` | **Sample data.** Regenerate the committed `history.json` each tracker ships with, so both apps are fully demoable with no session connected. Deterministic — the same run gives the same data. |
+| `lib/instagram-session.mjs` | Not a command. The cookie assembly and request headers that the pull and the agent both have to agree on, kept in one place so they can't drift apart. |
+
+Both pull jobs take the same flags:
+
+| Flag | Effect |
+| --- | --- |
+| `--dry-run` | Fetch, print a summary, write nothing. The safe first run. |
+| `--commit` | After writing, `git commit` and push the history file. What the scheduled job uses. |
+| `--once-daily` | No-op if a run already succeeded today — what makes hourly retries cheap. |
+| `--force` | Write even though the read looks partial, for when a big drop is genuinely real. |
+| `--no-notify` | Skip the macOS failure notification. |
+| `--debug` | LinkedIn only. Dump the raw payloads to `scripts/.linkedin-debug/`. |
+
+Credentials for both live in gitignored files under `scripts/` and never leave
+your machine. The full setup for each is under its app's section above:
+[Instagram](#setting-up-the-daily-pull) and [LinkedIn](#setting-up-the-daily-pull-1).
+
+---
+
 ## Development
 
 Requires Node 20+ (CI builds on Node 22).
@@ -452,6 +502,7 @@ npm run dev       # start the Vite dev server (http://localhost:5173)
 npm run build     # type-check + production build (main site + legacy snapshot)
 npm run preview   # preview the production build locally
 npm run lint      # run ESLint
+npm test          # run the node:test suites in test/ (tracker parsers and pulls)
 ```
 
 Each app is its own Vite entry point (`index.html`, `video/`, `appstore/`,
@@ -472,6 +523,7 @@ src/
   linkedin/    # LinkedIn tracker (unfinished; not on the home screen)
   components/  # shared UI + section components
 scripts/       # daily pull jobs + launchd installers for both trackers
+test/          # node:test suites for the tracker parsers and pull logic
 public/        # static assets served as-is (resume.pdf, fonts, icons)
 ```
 
