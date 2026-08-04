@@ -22,10 +22,13 @@
 //   node scripts/instagram-pull.mjs --force     # write even if the read looks partial
 //   node scripts/instagram-pull.mjs --once-daily  # no-op if today already succeeded
 //
-// Credentials live in scripts/.instagram-secrets.json (gitignored):
-//   { "account": "yourhandle", "cookie": "<the whole Cookie: header from devtools>" }
-// or explicitly:
+// Credentials live in scripts/.instagram-secrets.json (gitignored). Write them
+// with the setup script rather than by hand — it also checks them against
+// instagram.com before it finishes:
+//   node scripts/instagram-setup.mjs
+// The file it writes:
 //   { "account": "yourhandle", "sessionid": "...", "ds_user_id": "...", "csrftoken": "..." }
+// A hand-written { "account": ..., "cookie": "<whole Cookie: header>" } also works.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -194,10 +197,10 @@ function loadSecrets() {
     die(
       2,
       'No credentials found.',
-      `Create ${SECRETS} with:\n\n` +
-        `  {\n    "account": "yourhandle",\n    "cookie": "<paste the Cookie: request header from instagram.com>"\n  }\n\n` +
-        `  To get it: open instagram.com logged in → DevTools → Network → click any\n` +
-        `  request to instagram.com → Request Headers → copy the whole "cookie:" value.`,
+      `Run the setup script — it prompts for your cookie and writes ${SECRETS}:\n\n` +
+        `      node scripts/instagram-setup.mjs\n\n` +
+        `  It tells you where to find the cookie (instagram.com → DevTools → Network →\n` +
+        `  any request to instagram.com → Request Headers → the whole "cookie:" value).`,
     );
   }
 
@@ -216,7 +219,7 @@ function loadSecrets() {
     die(
       2,
       'No sessionid in the secrets file.',
-      'Paste the full "cookie:" request header into the "cookie" field, or set "sessionid" directly.',
+      'Re-run "node scripts/instagram-setup.mjs" and paste the full "cookie:" request header.',
     );
   }
 
@@ -245,8 +248,10 @@ async function getJson(url, creds, referer, attempt = 1) {
     die(
       2,
       `Session cookie expired (HTTP ${res.status}) — re-paste it to resume tracking.`,
-      'Log in to instagram.com in a browser, copy a fresh "cookie:" request header,\n' +
-        '  and update scripts/.instagram-secrets.json. Daily tracking is paused until then.',
+      'Log in to instagram.com in a browser, then run:\n\n' +
+        '      node scripts/instagram-setup.mjs\n\n' +
+        '  It takes a fresh "cookie:" request header and checks it before it finishes.\n' +
+        '  Daily tracking is paused until then; the next hourly attempt picks it up.',
     );
   }
   if (res.status === 429 || res.status >= 500) {
@@ -277,14 +282,16 @@ async function getJson(url, creds, referer, attempt = 1) {
       2,
       'Instagram returned HTML instead of JSON.',
       'That usually means a checkpoint/challenge on the account. Open instagram.com in\n' +
-        '  a browser, clear any "suspicious login" prompt, then re-copy the cookie header.',
+        '  a browser, clear any "suspicious login" prompt, then run\n' +
+        '  "node scripts/instagram-setup.mjs" with a fresh cookie header.',
     );
   }
   if (json?.message === 'checkpoint_required' || json?.message === 'challenge_required') {
     die(
       2,
       'Instagram wants a security checkpoint cleared.',
-      'Open instagram.com in a browser, confirm the prompt, then re-copy the cookie header.',
+      'Open instagram.com in a browser, confirm the prompt, then re-paste the cookie:\n' +
+        '      node scripts/instagram-setup.mjs',
     );
   }
   return json;

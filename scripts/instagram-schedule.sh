@@ -39,7 +39,8 @@ install)
   fi
   if [ ! -f "$REPO/scripts/.instagram-secrets.json" ]; then
     echo "⚠ scripts/.instagram-secrets.json doesn't exist yet."
-    echo "  The job will install, but it'll fail until you create it. See the README."
+    echo "  The job will install, but it'll fail until you create it:"
+    echo "      node scripts/instagram-setup.mjs"
   fi
 
   # Fire every hour from the chosen time until midnight. The script itself is
