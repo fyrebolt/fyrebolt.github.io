@@ -163,15 +163,27 @@ consequences worth knowing up front: it's automated collection (which Instagram'
 ToS disallows), and it runs from your own machine on purpose — datacenter IPs like
 GitHub Actions runners get challenged within days.
 
-1. **Add your session cookie.** Create `scripts/.instagram-secrets.json`
-   (gitignored):
+1. **Add your session cookie.** Run the setup script — it prompts for one value
+   and writes `scripts/.instagram-secrets.json` (gitignored, mode 0600):
 
-   ```json
-   { "account": "yourhandle", "cookie": "<paste the whole cookie: request header>" }
+   ```bash
+   node scripts/instagram-setup.mjs
    ```
 
-   Get it from instagram.com while logged in: DevTools → Network → click any
-   request to instagram.com → Request Headers → copy the entire `cookie:` value.
+   **Paste the whole `cookie:` header** when it asks. From instagram.com while
+   logged in: DevTools (⌥⌘I) → Network → reload → click any request to
+   instagram.com → Request Headers → right-click the `cookie:` row → Copy value.
+
+   That one header carries everything the pull needs: `sessionid`, `csrftoken`,
+   and your numeric id — which the script also derives from the sessionid itself,
+   so there's no second row to hunt for. Before it finishes it makes one
+   read-only request to instagram.com and tells you whether the cookie is
+   actually live, rather than leaving you to find out at 09:20 tomorrow.
+   `--no-verify` skips that check.
+
+   **This is also how you refresh an expired session** — same command, and it
+   keeps your `agentToken` and other settings. See "Setting up the daily pull"
+   below for how often to expect it.
 
 2. **Test it without writing anything:**
 
@@ -206,7 +218,14 @@ alerts you once instead of fifteen times.
 
 The first run only records a baseline; diffs start the next day. Expect to
 re-paste the cookie every few weeks — the script fails with a clear message
-rather than silently recording nothing.
+rather than silently recording nothing, and recovering is one command:
+
+```bash
+node scripts/instagram-setup.mjs
+```
+
+You don't need to restart the scheduled job afterwards; its next hourly attempt
+reads the new file, so a cookie refreshed at lunchtime still gets that day's pull.
 
 **Guard against phantom unfollows.** A throttled or truncated read looks exactly
 like a mass unfollow to a diffing tracker, so the script cross-checks what it
