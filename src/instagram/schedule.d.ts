@@ -3,6 +3,17 @@
 // TypeScript side sees.
 import type { PullSchedule } from './data';
 
+/** The schedule `instagram-schedule.sh install` uses when given no time. */
+export declare const DEFAULT_SCHEDULE: PullSchedule;
+
+/**
+ * The schedule to reason with, and whether it's the real one or the documented
+ * default standing in for a file that carries none.
+ */
+export declare function resolveSchedule(
+  schedule: PullSchedule | undefined,
+): { schedule: PullSchedule; assumed: boolean };
+
 /** The wall clock in `timeZone` at a given instant. */
 export declare function zonedParts(
   date: Date,

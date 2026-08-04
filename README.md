@@ -221,12 +221,18 @@ It opens the collection details: when this reading was taken, how, the totals it
 holds, the retry window the job is installed on, and the next attempt —
 `12:20 PM (in 14 minutes)` if today's pull hasn't landed, or tomorrow's date and
 time if it has, since `--once-daily` means the intervening hourly firings will
-no-op. The page is static and can't see the Mac, so each successful pull records
-its own schedule (read straight out of the installed LaunchAgent) into
-`history.json`; re-install at a different hour and the page corrects itself on the
-next run. The times shown are the job's wall clock, labelled with its zone when
-you're reading from somewhere else. No schedule on file — a file written by a
-manual run — and the panel says so rather than inventing a time.
+no-op. A **Today** line says outright whether the day's pull has landed — that
+one is answered by `generatedAt` alone, so it's reliable no matter what else is
+known.
+
+The page is static and can't see the Mac, so each successful pull records its own
+schedule (read straight out of the installed LaunchAgent) into `history.json`;
+re-install at a different hour and the page corrects itself on the next run. The
+times shown are the job's wall clock, labelled with its zone when you're reading
+from somewhere else. A file that carries no schedule — written by a manual run,
+or before this existed — falls back to the installer's default of 09:20 hourly
+and marks the row **Assumed**, so you still get a time without it being passed
+off as fact.
 
 The first run only records a baseline; diffs start the next day. Expect to
 re-paste the cookie every few weeks — the script fails with a clear message

@@ -6,6 +6,7 @@ import {
   formatDayLabel,
   formatRelative,
   nextAttempt,
+  resolveSchedule,
   zoneAbbrev,
 } from './schedule';
 import {
@@ -147,10 +148,13 @@ function CollectionDetails({ data }: { data: TrackerData }) {
   }, []);
 
   const collected = new Date(data.generatedAt);
-  const next = nextAttempt(data.schedule, data.generatedAt, now);
-  const zone = next ? zoneAbbrev(next.at, data.schedule?.timeZone) : '';
-  const dayLabel = next ? formatDayLabel(next.at, now, data.schedule?.timeZone) : '';
-  const clock = next ? formatClock(next.at, data.schedule?.timeZone) : '';
+  // A file with no schedule of its own still gets a time, from the default the
+  // installer uses — flagged as assumed rather than presented as fact.
+  const { schedule, assumed } = resolveSchedule(data.schedule);
+  const next = nextAttempt(schedule, data.generatedAt, now)!;
+  const zone = zoneAbbrev(next.at, schedule.timeZone);
+  const dayLabel = formatDayLabel(next.at, now, schedule.timeZone);
+  const clock = formatClock(next.at, schedule.timeZone);
 
   return (
     <dl className="ig-live-details">
@@ -177,40 +181,38 @@ function CollectionDetails({ data }: { data: TrackerData }) {
         {data.followers?.length ?? 0} followers · {data.following?.length ?? 0} following
       </dd>
 
-      <dt>Next attempt</dt>
+      <dt>Today</dt>
       <dd>
-        {next ? (
-          <>
-            <strong>
-              {dayLabel === 'today' ? clock : `${dayLabel} at ${clock}`}
-              {zone ? ` ${zone}` : ''}
-            </strong>{' '}
-            <span className="ig-live-dim">({formatRelative(next.at, now)})</span>
-            <span className="ig-live-note">
-              {next.satisfied
-                ? 'Today’s pull is already in, so the job will no-op until then.'
-                : 'Today’s pull hasn’t landed yet — this is the next retry.'}
-            </span>
-          </>
+        {next.satisfied ? (
+          <span className="ig-live-done">✓ Daily pull complete</span>
         ) : (
-          <span className="ig-live-dim">
-            No schedule on file. Install it with{' '}
-            <code>./scripts/instagram-schedule.sh install</code> — the next pull records it here.
-          </span>
+          <span className="ig-live-pending">Not in yet — the job is still retrying</span>
         )}
       </dd>
 
-      {data.schedule && (
-        <>
-          <dt>Schedule</dt>
-          <dd>
-            {describeWindow(data.schedule, now)}
-            <span className="ig-live-note">
-              Retries, not repeats: it stops as soon as one succeeds, so at most one pull a day.
-            </span>
-          </dd>
-        </>
-      )}
+      <dt>Next pull</dt>
+      <dd>
+        <strong>
+          {dayLabel === 'today' ? clock : `${dayLabel} at ${clock}`}
+          {zone ? ` ${zone}` : ''}
+        </strong>{' '}
+        <span className="ig-live-dim">({formatRelative(next.at, now)})</span>
+        <span className="ig-live-note">
+          {next.satisfied
+            ? 'Today is done, so the hourly firings until then will no-op.'
+            : 'This is the next retry — it stops as soon as one succeeds.'}
+        </span>
+      </dd>
+
+      <dt>Schedule</dt>
+      <dd>
+        {describeWindow(schedule, now)}
+        <span className="ig-live-note">
+          {assumed
+            ? 'Assumed — this file predates schedule recording, or came from a manual run. The next scheduled pull writes the real one here.'
+            : 'Read from the installed job. Retries, not repeats: at most one pull a day.'}
+        </span>
+      </dd>
     </dl>
   );
 }

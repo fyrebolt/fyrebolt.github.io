@@ -13,6 +13,35 @@
 // Plain JavaScript with no imports, like exportFormat.js: node:test exercises
 // exactly the code the browser bundle ships. Types live in schedule.d.ts.
 
+/**
+ * What `./scripts/instagram-schedule.sh install` sets up when given no time:
+ * 09:20, then hourly until midnight.
+ *
+ * Used only when history.json carries no schedule of its own — a file written
+ * before the pull learned to record one, or by a manual run. Showing the
+ * default beats showing nothing, because it's right whenever the job was
+ * installed the documented way; the panel labels it as assumed so a job
+ * installed at some other hour reads as unconfirmed rather than wrong.
+ */
+export const DEFAULT_SCHEDULE = {
+  hours: [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
+  minute: 20,
+};
+
+/**
+ * The schedule to reason with, and whether it's the real one.
+ *
+ * `assumed` is not a detail to bury: it's the difference between "this is when
+ * the job runs" and "this is when the job runs if you installed it the usual
+ * way", and the caller has to be able to say which it's showing.
+ */
+export function resolveSchedule(schedule) {
+  if (schedule && Array.isArray(schedule.hours) && schedule.hours.length > 0) {
+    return { schedule, assumed: false };
+  }
+  return { schedule: DEFAULT_SCHEDULE, assumed: true };
+}
+
 /** The wall clock in `timeZone` at a given instant. */
 export function zonedParts(date, timeZone) {
   const fmt = new Intl.DateTimeFormat('en-US', {

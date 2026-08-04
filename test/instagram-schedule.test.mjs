@@ -16,6 +16,7 @@ import {
   formatRelative,
   instantFrom,
   nextAttempt,
+  resolveSchedule,
   zonedParts,
 } from '../src/instagram/schedule.js';
 
@@ -157,6 +158,39 @@ test('nextAttempt', async (t) => {
     const got = nextAttempt(schedule, undefined, now);
     assert.equal(got.satisfied, false);
     assert.equal(got.at.toISOString(), '2026-08-04T17:20:00.000Z');
+  });
+});
+
+test('resolveSchedule', async (t) => {
+  await t.test('passes a real schedule straight through', () => {
+    const real = { hours: [9, 10], minute: 20, timeZone: LA };
+    assert.deepEqual(resolveSchedule(real), { schedule: real, assumed: false });
+  });
+
+  await t.test('stands the installer default in for a file that carries none', () => {
+    // Better than showing nothing: it's right whenever the job was installed
+    // the documented way, and the caller labels it as assumed either way.
+    const { schedule, assumed } = resolveSchedule(undefined);
+    assert.equal(assumed, true);
+    assert.equal(schedule.minute, 20);
+    assert.equal(schedule.hours[0], 9);
+    assert.equal(schedule.hours[schedule.hours.length - 1], 23);
+  });
+
+  await t.test('an empty or malformed schedule counts as none', () => {
+    assert.equal(resolveSchedule({ hours: [], minute: 20 }).assumed, true);
+    assert.equal(resolveSchedule({ minute: 20 }).assumed, true);
+  });
+
+  await t.test('a file with no schedule still reports today as done', () => {
+    // The question "has today's pull landed?" is answered by generatedAt alone,
+    // so it stays answerable even when the schedule isn't on file.
+    const now = new Date('2026-08-04T19:35:00Z'); // 12:35 LA
+    const { schedule } = resolveSchedule(undefined);
+    const got = nextAttempt({ ...schedule, timeZone: LA }, '2026-08-04T18:52:13Z', now);
+    assert.equal(got.satisfied, true);
+    assert.equal(formatDayLabel(got.at, now, LA), 'tomorrow');
+    assert.equal(formatClock(got.at, LA), '9:20 AM');
   });
 });
 
