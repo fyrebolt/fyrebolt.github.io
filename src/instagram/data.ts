@@ -61,11 +61,29 @@ export interface Profile {
   since?: string;
 }
 
+/**
+ * The schedule the daily pull is installed on, as it read it out of its own
+ * LaunchAgent. Absent when the job isn't installed — the file may equally have
+ * been written by a manual run.
+ */
+export interface PullSchedule {
+  /** Wall-clock hours the job fires at, ascending. Retries: it stops at the first success. */
+  hours: number[];
+  /** Minute past each of those hours. */
+  minute: number;
+  /** IANA zone of the Mac that runs the job — the hours above are its clock, not yours. */
+  timeZone?: string;
+  /** What put it there. Only 'launchd' today. */
+  source?: string;
+}
+
 export interface TrackerData {
   /** Handle being tracked (without the @). */
   account: string;
   /** ISO timestamp of the most recent successful check. */
   generatedAt: string;
+  /** When the next automatic pull is due, if the job is installed. */
+  schedule?: PullSchedule;
   /** True while showing seeded demo data (no real data pulled yet). */
   sample?: boolean;
   /** Follower-count history, oldest first — powers the lifetime graph. */

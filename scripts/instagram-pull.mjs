@@ -40,6 +40,7 @@ import {
   profileInfoUrl,
   profileReferer,
 } from './lib/instagram-session.mjs';
+import { readInstalledSchedule } from './lib/instagram-schedule.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '..');
@@ -603,6 +604,11 @@ async function main() {
     account: creds.account,
     generatedAt: nowIso,
     sample: false,
+    // Recorded on every write so the static page can say when the next attempt
+    // is due. Re-read each time rather than remembered: a re-install at a
+    // different hour then corrects itself, with nothing to keep in sync by hand.
+    // Undefined (job not installed) is dropped by JSON.stringify.
+    schedule: readInstalledSchedule() ?? undefined,
     // Snapshot the stored totals, not the raw read — the read fluctuates.
     snapshots: appendSnapshot(firstRealRun ? [] : prev.snapshots, {
       t: nowIso,
