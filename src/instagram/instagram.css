@@ -559,19 +559,45 @@
   color: var(--color-primary-pink);
 }
 
-/* Two-column day detail */
+/* Day detail: two columns, or three on days you also followed/unfollowed. */
 .ig-day-detail {
   position: relative;
+}
+
+/*
+ * The columns live in their own scroll container.
+ *
+ * `1fr` alone floors each track at the widest row inside it — one long display
+ * name and handle was enough to push the third column past the right edge,
+ * clipped by the iPad frame with no way to scroll to it. `minmax` sets the
+ * width from the formula instead, and `min-width: 0` on the card lets the rows
+ * inside it ellipsize rather than prop the track open again.
+ *
+ * Three at 260px need ~810px; below that the row scrolls sideways rather than
+ * squeezing the cards down to shreds.
+ */
+.ig-day-cols {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(min(260px, 100%), 1fr);
   gap: 14px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  /* Keeps the scrollbar off the cards' shadow. */
+  padding-bottom: 4px;
 }
 @media (max-width: 640px) {
-  .ig-day-detail {
-    grid-template-columns: 1fr;
+  /* On a phone, reading one list at a time beats a sideways swipe. */
+  .ig-day-cols {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    overflow-x: visible;
   }
 }
 .ig-col {
+  min-width: 0;
+  scroll-snap-align: start;
   background: var(--color-bg-surface);
   border-radius: 20px;
   box-shadow: var(--shadow-2);
@@ -988,12 +1014,8 @@
 .ig-avatar.out {
   background: linear-gradient(160deg, #64a8ff, #0a63c9);
 }
-/* A third column only appears on days you acted; keep it from squashing. */
-@media (min-width: 641px) {
-  .ig-day-detail:has(.ig-col-out) {
-    grid-template-columns: repeat(3, 1fr);
-  }
-}
+/* The third column only appears on days you acted. It needs no rule of its own:
+   .ig-day-cols sizes whatever it's given and scrolls when they don't fit. */
 
 /* ===== Profile popup ===== */
 /* The whole row is clickable; this sits behind the content so text stays selectable. */

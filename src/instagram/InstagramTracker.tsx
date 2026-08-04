@@ -297,50 +297,55 @@ function DayDetail({
 }) {
   return (
     <div className="ig-day-detail">
-      <div className="ig-col">
-        <div className="ig-col-head">
-          <span className="ig-col-title">Followed you</span>
-          <span className="ig-col-badge pos">{bucket.follows.length}</span>
-        </div>
-        {bucket.follows.length ? (
-          <ul className="ig-user-list">
-            {bucket.follows.map((e) => (
-              <UserRow key={`f-${e.username}`} event={e} onOpen={onOpen} />
-            ))}
-          </ul>
-        ) : (
-          <p className="ig-empty">No new followers this day.</p>
-        )}
-      </div>
-
-      <div className="ig-col">
-        <div className="ig-col-head">
-          <span className="ig-col-title">Unfollowed you</span>
-          <span className="ig-col-badge neg">{bucket.unfollows.length}</span>
-        </div>
-        {bucket.unfollows.length ? (
-          <ul className="ig-user-list">
-            {bucket.unfollows.map((e) => (
-              <UserRow key={`u-${e.username}`} event={e} onOpen={onOpen} />
-            ))}
-          </ul>
-        ) : (
-          <p className="ig-empty">Nobody unfollowed this day. 🎉</p>
-        )}
-      </div>
-      {bucket.outbound.length > 0 && (
-        <div className="ig-col ig-col-out">
+      {/* The columns scroll as their own row. The @handle below is positioned
+          against the section, and an overflow container would clip it. */}
+      <div className="ig-day-cols">
+        <div className="ig-col">
           <div className="ig-col-head">
-            <span className="ig-col-title">You did</span>
-            <span className="ig-col-badge out">{bucket.outbound.length}</span>
+            <span className="ig-col-title">Followed you</span>
+            <span className="ig-col-badge pos">{bucket.follows.length}</span>
           </div>
-          <ul className="ig-user-list">
-            {bucket.outbound.map((e) => (
-              <UserRow key={`o-${e.kind}-${e.username}`} event={e} onOpen={onOpen} />
-            ))}
-          </ul>
+          {bucket.follows.length ? (
+            <ul className="ig-user-list">
+              {bucket.follows.map((e) => (
+                <UserRow key={`f-${e.username}`} event={e} onOpen={onOpen} />
+              ))}
+            </ul>
+          ) : (
+            <p className="ig-empty">No new followers this day.</p>
+          )}
         </div>
-      )}
+
+        <div className="ig-col">
+          <div className="ig-col-head">
+            <span className="ig-col-title">Unfollowed you</span>
+            <span className="ig-col-badge neg">{bucket.unfollows.length}</span>
+          </div>
+          {bucket.unfollows.length ? (
+            <ul className="ig-user-list">
+              {bucket.unfollows.map((e) => (
+                <UserRow key={`u-${e.username}`} event={e} onOpen={onOpen} />
+              ))}
+            </ul>
+          ) : (
+            <p className="ig-empty">Nobody unfollowed this day. 🎉</p>
+          )}
+        </div>
+
+        {bucket.outbound.length > 0 && (
+          <div className="ig-col ig-col-out">
+            <div className="ig-col-head">
+              <span className="ig-col-title">You did</span>
+              <span className="ig-col-badge out">{bucket.outbound.length}</span>
+            </div>
+            <ul className="ig-user-list">
+              {bucket.outbound.map((e) => (
+                <UserRow key={`o-${e.kind}-${e.username}`} event={e} onOpen={onOpen} />
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
       <span className="ig-day-detail-account" aria-hidden>
         @{account}
       </span>
