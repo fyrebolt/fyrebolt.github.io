@@ -1,6 +1,6 @@
 {
   "account": "hastinchen",
-  "generatedAt": "2026-08-07T18:31:05.839Z",
+  "generatedAt": "2026-08-08T18:15:13.070Z",
   "sample": false,
   "schedule": {
     "hours": [
@@ -1883,15 +1883,65 @@
       "t": "2026-08-07T18:31:05.839Z",
       "followers": 911,
       "following": 873
+    },
+    {
+      "t": "2026-08-08T18:15:13.070Z",
+      "followers": 915,
+      "following": 877
     }
   ],
   "events": [
     {
       "username": "sunnyxanand",
-      "kind": "unfollow",
-      "t": "2026-08-07T18:31:05.839Z",
+      "kind": "follow",
+      "t": "2026-08-08T18:15:13.070Z",
       "name": "🪬",
       "dir": "out"
+    },
+    {
+      "username": "taek_kty",
+      "kind": "follow",
+      "t": "2026-08-08T18:15:13.070Z",
+      "name": "taek",
+      "dir": "out"
+    },
+    {
+      "username": "williamleung4",
+      "kind": "follow",
+      "t": "2026-08-08T18:15:13.070Z",
+      "name": "William Leung",
+      "dir": "out"
+    },
+    {
+      "username": "acaeducate",
+      "kind": "follow",
+      "t": "2026-08-08T18:15:13.070Z",
+      "name": "ACA Education x Community",
+      "dir": "out"
+    },
+    {
+      "username": "taek_kty",
+      "kind": "follow",
+      "t": "2026-08-08T18:15:13.070Z",
+      "name": "taek"
+    },
+    {
+      "username": "sunnyxanand",
+      "kind": "follow",
+      "t": "2026-08-08T18:15:13.070Z",
+      "name": "🪬"
+    },
+    {
+      "username": "acaeducate",
+      "kind": "follow",
+      "t": "2026-08-08T18:15:13.070Z",
+      "name": "ACA Education x Community"
+    },
+    {
+      "username": "williamleung4",
+      "kind": "follow",
+      "t": "2026-08-08T18:15:13.070Z",
+      "name": "William Leung"
     },
     {
       "username": "sunnyxanand",
@@ -1900,17 +1950,11 @@
       "name": "🪬"
     },
     {
-      "username": "tony_fabrizio_",
-      "kind": "follow",
-      "t": "2026-08-06T16:20:05.445Z",
-      "name": "tony",
+      "username": "sunnyxanand",
+      "kind": "unfollow",
+      "t": "2026-08-07T18:31:05.839Z",
+      "name": "🪬",
       "dir": "out"
-    },
-    {
-      "username": "tony_fabrizio_",
-      "kind": "follow",
-      "t": "2026-08-06T16:20:05.445Z",
-      "name": "tony"
     },
     {
       "username": "angela224277",
@@ -1920,9 +1964,16 @@
     },
     {
       "username": "tony_fabrizio_",
-      "kind": "unfollow",
-      "t": "2026-08-05T16:20:05.538Z",
+      "kind": "follow",
+      "t": "2026-08-06T16:20:05.445Z",
       "name": "tony"
+    },
+    {
+      "username": "tony_fabrizio_",
+      "kind": "follow",
+      "t": "2026-08-06T16:20:05.445Z",
+      "name": "tony",
+      "dir": "out"
     },
     {
       "username": "tony_fabrizio_",
@@ -1932,131 +1983,22 @@
       "dir": "out"
     },
     {
+      "username": "tony_fabrizio_",
+      "kind": "unfollow",
+      "t": "2026-08-05T16:20:05.538Z",
+      "name": "tony"
+    },
+    {
       "username": "estherjhlee",
       "kind": "unfollow",
       "t": "2026-08-04T18:52:13.923Z",
       "name": "⚡️⚡️"
     },
     {
-      "username": "rushil.arun",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Rushil Arun"
-    },
-    {
-      "username": "thewizardjoey",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "joey"
-    },
-    {
-      "username": "gryffinnlol",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Gryffinn"
-    },
-    {
-      "username": "alexthepear",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Alexander Peras"
-    },
-    {
-      "username": "loganthomas_music",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Logan Thomas"
-    },
-    {
-      "username": "sis.seren",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "sören ♡̶"
-    },
-    {
-      "username": "hrite5h",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Hritesh"
-    },
-    {
-      "username": "t1mmy_01",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Timothy"
-    },
-    {
-      "username": "aaronkpropst",
+      "username": "ownyourpage.co",
       "kind": "unfollow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Aaron Propst"
-    },
-    {
-      "username": "ashtnwebb",
-      "kind": "unfollow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "ashton"
-    },
-    {
-      "username": "edwardkim459",
-      "kind": "unfollow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Edward Kim / working job"
-    },
-    {
-      "username": "rushil.arun",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Rushil Arun",
-      "dir": "out"
-    },
-    {
-      "username": "thewizardjoey",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "joey",
-      "dir": "out"
-    },
-    {
-      "username": "loganthomas_music",
-      "kind": "follow",
       "t": "2026-08-04T05:34:19.605Z",
       "name": "Logan Thomas",
-      "dir": "out"
-    },
-    {
-      "username": "t1mmy_01",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Timothy",
-      "dir": "out"
-    },
-    {
-      "username": "sis.seren",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "sören ♡̶",
-      "dir": "out"
-    },
-    {
-      "username": "hrite5h",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Hritesh",
-      "dir": "out"
-    },
-    {
-      "username": "gryffinnlol",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Gryffinn",
-      "dir": "out"
-    },
-    {
-      "username": "alexthepear",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Alexander Peras",
       "dir": "out"
     },
     {
@@ -2067,11 +2009,132 @@
       "dir": "out"
     },
     {
-      "username": "ownyourpage.co",
-      "kind": "unfollow",
+      "username": "alexthepear",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Alexander Peras",
+      "dir": "out"
+    },
+    {
+      "username": "gryffinnlol",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Gryffinn",
+      "dir": "out"
+    },
+    {
+      "username": "hrite5h",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Hritesh",
+      "dir": "out"
+    },
+    {
+      "username": "sis.seren",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "sören ♡̶",
+      "dir": "out"
+    },
+    {
+      "username": "t1mmy_01",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Timothy",
+      "dir": "out"
+    },
+    {
+      "username": "loganthomas_music",
+      "kind": "follow",
       "t": "2026-08-04T05:34:19.605Z",
       "name": "Logan Thomas",
       "dir": "out"
+    },
+    {
+      "username": "thewizardjoey",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "joey",
+      "dir": "out"
+    },
+    {
+      "username": "rushil.arun",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Rushil Arun",
+      "dir": "out"
+    },
+    {
+      "username": "edwardkim459",
+      "kind": "unfollow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Edward Kim / working job"
+    },
+    {
+      "username": "ashtnwebb",
+      "kind": "unfollow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "ashton"
+    },
+    {
+      "username": "aaronkpropst",
+      "kind": "unfollow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Aaron Propst"
+    },
+    {
+      "username": "t1mmy_01",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Timothy"
+    },
+    {
+      "username": "hrite5h",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Hritesh"
+    },
+    {
+      "username": "sis.seren",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "sören ♡̶"
+    },
+    {
+      "username": "loganthomas_music",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Logan Thomas"
+    },
+    {
+      "username": "alexthepear",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Alexander Peras"
+    },
+    {
+      "username": "gryffinnlol",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Gryffinn"
+    },
+    {
+      "username": "thewizardjoey",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "joey"
+    },
+    {
+      "username": "rushil.arun",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Rushil Arun"
+    },
+    {
+      "username": "t1mmy_01",
+      "kind": "unfollow",
+      "t": "2026-07-31T16:20:32.049Z",
+      "name": "Timothy"
     },
     {
       "username": "t1mmy_01",
@@ -2079,12 +2142,6 @@
       "t": "2026-07-31T16:20:32.049Z",
       "name": "Timothy",
       "dir": "out"
-    },
-    {
-      "username": "t1mmy_01",
-      "kind": "unfollow",
-      "t": "2026-07-31T16:20:32.049Z",
-      "name": "Timothy"
     },
     {
       "username": "hrite5h",
@@ -2447,6 +2504,11 @@
       "name": "ACA Alumni",
       "private": true,
       "since": "2026-05-31T22:35:34.000Z"
+    },
+    {
+      "username": "acaeducate",
+      "name": "ACA Education x Community",
+      "since": "2026-08-08T18:15:13.070Z"
     },
     {
       "username": "addiemcmichael",
@@ -5344,6 +5406,7 @@
     {
       "username": "maxv.veen",
       "name": "Max van Veen",
+      "private": true,
       "since": "2024-09-18T03:17:40.000Z"
     },
     {
@@ -6561,6 +6624,11 @@
       "since": "2026-02-26T18:10:40.000Z"
     },
     {
+      "username": "sunnyxanand",
+      "name": "🪬",
+      "since": "2026-08-08T18:15:13.070Z"
+    },
+    {
       "username": "sushaant_harish",
       "name": "Sushaant",
       "private": true,
@@ -6593,6 +6661,12 @@
       "name": "Timothy",
       "private": true,
       "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
+      "username": "taek_kty",
+      "name": "taek",
+      "private": true,
+      "since": "2026-08-08T18:15:13.070Z"
     },
     {
       "username": "taino.mm",
@@ -6986,6 +7060,12 @@
       "name": "奕",
       "private": true,
       "since": "2024-01-09T05:10:37.000Z"
+    },
+    {
+      "username": "williamleung4",
+      "name": "William Leung",
+      "private": true,
+      "since": "2026-08-08T18:15:13.070Z"
     },
     {
       "username": "williamliu._",
@@ -7484,6 +7564,11 @@
       "name": "ACA Alumni",
       "private": true,
       "since": "2026-05-31T22:57:07.000Z"
+    },
+    {
+      "username": "acaeducate",
+      "name": "ACA Education x Community",
+      "since": "2026-08-08T18:15:13.070Z"
     },
     {
       "username": "acm.ai.ucla",
@@ -10225,6 +10310,7 @@
     {
       "username": "maxv.veen",
       "name": "Max van Veen",
+      "private": true,
       "since": "2024-09-18T04:21:05.000Z"
     },
     {
@@ -11384,6 +11470,11 @@
       "since": "2026-05-25T01:01:11.000Z"
     },
     {
+      "username": "sunnyxanand",
+      "name": "🪬",
+      "since": "2026-08-08T18:15:13.070Z"
+    },
+    {
       "username": "sushaant_harish",
       "name": "Sushaant",
       "private": true,
@@ -11416,6 +11507,12 @@
       "name": "Timothy",
       "private": true,
       "since": "2026-08-04T05:34:19.605Z"
+    },
+    {
+      "username": "taek_kty",
+      "name": "taek",
+      "private": true,
+      "since": "2026-08-08T18:15:13.070Z"
     },
     {
       "username": "taino.mm",
@@ -11847,6 +11944,12 @@
       "name": "奕",
       "private": true,
       "since": "2024-01-09T05:41:01.000Z"
+    },
+    {
+      "username": "williamleung4",
+      "name": "William Leung",
+      "private": true,
+      "since": "2026-08-08T18:15:13.070Z"
     },
     {
       "username": "williamliu._",
