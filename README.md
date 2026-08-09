@@ -216,6 +216,17 @@ same day rather than waiting for tomorrow.
 Failure notifications are de-duplicated to one per day per kind, so a dead cookie
 alerts you once instead of fifteen times.
 
+**Publishing is guarded, because a pull that can't publish looks fine.** The job
+runs against the same working copy you develop in, so `--commit` checks two things
+before it trusts `git`. If the repo is on a feature branch or a detached HEAD it
+writes `history.json` and stops there — committing would park the data somewhere
+that never deploys and leave it to be picked back out of your feature history —
+telling you how to publish it by hand. And if the push is rejected because
+`origin` moved on, it rebases (`--autostash`, since the working copy is yours) and
+pushes once more, rather than leaving the commit stranded locally. Both cases
+notify and exit 1, so "the pull worked but the site is behind" never passes for
+success.
+
 **When is the next one?** Click the green **Live data** badge on the tracker page.
 It opens the collection details: when this reading was taken, how, the totals it
 holds, the retry window the job is installed on, and the next attempt —
