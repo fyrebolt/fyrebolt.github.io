@@ -676,6 +676,39 @@ export function checkCompleteness(followers, following, profile, prev) {
   return null;
 }
 
+/** The branch GitHub Pages deploys from. Publishing means landing a commit here. */
+const PUBLISH_BRANCH = 'main';
+
+/**
+ * Should this run commit, given the branch the repo is sitting on?
+ *
+ * The job runs unattended against a working copy you also develop in, so it can
+ * find itself on a feature branch — and committing there is worse than not
+ * committing at all: the data lands somewhere that never deploys, `git push`
+ * fails on a branch with no upstream, and the commit has to be picked out of
+ * someone's feature history afterwards.
+ */
+export function publishDecision(branch, publishBranch = PUBLISH_BRANCH) {
+  if (!branch || branch === 'HEAD') {
+    return { publish: false, where: 'a detached HEAD' };
+  }
+  if (branch !== publishBranch) {
+    return { publish: false, where: `branch ${branch}` };
+  }
+  return { publish: true, where: branch };
+}
+
+/**
+ * Is this the push that failed because origin moved on?
+ *
+ * Worth distinguishing: a rejected push is fixed by rebasing and trying again,
+ * while a credential or network failure is not, and retrying one as if it were
+ * the other just fails twice as slowly.
+ */
+export function isPushRejection(message) {
+  return /non-fast-forward|fetch first|rejected|behind its remote/i.test(String(message ?? ''));
+}
+
 function commitAndPush(gainedCount, lostCount) {
   const git = (...a) => execFileSync('git', a, { cwd: REPO, encoding: 'utf8' }).trim();
   try {
@@ -683,12 +716,47 @@ function commitAndPush(gainedCount, lostCount) {
       log('no change to commit');
       return;
     }
+
+    const branch = git('rev-parse', '--abbrev-ref', 'HEAD');
+    const decision = publishDecision(branch);
+    if (!decision.publish) {
+      // The data is written and safe; it just isn't published. Left uncommitted
+      // on purpose so it's yours to place, rather than parked on your feature work.
+      log(`on ${decision.where}, not ${PUBLISH_BRANCH} — history.json written but not committed`);
+      console.error(
+        `\n⚠ history.json was written but not published: the repo is on ${decision.where}.\n\n` +
+          `  Publish it with:\n\n` +
+          `      git stash && git checkout ${PUBLISH_BRANCH} && git stash pop\n` +
+          `      git commit -m "Instagram tracker" -- public/instagram/history.json && git push\n`,
+      );
+      notifyOncePerDay(
+        'branch',
+        'Instagram Tracker',
+        'Data saved, but not published',
+        `The repo is on ${decision.where}, not ${PUBLISH_BRANCH}. The live site is behind.`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+
     // Commit via an explicit pathspec rather than `add` + `commit`: this job runs
     // unattended, and the repo may well have unrelated staged work in the index
     // that must not get swept into an automated commit.
     git('commit', '-m', `Instagram tracker: +${gainedCount} / −${lostCount}`, '--',
       'public/instagram/history.json');
-    git('push');
+
+    try {
+      git('push');
+    } catch (e) {
+      if (!isPushRejection(e.message)) throw e;
+      // origin moved on while this clone sat behind — the single most common way
+      // this job goes quiet, because the pull keeps succeeding and only the
+      // publish fails. Rebase onto it and try once more. --autostash because the
+      // working copy is also yours, and unrelated edits must not block the retry.
+      log('push rejected (origin has moved on); rebasing and retrying once');
+      git('pull', '--rebase', '--autostash', 'origin', PUBLISH_BRANCH);
+      git('push');
+    }
     log('committed and pushed');
   } catch (e) {
     // A failed push shouldn't look like a failed pull — the data is already saved.

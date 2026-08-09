@@ -15,6 +15,8 @@ import {
   expectedRelationship,
   stableList,
   verifyCandidates,
+  publishDecision,
+  isPushRejection,
 } from '../scripts/instagram-pull.mjs';
 
 const P = (username, extra = {}) => ({ username, ...extra });
@@ -443,5 +445,54 @@ test('verifyCandidates — one bad handle must not sink the run', async (t) => {
       () => verifyCandidates([{ username: 'alice', kind: 'follow', t: NOW }], CREDS, noPause),
       /HTML instead of JSON/,
     );
+  });
+});
+
+test('publishDecision', async (t) => {
+  await t.test('publishes from main', () => {
+    assert.deepEqual(publishDecision('main'), { publish: true, where: 'main' });
+  });
+
+  await t.test('refuses to commit onto a feature branch', () => {
+    // Committing there is worse than not committing: the data lands somewhere
+    // that never deploys, the push fails for want of an upstream, and the commit
+    // has to be picked back out of someone's feature history.
+    const d = publishDecision('art-calligraphy');
+    assert.equal(d.publish, false);
+    assert.match(d.where, /art-calligraphy/);
+  });
+
+  await t.test('refuses on a detached HEAD, and says so in words', () => {
+    // `git rev-parse --abbrev-ref HEAD` answers the literal string "HEAD" when
+    // detached, which would otherwise read as a branch named HEAD.
+    const d = publishDecision('HEAD');
+    assert.equal(d.publish, false);
+    assert.equal(d.where, 'a detached HEAD');
+    assert.equal(publishDecision('').publish, false);
+  });
+
+  await t.test('honours a different publish branch', () => {
+    assert.equal(publishDecision('trunk', 'trunk').publish, true);
+    assert.equal(publishDecision('main', 'trunk').publish, false);
+  });
+});
+
+test('isPushRejection', async (t) => {
+  await t.test('recognises a clone that has fallen behind origin', () => {
+    // The single most common way this job goes quiet: the pull keeps working and
+    // only the publish fails, so nothing looks broken until the site is days old.
+    assert.equal(
+      isPushRejection('! [rejected] main -> main (non-fast-forward)\nfetch first'),
+      true,
+    );
+    assert.equal(isPushRejection('Updates were rejected because the remote contains work'), true);
+  });
+
+  await t.test('does not retry what a retry cannot fix', () => {
+    // Rebasing and pushing again after an auth failure just fails twice.
+    assert.equal(isPushRejection('fatal: Authentication failed for https://github.com/'), false);
+    assert.equal(isPushRejection('fatal: unable to access ... Could not resolve host'), false);
+    assert.equal(isPushRejection('fatal: The current branch x has no upstream branch'), false);
+    assert.equal(isPushRejection(undefined), false);
   });
 });
