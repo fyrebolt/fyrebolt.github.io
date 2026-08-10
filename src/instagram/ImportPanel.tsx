@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { timeAgo, type TrackerData } from './data';
 import {
   describeWindow,
@@ -9,16 +9,7 @@ import {
   resolveSchedule,
   zoneAbbrev,
 } from './schedule';
-import {
-  probeAgent,
-  startPull,
-  fetchStatus,
-  fetchHistory,
-  loadToken,
-  saveToken,
-  clearToken,
-  type AgentStatus,
-} from './agent';
+import AgentControls from './AgentControls';
 
 /** Progress of an in-browser import of a data-export ZIP. */
 export interface ImportState {
@@ -95,7 +86,7 @@ export default function ImportPanel({
           </div>
           {showDetails && <CollectionDetails data={data!} />}
           <div className="ig-import-actions">
-            <UpdateNow onPulled={onPulled} />
+            <AgentControls onPulled={onPulled} />
             <button className="ios-btn" onClick={pick} disabled={state.busy}>
               {state.busy ? 'Importing…' : 'Backfill from export'}
             </button>
@@ -215,176 +206,4 @@ function CollectionDetails({ data }: { data: TrackerData }) {
       </dd>
     </dl>
   );
-}
-
-/**
- * "Update now" — triggers a pull via the local agent (scripts/instagram-agent.mjs).
- *
- * Renders nothing at all unless the agent answers on loopback, so on any other
- * device, or in anyone else's browser, the button simply doesn't exist rather
- * than sitting there dead.
- */
-function UpdateNow({ onPulled }: { onPulled: (fresh: TrackerData) => void }) {
-  const [available, setAvailable] = useState<boolean | null>(null);
-  const [token, setToken] = useState<string | null>(() => loadToken());
-  const [asking, setAsking] = useState(false);
-  const [entry, setEntry] = useState('');
-  const [run, setRun] = useState<AgentStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-
-  useEffect(() => {
-    probeAgent().then(setAvailable);
-  }, []);
-
-  const begin = useCallback(
-    async (withToken: string) => {
-      setBusy(true);
-      setNote(null);
-      const res = await startPull(withToken);
-      if (res.kind === 'badToken') {
-        clearToken();
-        setToken(null);
-        setAsking(true);
-        setNote('That passphrase was rejected.');
-        setBusy(false);
-        return;
-      }
-      if (res.kind !== 'started') {
-        setNote(res.message);
-        setBusy(false);
-        return;
-      }
-      saveToken(withToken);
-      setToken(withToken);
-      setAsking(false);
-      setRun({
-        running: true,
-        phase: 'starting',
-        startedAt: new Date().toISOString(),
-        finishedAt: null,
-        followers: null,
-        following: null,
-        ok: null,
-        summary: null,
-        error: null,
-      });
-    },
-    [],
-  );
-
-  // Poll while a run is in flight. A full pull takes a few minutes.
-  useEffect(() => {
-    if (!run?.running || !token) return;
-    let stop = false;
-    const tick = async () => {
-      const status = await fetchStatus(token);
-      if (stop) return;
-      if (!status) {
-        setRun(null);
-        setBusy(false);
-        setNote('Lost contact with the agent.');
-        return;
-      }
-      setRun(status);
-      if (!status.running) setBusy(false);
-    };
-    const id = setInterval(tick, 1500);
-    return () => {
-      stop = true;
-      clearInterval(id);
-    };
-  }, [run?.running, token]);
-
-  /**
-   * Load the freshly written file once a run succeeds.
-   *
-   * Deliberately separate from the polling effect: marking the run finished
-   * re-renders, which tears that effect down, and an in-flight fetch there would
-   * be cancelled by its own cleanup — dropping the update it was fetching.
-   */
-  const deliveredRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!token || !run || run.running || !run.ok || !run.finishedAt) return;
-    if (deliveredRef.current === run.finishedAt) return; // one delivery per run
-    deliveredRef.current = run.finishedAt;
-    fetchHistory(token).then((fresh) => {
-      if (fresh) onPulled(fresh as TrackerData);
-    });
-  }, [run, token, onPulled]);
-
-  if (available !== true) return null;
-
-  if (run?.running) {
-    const counts = [
-      run.followers != null ? `${run.followers} followers` : null,
-      run.following != null ? `${run.following} following` : null,
-    ]
-      .filter(Boolean)
-      .join(' · ');
-    return (
-      <span className="ig-agent ig-agent-running" role="status">
-        <Spinner /> {run.phase}
-        {counts ? ` — ${counts}` : ''}
-      </span>
-    );
-  }
-
-  if (asking) {
-    return (
-      <form
-        className="ig-agent-unlock"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (entry.trim()) begin(entry.trim());
-        }}
-      >
-        <input
-          className="ios-input ig-agent-input"
-          type="password"
-          value={entry}
-          autoFocus
-          onChange={(e) => setEntry(e.target.value)}
-          placeholder="Agent passphrase"
-          aria-label="Agent passphrase"
-        />
-        <button className="ios-btn ios-btn-primary" type="submit" disabled={!entry.trim() || busy}>
-          Unlock
-        </button>
-        <button
-          className="ios-btn ig-btn-quiet"
-          type="button"
-          onClick={() => {
-            setAsking(false);
-            setNote(null);
-          }}
-        >
-          Cancel
-        </button>
-        {note && <span className="ig-agent-note err">{note}</span>}
-      </form>
-    );
-  }
-
-  return (
-    <>
-      <button
-        className="ios-btn ios-btn-primary ig-agent-btn"
-        disabled={busy}
-        onClick={() => (token ? begin(token) : setAsking(true))}
-      >
-        ⟳ {busy ? 'Starting…' : 'Update now'}
-      </button>
-      {run && !run.running && (
-        <span className={`ig-agent-note ${run.ok ? 'ok' : 'err'}`} role="status">
-          {run.ok ? run.summary ?? 'Updated.' : run.error ?? 'Update failed.'}
-        </span>
-      )}
-      {note && <span className="ig-agent-note err">{note}</span>}
-    </>
-  );
-}
-
-function Spinner() {
-  return <span className="ig-spinner" aria-hidden />;
 }
