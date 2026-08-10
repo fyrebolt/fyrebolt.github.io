@@ -282,6 +282,19 @@ waiting out the GitHub Pages redeploy.
 
 `agent-status`, `agent-logs` and `agent-uninstall` do what they say.
 
+#### Scheduling one pull at a time you pick
+
+Next to it, **Schedule…** arms a single extra run for a time you choose — for
+catching the surge right after a post goes up, without touching the daily job.
+Only one is armed at a time, it shows up as a "Pull scheduled for …" line you can
+cancel, and the agent writes it to `scripts/.instagram-oneshot.json` so a reboot
+or a restart doesn't quietly lose it.
+
+The agent checks every 20 seconds rather than sleeping on a timer, because a
+timer set across a lid-close doesn't fire on time. That means a slot the Mac
+slept through fires as soon as it wakes — unless it's more than six hours late,
+which is dropped instead: a pull at 4am is not what "schedule it for 9pm" meant.
+
 **How it's kept safe.** CORS does not stop a request from arriving — it only
 stops the *page* reading the response — so any site you visit could fire a
 request at that port. Four things make that harmless:

@@ -197,11 +197,52 @@
     animation-duration: 2.4s;
   }
 }
-.ig-agent-unlock {
+/* The unlock, picker and armed rows share the actions container with the
+   buttons, and each wants a line of its own — hence the full-width basis. */
+.ig-agent-unlock,
+.ig-agent-schedule,
+.ig-agent-armed {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  flex: 1 0 100%;
+}
+.ig-agent-schedule,
+.ig-agent-armed {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--color-fill-secondary);
+}
+.ig-agent-schedule-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.ig-agent-when {
+  width: auto;
+  font-size: 13px;
+  padding: 7px 10px;
+  font-variant-numeric: tabular-nums;
+}
+.ig-agent-schedule-hint,
+.ig-agent-armed {
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+.ig-agent-armed strong {
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.ig-agent-armed-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+.ig-agent-armed .ios-btn {
+  margin-left: auto;
 }
 .ig-agent-input {
   width: 190px;

@@ -168,3 +168,72 @@ export async function fetchAvatar(token: string, src: string): Promise<string | 
 export async function fetchStatus(token: string): Promise<AgentStatus | null> {
   return read<AgentStatus>('/status', token, 5000);
 }
+
+/**
+ * Does the agent accept this passphrase?
+ *
+ * "Update now" answers that as a side effect of starting a pull, but scheduling
+ * shouldn't have to run one to find out its token is wrong — so this asks a
+ * read endpoint and looks specifically at the 401.
+ */
+export async function verifyToken(token: string): Promise<boolean> {
+  try {
+    const res = await withTimeout('/status', { headers: { 'x-tracker-token': token } }, 5000);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** A one-off pull the agent has been asked to run at a set time. */
+export interface ScheduledPull {
+  at: string;
+  createdAt: string;
+}
+
+/** The armed one-off pull, or null when there isn't one (or no agent). */
+export async function fetchSchedule(token: string): Promise<ScheduledPull | null> {
+  const body = await read<{ scheduled: ScheduledPull | null }>('/schedule', token, 5000);
+  return body?.scheduled ?? null;
+}
+
+export type ScheduleResult =
+  | { kind: 'ok'; scheduled: ScheduledPull | null }
+  | { kind: 'badToken' }
+  | { kind: 'error'; message: string };
+
+/**
+ * Arm a one-off pull for `at`, or cancel the armed one by passing null.
+ *
+ * `at` is an instant, not a wall-clock string: the agent only ever runs on the
+ * machine serving loopback, but sending an ISO timestamp means the two ends
+ * can't disagree about which 9pm was meant.
+ */
+export async function setSchedule(token: string, at: Date | null): Promise<ScheduleResult> {
+  try {
+    const res = await withTimeout(
+      '/schedule',
+      {
+        method: 'POST',
+        headers: { 'x-tracker-token': token, 'content-type': 'application/json' },
+        body: JSON.stringify({ at: at ? at.toISOString() : null }),
+      },
+      8000,
+    );
+    if (res.status === 401) return { kind: 'badToken' };
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      scheduled?: ScheduledPull | null;
+    };
+    if (!res.ok) return { kind: 'error', message: body.error ?? `agent returned ${res.status}` };
+    return { kind: 'ok', scheduled: body.scheduled ?? null };
+  } catch (e) {
+    return {
+      kind: 'error',
+      message:
+        e instanceof Error && e.name === 'AbortError'
+          ? 'the agent timed out'
+          : 'could not reach the agent',
+    };
+  }
+}

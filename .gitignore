@@ -31,6 +31,9 @@ scripts/.instagram-secrets.json
 # Instagram tracker run-state (notification de-duplication)
 scripts/.instagram-state.json
 
+# The one-off pull armed from the app's "Schedule…" button — local to this Mac
+scripts/.instagram-oneshot.json
+
 # LinkedIn tracker session cookie — never commit this
 scripts/.linkedin-secrets.json
 
