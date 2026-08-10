@@ -282,6 +282,35 @@ waiting out the GitHub Pages redeploy.
 
 `agent-status`, `agent-logs` and `agent-uninstall` do what they say.
 
+#### Stopping a run part-way
+
+While a pull is in flight the button becomes **Stop**, which asks first and then
+ends the run: `SIGTERM` to the pull's whole process group, and `SIGKILL` to
+anything still standing five seconds later. The group matters — the pull spawns
+`git`, and a "cancel" that leaves a `push` running underneath it isn't one.
+
+Nothing has to be rolled back, which is why this is safe to offer at all: the
+pull writes `history.json` in one step at the very end and commits after that, so
+a run stopped part-way has touched nothing. The only cost is the work it threw
+away, plus the usual two-minute cooldown before the next run may start. Stopping
+the agent itself (`agent-uninstall`, or Ctrl-C) takes a running pull down with
+it, rather than orphaning it.
+
+#### What the tracker last *tried*
+
+`history.json` records the last pull that **worked**, which is the wrong file to
+ask whether the thing is still running: an expired cookie writes nothing, so a
+tracker that has been failing all week looks exactly like one that isn't due yet.
+
+So every attempt leaves a note in `scripts/.instagram-attempt.json` — when it
+ran, who set it off (the daily job, a scheduled one-off, or by hand), how it
+ended and, if it failed, the reason and what to do about it. The **Live data**
+panel shows it as a "Last attempt" line under "Collected".
+
+Like the buttons, that line comes from the local agent and appears nowhere else —
+which is the only place it could come from. A failed pull produces no commit, so
+the published site has no way to hear about it.
+
 #### Scheduling one pull at a time you pick
 
 Next to it, **Schedule…** arms a single extra run for a time you choose — for
@@ -527,7 +556,7 @@ There's no build step; run each from the repo root.
 | Tool | What it does |
 | --- | --- |
 | `instagram-pull.mjs` | **The Instagram daily job.** Resolves your user id, pages your follower and following lists through Instagram's private endpoints, diffs them against the previous run, and writes `public/instagram/history.json`. Refuses to write a read that looks partial, so a throttled fetch can't masquerade as a mass unfollow. |
-| `instagram-agent.mjs` | **The server behind "Update now."** A tiny token-authenticated HTTP listener bound to `127.0.0.1:4599` that runs exactly one fixed action — a pull — so the static page can trigger one. Installed as a login item rather than run by hand. |
+| `instagram-agent.mjs` | **The server behind "Update now."** A tiny token-authenticated HTTP listener bound to `127.0.0.1:4599` that runs exactly one fixed action — a pull — so the static page can trigger one, stop one, and ask how the last attempt went. Installed as a login item rather than run by hand. |
 | `instagram-backfill.mjs` | **Real follow dates, once.** Folds the timestamps from the official Instagram export into the committed `history.json`, so every visitor sees them instead of each browser importing its own copy. Takes the export directory or loose JSON files, plus `--dry-run`. |
 | `instagram-schedule.sh` | **launchd installer** for the two above. `install [HH:MM]`, `uninstall`, `status`, `run`, `logs` drive the daily job; `agent-install`, `agent-uninstall`, `agent-status`, `agent-logs` drive the agent. `status` answers the question you actually have: has today's pull happened yet? |
 | `linkedin-setup.mjs` | **Interactive credential setup.** Prompts for two values and writes `scripts/.linkedin-secrets.json` at mode 0600. Use it instead of hand-editing: LinkedIn shows `JSESSIONID` wrapped in double quotes, and pasting that verbatim produces JSON that won't parse. |
@@ -535,6 +564,7 @@ There's no build step; run each from the repo root.
 | `linkedin-schedule.sh` | **launchd installer** for the LinkedIn job — same `install`/`uninstall`/`status`/`run`/`logs` subcommands, no agent. Defaults to 09:40 so the two scrapers never start in the same minute. |
 | `gen_sample_instagram.mjs`<br>`gen_sample_linkedin.mjs` | **Sample data.** Regenerate the committed `history.json` each tracker ships with, so both apps are fully demoable with no session connected. Deterministic — the same run gives the same data. |
 | `lib/instagram-session.mjs` | Not a command. The cookie assembly and request headers that the pull and the agent both have to agree on, kept in one place so they can't drift apart. |
+| `lib/instagram-attempt.mjs` | Not a command. The note every run leaves behind — when, who asked, how it ended, why it failed — written by the pull and served to the page by the agent. Somewhere for the failures to go, since those write no `history.json`. |
 
 Both pull jobs take the same flags:
 
