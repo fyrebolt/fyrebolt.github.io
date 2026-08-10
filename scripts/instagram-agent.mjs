@@ -11,6 +11,8 @@
 //   GET  /status   → progress of the current/last run          (token required)
 //   GET  /history  → the freshly written history.json          (token required)
 //   POST /pull     → start a pull, returns immediately         (token required)
+//   GET  /schedule → the one-off pull that's armed, if any     (token required)
+//   POST /schedule → arm one for a given time, or cancel it    (token required)
 //
 // ── Why it's shaped this way ────────────────────────────────────────────────
 // CORS does NOT stop a request from arriving; it only stops the *page* reading
@@ -31,7 +33,7 @@
 
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual, randomBytes } from 'node:crypto';
@@ -42,16 +44,21 @@ import {
   profileInfoUrl,
   profileReferer,
 } from './lib/instagram-session.mjs';
+import { isDue, isStale, normalize, parseRequested } from './lib/instagram-oneshot.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '..');
 const SECRETS = resolve(__dirname, '.instagram-secrets.json');
 const PULL = resolve(__dirname, 'instagram-pull.mjs');
 const HISTORY = resolve(REPO, 'public/instagram/history.json');
+/** The armed one-off pull. On disk, so a restart or a reboot doesn't lose it. */
+const ONESHOT = resolve(__dirname, '.instagram-oneshot.json');
 
 const DEFAULT_PORT = 4599;
 /** Minimum gap between run *starts*, ms. Instagram rate-limits; be polite. */
 const COOLDOWN_MS = 120_000;
+/** How often the armed one-off is checked. Polling, not a timer — see below. */
+const TICK_MS = 20_000;
 
 const ALLOWED_ORIGINS = ['https://fyrebolt.github.io'];
 /** Any localhost port, so `npm run dev` works too. */
@@ -171,6 +178,29 @@ function corsHeaders(origin) {
   };
 }
 
+/** The request body as JSON, capped so a bad client can't fill memory. */
+function readJson(req, limit = 4096) {
+  return new Promise((resolveBody, rejectBody) => {
+    let raw = '';
+    req.on('data', (chunk) => {
+      raw += chunk;
+      if (raw.length > limit) {
+        rejectBody(new Error('body too large'));
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (!raw.trim()) return resolveBody({});
+      try {
+        resolveBody(JSON.parse(raw));
+      } catch {
+        rejectBody(new Error('body is not JSON'));
+      }
+    });
+    req.on('error', rejectBody);
+  });
+}
+
 function send(res, status, body, origin) {
   const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
   // Only ever hand CORS approval to an allowed origin.
@@ -237,6 +267,66 @@ function startPull() {
     state.error = `could not start the pull: ${e.message}`;
   });
 }
+
+// ===== The one-off pull =====
+//
+// At most one is armed at a time: the button that sets it is "run it at this
+// time", not "add another to the pile", and a queue would need a UI to inspect.
+// Re-arming simply replaces whatever was there.
+
+/** null when nothing is armed. Mirrors the file, which is the durable copy. */
+let oneshot = readOneshot();
+
+function readOneshot() {
+  try {
+    return normalize(JSON.parse(readFileSync(ONESHOT, 'utf8')));
+  } catch {
+    return null; // no file, or a file that isn't a usable entry
+  }
+}
+
+function writeOneshot(entry) {
+  oneshot = entry;
+  try {
+    if (entry) writeFileSync(ONESHOT, JSON.stringify(entry, null, 2) + '\n');
+    else if (existsSync(ONESHOT)) unlinkSync(ONESHOT);
+  } catch (e) {
+    // The in-memory copy still holds, so the run itself is safe; only surviving
+    // a restart is lost. Worth a line in the log, not worth failing the request.
+    log(`could not persist the scheduled pull: ${e.message}`);
+  }
+}
+
+/**
+ * Fire the armed one-off when its moment comes.
+ *
+ * A repeating check rather than one long setTimeout on purpose: a timer that
+ * spans a lid-close doesn't fire on time (and above ~24 days doesn't fire at
+ * all), whereas a poll simply notices the moment has passed as soon as the Mac
+ * is awake again. `isStale` is what keeps "as soon as it's awake" from meaning
+ * a pull at 4am for a slot missed the previous evening.
+ */
+function tickOneshot() {
+  if (!oneshot) return;
+  const now = new Date();
+  if (isStale(oneshot, now)) {
+    log(`dropped the scheduled pull for ${oneshot.at} — missed by more than the grace window`);
+    writeOneshot(null);
+    return;
+  }
+  if (!isDue(oneshot, now)) return;
+  // Still inside the window but the machine is busy: leave it armed and take the
+  // next tick. Only a run that's now stale gives up.
+  if (state.running) return;
+  if (Date.now() - state.lastStart < COOLDOWN_MS) return;
+
+  log(`starting the pull scheduled for ${oneshot.at}`);
+  writeOneshot(null);
+  startPull();
+}
+
+setInterval(tickOneshot, TICK_MS).unref();
+tickOneshot(); // a slot that passed while the agent was down still counts
 
 // ===== Server =====
 
@@ -341,10 +431,42 @@ const server = createServer((req, res) => {
     return send(res, 202, { started: true }, origin);
   }
 
+  if (req.method === 'GET' && path === '/schedule') {
+    if (!authed) return send(res, 401, { error: 'bad token' }, origin);
+    return send(res, 200, { scheduled: oneshot }, origin);
+  }
+
+  // Arm a one-off pull, or cancel the armed one with { at: null }. Same origin
+  // check as /pull: this schedules a real run, it just does it later.
+  if (req.method === 'POST' && path === '/schedule') {
+    if (!originAllowed(origin)) return send(res, 403, { error: 'origin not allowed' }, origin);
+    if (!authed) {
+      log('rejected /schedule: bad token');
+      return send(res, 401, { error: 'bad token' }, origin);
+    }
+    readJson(req)
+      .then((body) => {
+        if (body.at === null) {
+          if (oneshot) log(`cancelled the pull scheduled for ${oneshot.at}`);
+          writeOneshot(null);
+          return send(res, 200, { scheduled: null }, origin);
+        }
+        const parsed = parseRequested(body.at);
+        if (parsed.error) return send(res, 400, { error: parsed.error }, origin);
+        const entry = { at: parsed.at.toISOString(), createdAt: new Date().toISOString() };
+        writeOneshot(entry);
+        log(`scheduled a pull for ${entry.at}`);
+        send(res, 200, { scheduled: entry }, origin);
+      })
+      .catch((e) => send(res, 400, { error: e.message }, origin));
+    return;
+  }
+
   send(res, 404, { error: 'not found' }, origin);
 });
 
 server.listen(config.port, '127.0.0.1', () => {
   log(`agent listening on http://127.0.0.1:${config.port} (loopback only)`);
   log(`allowed origins: ${ALLOWED_ORIGINS.join(', ')} + any localhost port`);
+  if (oneshot) log(`one-off pull armed for ${oneshot.at}`);
 });
