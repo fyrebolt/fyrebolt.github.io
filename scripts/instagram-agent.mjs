@@ -9,8 +9,10 @@
 //   GET  /health   → { ok: true }              no token, no side effects
 //   GET  /profile  → live profile overview for one handle       (token required)
 //   GET  /status   → progress of the current/last run          (token required)
+//   GET  /attempt  → how the last attempt ended, and why       (token required)
 //   GET  /history  → the freshly written history.json          (token required)
 //   POST /pull     → start a pull, returns immediately         (token required)
+//   POST /cancel   → stop the running pull                     (token required)
 //   GET  /schedule → the one-off pull that's armed, if any     (token required)
 //   POST /schedule → arm one for a given time, or cancel it    (token required)
 //
@@ -45,12 +47,15 @@ import {
   profileReferer,
 } from './lib/instagram-session.mjs';
 import { isDue, isStale, normalize, parseRequested } from './lib/instagram-oneshot.mjs';
+import { attemptPath, readAttempt, writeAttempt } from './lib/instagram-attempt.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '..');
 const SECRETS = resolve(__dirname, '.instagram-secrets.json');
 const PULL = resolve(__dirname, 'instagram-pull.mjs');
 const HISTORY = resolve(REPO, 'public/instagram/history.json');
+/** How the last attempt ended — written by the pull, or here when one is cancelled. */
+const ATTEMPT = attemptPath(__dirname);
 /** The armed one-off pull. On disk, so a restart or a reboot doesn't lose it. */
 const ONESHOT = resolve(__dirname, '.instagram-oneshot.json');
 
@@ -146,8 +151,19 @@ const state = {
   ok: null,
   summary: null,
   error: null,
+  /** Did someone stop this run on purpose? A cancelled run isn't a broken one. */
+  cancelled: false,
   lastStart: 0,
 };
+
+/** The pull in flight, so it can be stopped. Null whenever nothing is running. */
+let child = null;
+/** What that run was started as: 'manual' (the button) or 'scheduled' (a one-off). */
+let trigger = null;
+/** Why it was stopped, in the words the record will carry. */
+let cancelReason = null;
+/** How long a stopped pull gets to exit on its own before it's killed outright. */
+const KILL_GRACE_MS = 5000;
 
 // ===== Auth =====
 
@@ -211,7 +227,7 @@ function send(res, status, body, origin) {
 
 // ===== The pull =====
 
-function startPull() {
+function startPull(kind) {
   state.running = true;
   state.startedAt = new Date().toISOString();
   state.finishedAt = null;
@@ -222,17 +238,30 @@ function startPull() {
   state.ok = null;
   state.summary = null;
   state.error = null;
+  state.cancelled = false;
+  trigger = kind;
 
-  // Fixed argv — nothing from the request reaches the child.
-  const child = spawn(process.execPath, [PULL, '--commit'], {
+  // Fixed argv — nothing from the request reaches the child except which of the
+  // two buttons pressed it, which is checked against a fixed list before it gets
+  // here and only ever ends up in a log line.
+  //
+  // detached so the pull becomes its own process group leader: it spawns git,
+  // which spawns more, and "stop it" has to mean the whole tree rather than the
+  // node process with a push still running underneath it.
+  child = spawn(process.execPath, [PULL, '--commit', `--trigger=${kind}`], {
     cwd: REPO,
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
   });
 
   let tail = '';
   const absorb = (chunk) => {
     const text = String(chunk);
     tail = (tail + text).slice(-4000);
+    // Once it's been told to stop, its progress is no longer the story: a pull
+    // still printing pages while it winds down would keep overwriting
+    // "stopping", and the page would show no sign the button did anything.
+    if (state.cancelled) return;
     // The pull writes "\r  followers: N (page X)" as it goes.
     const m = [...text.matchAll(/(followers|following):\s*(\d+)/g)].pop();
     if (m) {
@@ -245,27 +274,97 @@ function startPull() {
   child.stdout.on('data', absorb);
   child.stderr.on('data', absorb);
 
-  child.on('close', (code) => {
+  child.on('close', (code, signal) => {
+    const startedAt = state.startedAt;
+    child = null;
     state.running = false;
     state.finishedAt = new Date().toISOString();
     state.ok = code === 0;
-    state.phase = code === 0 ? 'done' : 'failed';
     const summary = tail.match(/followers \d+ · following \d+[^\n]*/);
     state.summary = summary ? summary[0] : null;
-    if (code !== 0) {
-      // Surface the script's own "✗ …" line; it's already written for humans.
-      const reason = tail.match(/✗ ([^\n]+)/);
-      state.error = reason ? reason[1] : `pull exited ${code}`;
+
+    if (state.cancelled) {
+      // A run stopped on purpose is not a failure, and it can't file its own
+      // report — it was killed. The record is written here instead, once the
+      // process is actually gone, and only when it really did die by signal:
+      // a run that finished in the instant between the request and the kill
+      // has already written a truthful record of its own.
+      state.phase = 'cancelled';
+      state.error = 'Stopped. Nothing was recorded for this run.';
+      if (signal || code !== 0) {
+        writeAttempt(ATTEMPT, {
+          at: startedAt,
+          finishedAt: state.finishedAt,
+          trigger,
+          outcome: 'cancelled',
+          reason: cancelReason,
+          hint: 'Nothing was written, so the numbers on the page are still the last good ones.',
+        });
+      }
+    } else {
+      state.phase = code === 0 ? 'done' : 'failed';
+      if (code !== 0) {
+        // Surface the script's own "✗ …" line; it's already written for humans.
+        const reason = tail.match(/✗ ([^\n]+)/);
+        state.error = reason ? reason[1] : `pull exited ${code}`;
+      }
     }
     log(`run finished: ${state.phase}${state.error ? ` — ${state.error}` : ''}`);
   });
 
   child.on('error', (e) => {
+    child = null;
     state.running = false;
     state.ok = false;
     state.phase = 'failed';
     state.error = `could not start the pull: ${e.message}`;
   });
+}
+
+/**
+ * Stop the running pull. Returns false if there was nothing to stop.
+ *
+ * SIGTERM to the whole process group, then SIGKILL to whatever is left: node
+ * dies on the first one, but a `git push` waiting on the network can sit through
+ * it, and "cancel" that leaves a push running isn't a cancel.
+ *
+ * Nothing has to be undone afterwards. The pull writes history.json in a single
+ * step at the very end and commits after that, so a run stopped part-way has
+ * touched nothing — the cost of cancelling is only the work it threw away.
+ */
+function cancelPull(reason = 'stopped from the tracker page while it was running') {
+  if (!state.running || !child) return false;
+  const doomed = child;
+  cancelReason = reason;
+  state.cancelled = true;
+  state.phase = 'stopping';
+  signalGroup(doomed, 'SIGTERM');
+  setTimeout(() => {
+    if (doomed.exitCode === null && doomed.signalCode === null) {
+      log('the pull did not stop on SIGTERM; killing it');
+      signalGroup(doomed, 'SIGKILL');
+    }
+  }, KILL_GRACE_MS).unref();
+  return true;
+}
+
+/**
+ * Signal a child and everything it started.
+ *
+ * The negative pid addresses the process group, which only exists because the
+ * child was spawned detached. It falls back to the child alone if the group is
+ * already gone — which is a race, not an error.
+ */
+function signalGroup(proc, signal) {
+  try {
+    process.kill(-proc.pid, signal);
+  } catch {
+    try {
+      proc.kill(signal);
+    } catch {
+      /* already dead — the close handler has the rest */
+    }
+  }
 }
 
 // ===== The one-off pull =====
@@ -322,7 +421,7 @@ function tickOneshot() {
 
   log(`starting the pull scheduled for ${oneshot.at}`);
   writeOneshot(null);
-  startPull();
+  startPull('scheduled');
 }
 
 setInterval(tickOneshot, TICK_MS).unref();
@@ -427,8 +526,28 @@ const server = createServer((req, res) => {
       );
     }
     log(`starting pull (requested by ${origin})`);
-    startPull();
+    startPull('manual');
     return send(res, 202, { started: true }, origin);
+  }
+
+  // Stop the run in flight. Same origin check as /pull — it's the same run, and
+  // ending someone's pull uninvited is no more acceptable than starting one.
+  if (req.method === 'POST' && path === '/cancel') {
+    if (!originAllowed(origin)) return send(res, 403, { error: 'origin not allowed' }, origin);
+    if (!authed) {
+      log('rejected /cancel: bad token');
+      return send(res, 401, { error: 'bad token' }, origin);
+    }
+    if (!cancelPull()) return send(res, 409, { error: 'nothing is running' }, origin);
+    log(`stopping the running pull (requested by ${origin})`);
+    return send(res, 202, { cancelling: true }, origin);
+  }
+
+  // How the last attempt went — including the ones that wrote no history.json,
+  // which is the whole reason this exists.
+  if (req.method === 'GET' && path === '/attempt') {
+    if (!authed) return send(res, 401, { error: 'bad token' }, origin);
+    return send(res, 200, { attempt: readAttempt(ATTEMPT) }, origin);
   }
 
   if (req.method === 'GET' && path === '/schedule') {
@@ -464,6 +583,22 @@ const server = createServer((req, res) => {
 
   send(res, 404, { error: 'not found' }, origin);
 });
+
+// The pull runs in its own process group now, which means it would otherwise
+// outlive a Ctrl-C here — still paging Instagram with nothing left to stop it.
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    const doomed = child;
+    if (!state.running || !doomed) process.exit(0);
+    log('shutting down — stopping the pull in flight');
+    cancelPull('the agent was shut down while it was running');
+    // Wait for it to actually go, so the cancelled attempt still gets recorded;
+    // leave anyway if it won't, rather than hanging on a shutdown.
+    const leave = () => process.exit(0);
+    doomed.once('close', leave);
+    setTimeout(leave, KILL_GRACE_MS + 1000);
+  });
+}
 
 server.listen(config.port, '127.0.0.1', () => {
   log(`agent listening on http://127.0.0.1:${config.port} (loopback only)`);
