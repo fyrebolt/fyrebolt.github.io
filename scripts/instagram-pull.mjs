@@ -21,6 +21,12 @@
 //   node scripts/instagram-pull.mjs --commit    # write, then git commit + push
 //   node scripts/instagram-pull.mjs --force     # write even if the read looks partial
 //   node scripts/instagram-pull.mjs --once-daily  # no-op if today already succeeded
+//   node scripts/instagram-pull.mjs --trigger=scheduled   # label the attempt record
+//
+// However it ends, the run leaves a note in scripts/.instagram-attempt.json
+// saying when it ran, who asked for it and what went wrong — see
+// lib/instagram-attempt.mjs for why a failure needs somewhere to be recorded
+// that isn't history.json.
 //
 // Credentials live in scripts/.instagram-secrets.json (gitignored). Write them
 // with the setup script rather than by hand — it also checks them against
@@ -41,11 +47,13 @@ import {
   profileReferer,
 } from './lib/instagram-session.mjs';
 import { readInstalledSchedule } from './lib/instagram-schedule.mjs';
+import { attemptPath, triggerFrom, writeAttempt } from './lib/instagram-attempt.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '..');
 const SECRETS = resolve(__dirname, '.instagram-secrets.json');
 const STATE = resolve(__dirname, '.instagram-state.json');
+const ATTEMPT = attemptPath(__dirname);
 const OUT = resolve(REPO, 'public/instagram/history.json');
 
 /** Page size. Instagram caps the web followers endpoint around 50. */
@@ -61,12 +69,17 @@ const MAX_PAGES = 400;
 /** Refuse to write if we collected less than this share of the reported total. */
 const COMPLETENESS_FLOOR = 0.9;
 
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv);
 const DRY_RUN = args.has('--dry-run');
 const COMMIT = args.has('--commit');
 const FORCE = args.has('--force');
 const NO_NOTIFY = args.has('--no-notify');
 const ONCE_DAILY = args.has('--once-daily');
+/** 'automatic' | 'scheduled' | 'manual' — recorded with the attempt. */
+const TRIGGER = triggerFrom(argv);
+/** When this run began, and so what the attempt record is stamped with. */
+const STARTED_AT = new Date().toISOString();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const jitter = () => DELAY_MIN + Math.random() * (DELAY_MAX - DELAY_MIN);
@@ -116,6 +129,25 @@ function writeState(next) {
   } catch {
     /* state is a convenience; never fail a run over it */
   }
+}
+
+/**
+ * Leave a note saying how this run ended.
+ *
+ * Written on every path out, success or not, because a failure writes no
+ * history.json and would otherwise be invisible to the page — see
+ * lib/instagram-attempt.mjs. A dry run is excluded: it is a rehearsal, and
+ * overwriting the real record with it would hide a genuine failure.
+ */
+function recordAttempt(outcome, extra = {}) {
+  if (DRY_RUN) return;
+  writeAttempt(ATTEMPT, {
+    at: STARTED_AT,
+    finishedAt: new Date().toISOString(),
+    trigger: TRIGGER,
+    outcome,
+    ...extra,
+  });
 }
 
 /**
@@ -538,6 +570,9 @@ async function main() {
   // anything else so a satisfied day costs one file read and no network at all.
   if (ONCE_DAILY && !DRY_RUN && alreadySucceededToday(prev)) {
     log(`already pulled today (${prev.generatedAt}) — nothing to do`);
+    // Recorded, not silent: this is the shape a healthy afternoon takes, and
+    // "last attempt: 3:20 PM, skipped" is how the page shows the job is alive.
+    recordAttempt('skipped', { reason: "today's pull was already in — nothing to do" });
     return;
   }
 
@@ -623,11 +658,11 @@ async function main() {
   const confirmed = (dir, kind) =>
     kept.filter((e) => (e.dir ?? 'in') === dir && e.kind === kind);
   const mutuals = countMutuals(nextFollowers, nextFollowing);
-  log(
+  const summary =
     `followers ${nextFollowers.length} · following ${nextFollowing.length} · mutuals ${mutuals} · ` +
-      `+${confirmed('in', 'follow').length} new · −${confirmed('in', 'unfollow').length} lost` +
-      (dropped.length ? ` · ${dropped.length} unconfirmed, discarded` : ''),
-  );
+    `+${confirmed('in', 'follow').length} new · −${confirmed('in', 'unfollow').length} lost` +
+    (dropped.length ? ` · ${dropped.length} unconfirmed, discarded` : '');
+  log(summary);
   for (const [label, list] of [
     ['new', confirmed('in', 'follow')],
     ['lost', confirmed('in', 'unfollow')],
@@ -647,7 +682,14 @@ async function main() {
   writeFileSync(OUT, JSON.stringify(data, null, 2) + '\n');
   log(`wrote ${OUT}`);
 
-  if (COMMIT) commitAndPush(confirmed('in', 'follow').length, confirmed('in', 'unfollow').length);
+  const publishProblem = COMMIT
+    ? commitAndPush(confirmed('in', 'follow').length, confirmed('in', 'unfollow').length)
+    : null;
+
+  // "Pulled but not published" is its own outcome: the numbers are safe on disk,
+  // and the thing that needs fixing is git, not Instagram.
+  if (publishProblem) recordAttempt('unpublished', publishProblem);
+  else recordAttempt('ok', { summary });
 }
 
 export function countMutuals(followers, following) {
@@ -709,12 +751,18 @@ export function isPushRejection(message) {
   return /non-fast-forward|fetch first|rejected|behind its remote/i.test(String(message ?? ''));
 }
 
+/**
+ * Publish the file. Returns null on success, or `{ reason, hint }` describing
+ * what stopped it — the caller records that, because a pull that read Instagram
+ * perfectly and then failed to push is not a failed pull, and saying so is the
+ * difference between "re-paste your cookie" and "your repo is on a branch".
+ */
 function commitAndPush(gainedCount, lostCount) {
   const git = (...a) => execFileSync('git', a, { cwd: REPO, encoding: 'utf8' }).trim();
   try {
     if (!git('status', '--porcelain', 'public/instagram/history.json')) {
       log('no change to commit');
-      return;
+      return null;
     }
 
     const branch = git('rev-parse', '--abbrev-ref', 'HEAD');
@@ -736,7 +784,13 @@ function commitAndPush(gainedCount, lostCount) {
         `The repo is on ${decision.where}, not ${PUBLISH_BRANCH}. The live site is behind.`,
       );
       process.exitCode = 1;
-      return;
+      return {
+        reason: `the numbers were saved but not published — the repo is on ${decision.where}, not ${PUBLISH_BRANCH}`,
+        hint:
+          `Publish them with:\n\n` +
+          `      git stash && git checkout ${PUBLISH_BRANCH} && git stash pop\n` +
+          `      git commit -m "Instagram tracker" -- public/instagram/history.json && git push`,
+      };
     }
 
     // Commit via an explicit pathspec rather than `add` + `commit`: this job runs
@@ -758,6 +812,7 @@ function commitAndPush(gainedCount, lostCount) {
       git('push');
     }
     log('committed and pushed');
+    return null;
   } catch (e) {
     // A failed push shouldn't look like a failed pull — the data is already saved.
     console.error(`\n⚠ history.json was written but git failed: ${e.message}`);
@@ -767,6 +822,10 @@ function commitAndPush(gainedCount, lostCount) {
       'The pull succeeded; git could not push. The live site is behind.',
     );
     process.exitCode = 1;
+    return {
+      reason: `the numbers were saved but git could not publish them: ${e.message}`,
+      hint: 'The pull itself worked. Fix git, then re-run — or commit public/instagram/history.json by hand.',
+    };
   }
 }
 
@@ -776,6 +835,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     if (e instanceof PullError) {
       console.error(`\n✗ ${e.message}`);
       if (e.hint) console.error(`\n  ${e.hint}\n`);
+      recordAttempt('failed', { reason: e.message, hint: e.hint });
       // Exit 2 means "needs your attention" (expired cookie, bad config); 1 is
       // transient (throttled, network) and the next hourly attempt may well succeed.
       notifyOncePerDay(
@@ -787,6 +847,10 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
       process.exit(e.code);
     }
     console.error('\n✗ Unexpected failure:', e);
+    recordAttempt('failed', {
+      reason: `unexpected failure: ${e?.message ?? e}`,
+      hint: 'This one is a bug rather than a bad cookie — the run log has the stack.',
+    });
     process.exit(1);
   });
 }
