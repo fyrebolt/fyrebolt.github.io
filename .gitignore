@@ -34,6 +34,10 @@ scripts/.instagram-state.json
 # The one-off pull armed from the app's "Schedule…" button — local to this Mac
 scripts/.instagram-oneshot.json
 
+# How the last pull attempt went, including the reason it failed. Local to this
+# Mac: the agent serves it to the page, it is never published.
+scripts/.instagram-attempt.json
+
 # LinkedIn tracker session cookie — never commit this
 scripts/.linkedin-secrets.json
 
