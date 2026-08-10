@@ -10,6 +10,8 @@ import {
   zoneAbbrev,
 } from './schedule';
 import AgentControls from './AgentControls';
+import { useAgentSession, type AgentSession } from './agentSession';
+import { fetchLastAttempt, type LastAttempt } from './agent';
 
 /** Progress of an in-browser import of a data-export ZIP. */
 export interface ImportState {
@@ -37,6 +39,10 @@ export default function ImportPanel({
   const [dragging, setDragging] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const isLive = Boolean(data && !data.sample);
+  // Held here rather than inside the buttons: the details panel's "Last attempt"
+  // line comes from the same agent behind the same passphrase, and unlocking in
+  // one place has to light up the other.
+  const session = useAgentSession();
 
   const pick = () => inputRef.current?.click();
   const onDrop = (e: React.DragEvent) => {
@@ -84,9 +90,9 @@ export default function ImportPanel({
             </button>{' '}
             · updated {timeAgo(data!.generatedAt)}
           </div>
-          {showDetails && <CollectionDetails data={data!} />}
+          {showDetails && <CollectionDetails data={data!} session={session} />}
           <div className="ig-import-actions">
-            <AgentControls onPulled={onPulled} />
+            <AgentControls session={session} onPulled={onPulled} />
             <button className="ios-btn" onClick={pick} disabled={state.busy}>
               {state.busy ? 'Importing…' : 'Backfill from export'}
             </button>
@@ -129,7 +135,7 @@ export default function ImportPanel({
  * everything here is reported rather than assumed — a file written by a manual
  * run carries no schedule, and this says so instead of inventing a time.
  */
-function CollectionDetails({ data }: { data: TrackerData }) {
+function CollectionDetails({ data, session }: { data: TrackerData; session: AgentSession }) {
   // The countdown is the point of the panel, so it can't be frozen at the
   // moment it opened. A minute is finer than anything displayed here changes.
   const [now, setNow] = useState(() => new Date());
@@ -159,6 +165,8 @@ function CollectionDetails({ data }: { data: TrackerData }) {
         })}{' '}
         <span className="ig-live-dim">({timeAgo(data.generatedAt)})</span>
       </dd>
+
+      <LastAttemptRow session={session} />
 
       <dt>How</dt>
       <dd>
@@ -206,4 +214,94 @@ function CollectionDetails({ data }: { data: TrackerData }) {
       </dd>
     </dl>
   );
+}
+
+/** How long the "Last attempt" line waits before asking the agent again. */
+const ATTEMPT_POLL_MS = 20_000;
+
+/**
+ * When the tracker last *tried*, who asked it to, and what went wrong.
+ *
+ * "Collected" above says when a pull last worked, which is a different question
+ * and a misleading one on its own: an expired cookie writes no history.json, so
+ * a tracker that has been failing all week looks identical to one that simply
+ * hasn't been due yet. This is the row that tells them apart.
+ *
+ * It can only come from the local agent — a failure produces no commit, so the
+ * published site has no way to hear about it. Renders nothing anywhere else,
+ * which is the same deal the Update now button makes.
+ */
+function LastAttemptRow({ session }: { session: AgentSession }) {
+  const { available, token } = session;
+  const [attempt, setAttempt] = useState<LastAttempt | null>(null);
+
+  useEffect(() => {
+    if (available !== true || !token) return;
+    let stop = false;
+    const tick = () =>
+      fetchLastAttempt(token).then((next) => {
+        if (!stop) setAttempt(next);
+      });
+    tick();
+    const id = setInterval(tick, ATTEMPT_POLL_MS);
+    return () => {
+      stop = true;
+      clearInterval(id);
+    };
+  }, [available, token]);
+
+  if (!attempt) return null;
+  const { tone, headline } = describeOutcome(attempt);
+  // A failure explains itself; a success has counts instead. Never both.
+  const detail = attempt.reason ?? attempt.summary;
+
+  return (
+    <>
+      <dt>Last attempt</dt>
+      <dd>
+        {new Date(attempt.at).toLocaleString([], {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        })}{' '}
+        <span className="ig-live-dim">({timeAgo(attempt.at)})</span> ·{' '}
+        {TRIGGER_LABEL[attempt.trigger]}
+        <span className="ig-live-note">
+          <span className={tone}>{headline}</span>
+          {detail ? ` — ${detail}` : ''}
+        </span>
+        {attempt.hint && <span className="ig-live-note">{attempt.hint}</span>}
+      </dd>
+    </>
+  );
+}
+
+/** Who set the run going, said the way you'd say it out loud. */
+const TRIGGER_LABEL: Record<LastAttempt['trigger'], string> = {
+  automatic: 'the daily job',
+  scheduled: 'a scheduled one-off',
+  manual: 'started by hand',
+};
+
+/**
+ * The verdict line, and how loudly to say it.
+ *
+ * Only a run that read nothing is a failure. A run that was stopped on purpose,
+ * or one that found today's work already done, is the tracker behaving — and
+ * colouring those red would train you to ignore the colour that matters.
+ */
+function describeOutcome(attempt: LastAttempt): { tone: string; headline: string } {
+  switch (attempt.outcome) {
+    case 'ok':
+      return { tone: 'ig-live-done', headline: '✓ Succeeded' };
+    case 'skipped':
+      return { tone: 'ig-live-pending', headline: 'Nothing to do' };
+    case 'cancelled':
+      return { tone: 'ig-live-pending', headline: 'Stopped' };
+    case 'unpublished':
+      return { tone: 'ig-live-warn', headline: '⚠ Pulled, but not published' };
+    default:
+      return { tone: 'ig-live-fail', headline: '✗ Failed' };
+  }
 }

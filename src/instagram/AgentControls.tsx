@@ -1,37 +1,41 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TrackerData } from './data';
 import {
-  probeAgent,
   startPull,
+  cancelPull,
   fetchStatus,
   fetchHistory,
   fetchSchedule,
   setSchedule,
   verifyToken,
-  loadToken,
-  saveToken,
-  clearToken,
   type AgentStatus,
   type ScheduledPull,
 } from './agent';
+import type { AgentSession } from './agentSession';
 
 /**
  * The controls that only exist on the Mac running the pull:
  *
  *   "Update now"   — pull immediately
+ *   "Stop"         — end the run in flight
  *   "Schedule…"    — pull once, at a time you pick
  *
  * Renders nothing at all unless the local agent (scripts/instagram-agent.mjs)
  * answers on loopback, so on any other device, or in anyone else's browser,
  * these simply don't exist rather than sitting there dead.
  *
- * Both actions live in one component because they share the passphrase: asking
+ * All of it lives in one component because it shares the passphrase: asking
  * twice for the same secret, or letting one button hold a token the other
  * doesn't know was rejected, would both be worse than the coupling.
  */
-export default function AgentControls({ onPulled }: { onPulled: (fresh: TrackerData) => void }) {
-  const [available, setAvailable] = useState<boolean | null>(null);
-  const [token, setToken] = useState<string | null>(() => loadToken());
+export default function AgentControls({
+  session,
+  onPulled,
+}: {
+  session: AgentSession;
+  onPulled: (fresh: TrackerData) => void;
+}) {
+  const { available, token, remember, forget } = session;
 
   // Which action, if any, is waiting on a passphrase. The unlock form resumes it
   // by calling `perform` with the token it just verified — the token in state is
@@ -49,18 +53,19 @@ export default function AgentControls({ onPulled }: { onPulled: (fresh: TrackerD
   const [when, setWhen] = useState('');
   const [schedNote, setSchedNote] = useState<string | null>(null);
 
-  useEffect(() => {
-    probeAgent().then(setAvailable);
-  }, []);
+  /** Is the "are you sure" for stopping a run on screen? */
+  const [confirmingStop, setConfirmingStop] = useState(false);
 
   /** The saved token turned out to be stale — forget it and ask again. */
-  const reject = useCallback((action: Action) => {
-    clearToken();
-    setToken(null);
-    setEntry('');
-    setUnlockNote('That passphrase was rejected.');
-    setAsking(action);
-  }, []);
+  const reject = useCallback(
+    (action: Action) => {
+      forget();
+      setEntry('');
+      setUnlockNote('That passphrase was rejected.');
+      setAsking(action);
+    },
+    [forget],
+  );
 
   // ===== The pull =====
 
@@ -93,6 +98,24 @@ export default function AgentControls({ onPulled }: { onPulled: (fresh: TrackerD
     },
     [reject],
   );
+
+  /**
+   * Stop the run in flight.
+   *
+   * No status is written locally: the agent reports the run as cancelled on the
+   * next poll, and letting that be the single source of "it stopped" avoids the
+   * state where the page says stopped and the pull is still going.
+   */
+  const stopPull = useCallback(async () => {
+    setConfirmingStop(false);
+    if (!token) return;
+    setNote(null);
+    const res = await cancelPull(token);
+    if (res.kind === 'badToken') return reject('pull');
+    if (res.kind === 'error') setNote(res.message);
+    // 'idle' needs nothing said: the run finished on its own a moment ago, and
+    // the poll is about to show exactly that.
+  }, [token, reject]);
 
   // ===== The one-off schedule =====
 
@@ -190,7 +213,11 @@ export default function AgentControls({ onPulled }: { onPulled: (fresh: TrackerD
         return;
       }
       setRun(status);
-      if (!status.running) setBusy(false);
+      if (!status.running) {
+        setBusy(false);
+        // The run this was asking about is over, one way or another.
+        setConfirmingStop(false);
+      }
     };
     const id = setInterval(tick, 1500);
     return () => {
@@ -218,6 +245,9 @@ export default function AgentControls({ onPulled }: { onPulled: (fresh: TrackerD
 
   if (available !== true) return null;
 
+  /** Signalled, but not gone yet: a push on the wire can take a few seconds. */
+  const stopping = run?.phase === 'stopping';
+
   const openPicker = () => {
     setSchedNote(null);
     if (!when) setWhen(defaultWhen());
@@ -227,7 +257,17 @@ export default function AgentControls({ onPulled }: { onPulled: (fresh: TrackerD
   return (
     <>
       {run?.running ? (
-        <RunningChip run={run} />
+        <>
+          <RunningChip run={run} />
+          <button
+            className="ios-btn ig-agent-btn ig-agent-stop"
+            disabled={stopping}
+            onClick={() => setConfirmingStop((v) => !v)}
+            aria-expanded={confirmingStop}
+          >
+            ■ {stopping ? 'Stopping…' : 'Stop'}
+          </button>
+        </>
       ) : (
         <button
           className="ios-btn ios-btn-primary ig-agent-btn"
@@ -243,11 +283,44 @@ export default function AgentControls({ onPulled }: { onPulled: (fresh: TrackerD
       </button>
 
       {run && !run.running && (
-        <span className={`ig-agent-note ${run.ok ? 'ok' : 'err'}`} role="status">
-          {run.ok ? (run.summary ?? 'Updated.') : (run.error ?? 'Update failed.')}
+        <span
+          className={`ig-agent-note ${run.cancelled ? '' : run.ok ? 'ok' : 'err'}`}
+          role="status"
+        >
+          {run.cancelled
+            ? (run.error ?? 'Stopped.')
+            : run.ok
+              ? (run.summary ?? 'Updated.')
+              : (run.error ?? 'Update failed.')}
         </span>
       )}
       {note && <span className="ig-agent-note err">{note}</span>}
+
+      {confirmingStop && run?.running && (
+        <div className="ig-agent-confirm" role="alertdialog" aria-label="Stop the running pull">
+          <p className="ig-agent-confirm-text">
+            <strong>Stop this pull?</strong> Nothing gets saved — the run only writes at the very
+            end.{' '}
+            {run.followers != null
+              ? `The ${run.followers} followers read so far are discarded`
+              : 'The work so far is discarded'}
+            , and the numbers on this page stay as they are. Instagram also holds the next run off
+            for a couple of minutes.
+          </p>
+          <div className="ig-agent-confirm-row">
+            <button className="ios-btn ig-btn-danger" type="button" onClick={stopPull}>
+              Stop it
+            </button>
+            <button
+              className="ios-btn ig-btn-quiet"
+              type="button"
+              onClick={() => setConfirmingStop(false)}
+            >
+              Keep going
+            </button>
+          </div>
+        </div>
+      )}
 
       {asking && (
         <form
@@ -263,8 +336,7 @@ export default function AgentControls({ onPulled }: { onPulled: (fresh: TrackerD
               setUnlockNote('That passphrase was rejected.');
               return;
             }
-            saveToken(value);
-            setToken(value);
+            remember(value);
             setAsking(null);
             perform(asking, value);
           }}

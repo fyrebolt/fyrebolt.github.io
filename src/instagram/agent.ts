@@ -22,6 +22,8 @@ export interface AgentStatus {
   ok: boolean | null;
   summary: string | null;
   error: string | null;
+  /** Stopped on purpose. Not the same as failed, and shouldn't read like it. */
+  cancelled?: boolean;
 }
 
 export function loadToken(): string | null {
@@ -112,6 +114,70 @@ export async function startPull(token: string): Promise<StartResult> {
       message: e instanceof Error && e.name === 'AbortError' ? 'the agent timed out' : 'could not reach the agent',
     };
   }
+}
+
+export type CancelResult =
+  | { kind: 'cancelling' }
+  | { kind: 'badToken' }
+  | { kind: 'idle' }
+  | { kind: 'error'; message: string };
+
+/**
+ * Stop the pull in flight.
+ *
+ * The agent answers as soon as it has signalled the run, not once it's gone —
+ * a `git push` can sit on the network for a few seconds — so the caller keeps
+ * polling /status and learns it's over from `phase: 'cancelled'`.
+ */
+export async function cancelPull(token: string): Promise<CancelResult> {
+  try {
+    const res = await withTimeout(
+      '/cancel',
+      { method: 'POST', headers: { 'x-tracker-token': token } },
+      8000,
+    );
+    if (res.status === 202) return { kind: 'cancelling' };
+    if (res.status === 401) return { kind: 'badToken' };
+    if (res.status === 409) return { kind: 'idle' };
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    return { kind: 'error', message: body.error ?? `agent returned ${res.status}` };
+  } catch (e) {
+    return {
+      kind: 'error',
+      message:
+        e instanceof Error && e.name === 'AbortError'
+          ? 'the agent timed out'
+          : 'could not reach the agent',
+    };
+  }
+}
+
+/** Who asked for a run: the daily job, an armed one-off, or the button. */
+export type AttemptTrigger = 'automatic' | 'scheduled' | 'manual';
+
+/** How a run ended. See scripts/lib/instagram-attempt.mjs. */
+export type AttemptOutcome = 'ok' | 'skipped' | 'failed' | 'unpublished' | 'cancelled';
+
+export interface LastAttempt {
+  at: string;
+  finishedAt: string;
+  trigger: AttemptTrigger;
+  outcome: AttemptOutcome;
+  reason: string | null;
+  hint: string | null;
+  summary: string | null;
+}
+
+/**
+ * How the last attempt went — including the failed ones.
+ *
+ * Only the agent can answer this. history.json is written on success alone, so
+ * a run that died on an expired cookie leaves the published site looking exactly
+ * as it did before; this is the one place that knows otherwise.
+ */
+export async function fetchLastAttempt(token: string): Promise<LastAttempt | null> {
+  const body = await read<{ attempt: LastAttempt | null }>('/attempt', token, 5000);
+  return body?.attempt ?? null;
 }
 
 /**
