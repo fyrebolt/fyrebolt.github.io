@@ -36,6 +36,12 @@ export interface FollowEvent {
    * before outbound tracking existed was.
    */
   dir?: 'in' | 'out';
+  /**
+   * Set only on an unfollow nothing could confirm, accepted because the account
+   * had been missing from this many consecutive reads. Provenance, not decor:
+   * these are the events the tracker inferred rather than checked.
+   */
+  absent?: number;
 }
 
 /** Events without a direction predate outbound tracking and are inbound. */
@@ -59,6 +65,13 @@ export interface Profile {
    * from an export ZIP; first-seen-by-the-tracker from the daily puller.
    */
   since?: string;
+  /**
+   * Consecutive reads this account has been missing from, written by the pull.
+   * Present only while a streak is running, and cleared the moment they show up
+   * again — it's what lets a lasting disappearance settle an unfollow that
+   * Instagram would never confirm.
+   */
+  missing?: number;
 }
 
 /**

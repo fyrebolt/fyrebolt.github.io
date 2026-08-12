@@ -196,12 +196,14 @@ function notifyOncePerDay(kind, title, subtitle, message) {
  * handle that won't resolve is just one candidate we can't confirm.
  */
 class PullError extends Error {
-  constructor(code, message, hint, fatal) {
+  constructor(code, message, hint, fatal, status) {
     super(message);
     this.name = 'PullError';
     this.code = code;
     this.hint = hint;
     this.fatal = fatal;
+    /** The HTTP status behind it, when there was one. 404 is load-bearing. */
+    this.status = status;
   }
 }
 
@@ -219,8 +221,8 @@ function die(code, message, hint) {
 }
 
 /** One request failed. Callers may reasonably continue without it. */
-function requestFailed(message) {
-  return new PullError(1, message, undefined, false);
+function requestFailed(message, status) {
+  return new PullError(1, message, undefined, false, status);
 }
 
 // ===== Credentials =====
@@ -303,7 +305,7 @@ async function getJson(url, creds, referer, attempt = 1) {
   // Scoped to this one URL, not the session: Instagram serves a 400 for profiles
   // whose own data it can't render (a stale business-category schema does it),
   // and that says nothing about the next request.
-  if (!res.ok) throw requestFailed(`HTTP ${res.status} from ${url}`);
+  if (!res.ok) throw requestFailed(`HTTP ${res.status} from ${url}`, res.status);
 
   const text = await res.text();
   let json;
@@ -518,8 +520,17 @@ export async function verifyCandidates(candidates, creds, pause = () => sleep(ji
       // the run — otherwise each candidate reads as "unverifiable" and a whole
       // day of real follows and unfollows gets silently discarded.
       if (e instanceof PullError && e.fatal) throw e;
-      log(`could not verify @${c.username} (${e.message})`);
-      rel = null;
+      // A 404 is not a failure to answer, it *is* the answer: that handle no
+      // longer resolves. Left as "unverifiable" it was the opposite — a deleted
+      // account could never be confirmed gone, so it stuck in the list forever,
+      // its unfollow re-detected and re-discarded on every run after.
+      if (e instanceof PullError && e.status === 404) {
+        log(`@${c.username} no longer resolves — treating as gone`);
+        rel = 'gone';
+      } else {
+        log(`could not verify @${c.username} (${e.message})`);
+        rel = null;
+      }
     }
     const ok = verdict(c, rel);
     if (ok === true) kept.push(c);
@@ -527,6 +538,64 @@ export async function verifyCandidates(candidates, creds, pause = () => sleep(ji
     await pause();
   }
   return { kept, dropped };
+}
+
+/**
+ * How many consecutive reads each stored account has now been missing from.
+ *
+ * Zero for anyone in this read, which is the useful half: a streak has to be
+ * unbroken to mean anything. Kept on the stored entries (`missing`) so it
+ * survives between runs, since a single run can't tell a one-off gap from a
+ * pattern.
+ */
+export function absenceStreaks(previous, currentRead) {
+  const present = new Set(currentRead.map((p) => p.username.toLowerCase()));
+  const streaks = new Map();
+  for (const p of previous ?? []) {
+    const key = p.username.toLowerCase();
+    const before = Number.isInteger(p.missing) ? p.missing : 0;
+    streaks.set(key, present.has(key) ? 0 : before + 1);
+  }
+  return streaks;
+}
+
+/**
+ * Consecutive absences after which a disappearance is taken at face value.
+ *
+ * Paging churn is transient by definition — the accounts a bad page drops are
+ * back in the next read, and the ones seen so far have recovered within a run.
+ * An account missing this many times running is not churn, whatever Instagram
+ * will or won't say about it.
+ */
+export const ABSENCE_LIMIT = 3;
+
+/**
+ * Promote unfollows that verification couldn't settle but absence has.
+ *
+ * Without this, an account whose profile endpoint never answers cleanly can
+ * never leave the stored lists: it's missing from every read, so the unfollow
+ * is re-detected daily, and unverifiable every time, so it's re-discarded
+ * daily. Deleted accounts (404) and profiles Instagram itself can't render
+ * (400) both landed there — the list kept people who had plainly gone.
+ *
+ * Only ever rescues the *unverifiable* ones. A contradicted event stays
+ * dropped: that's Instagram saying the relationship is still live, which
+ * outranks a read that keeps missing them.
+ */
+export function settleAbsences(dropped, streaks, limit = ABSENCE_LIMIT) {
+  const settled = [];
+  const unresolved = [];
+  for (const event of dropped) {
+    const streak =
+      streaks[event.dir === 'out' ? 'out' : 'in']?.get(event.username.toLowerCase()) ?? 0;
+    if (event.kind === 'unfollow' && event.why === 'unverifiable' && streak >= limit) {
+      const { why, ...clean } = event; // `why` is a note about the drop, not history
+      settled.push({ ...clean, absent: streak });
+    } else {
+      unresolved.push(event);
+    }
+  }
+  return { settled, unresolved };
 }
 
 /**
@@ -539,7 +608,7 @@ export async function verifyCandidates(candidates, creds, pause = () => sleep(ji
  * "do you follow them?" is true either way. Holding people until an unfollow is
  * actually confirmed breaks the cycle at the source.
  */
-export function stableList(previous, currentRead, confirmedGone) {
+export function stableList(previous, currentRead, confirmedGone, streaks = new Map()) {
   const byKey = new Map();
   for (const p of previous ?? []) byKey.set(p.username.toLowerCase(), p);
   for (const p of currentRead) {
@@ -549,7 +618,17 @@ export function stableList(previous, currentRead, confirmedGone) {
     byKey.set(k, old ? { ...p, since: old.since ?? p.since } : p);
   }
   for (const k of confirmedGone) byKey.delete(k);
-  return [...byKey.values()].sort((a, b) => a.username.localeCompare(b.username));
+  // Stamp how many reads running each survivor has been missing from — the one
+  // piece of state a single run can't recompute, and what lets a disappearance
+  // eventually settle itself. Rewritten every run, so it can only ever describe
+  // an unbroken streak ending now.
+  return [...byKey]
+    .map(([k, p]) => {
+      const { missing: _stale, ...rest } = p;
+      const missing = streaks.get(k) ?? 0;
+      return missing > 0 ? { ...rest, missing } : rest;
+    })
+    .sort((a, b) => a.username.localeCompare(b.username));
 }
 
 /** One snapshot per calendar day — a re-run on the same day replaces it. */
@@ -612,28 +691,43 @@ async function main() {
   const inbound = firstRealRun ? empty : diffList(followers, prev.followers, nowIso, 'in');
   const outbound = firstRealRun ? empty : diffList(following, prev.following, nowIso, 'out');
 
+  // How long each stored account has been missing from the read, carried across
+  // runs so a lasting disappearance can be told from a page that dropped one.
+  const absence = {
+    in: absenceStreaks(prev?.followers, followers),
+    out: absenceStreaks(prev?.following, following),
+  };
+
   // Every candidate is checked against the live relationship before it becomes
   // permanent history — see verifyCandidates for why paging makes this necessary.
   const candidates = [...inbound.added, ...inbound.removed, ...outbound.added, ...outbound.removed];
   const { kept, dropped } = await verifyCandidates(candidates, creds);
-  if (dropped.length) {
-    log(`discarded ${dropped.length} unconfirmed change(s): ` +
-      dropped.map((e) => `@${e.username} (${e.dir ?? 'in'} ${e.kind}, ${e.why})`).join(', '));
-  }
 
-  const events = [...kept, ...(firstRealRun ? [] : prev.events ?? [])]
+  // Then the ones verification couldn't settle, but a long absence can.
+  const { settled, unresolved } = settleAbsences(dropped, absence);
+  if (settled.length) {
+    log(`accepted ${settled.length} unverified unfollow(s) on a long absence: ` +
+      settled.map((e) => `@${e.username} (${e.dir ?? 'in'}, ${e.absent} reads)`).join(', '));
+  }
+  if (unresolved.length) {
+    log(`discarded ${unresolved.length} unconfirmed change(s): ` +
+      unresolved.map((e) => `@${e.username} (${e.dir ?? 'in'} ${e.kind}, ${e.why})`).join(', '));
+  }
+  const confirmedEvents = [...kept, ...settled];
+
+  const events = [...confirmedEvents, ...(firstRealRun ? [] : prev.events ?? [])]
     .sort((a, b) => (a.t < b.t ? 1 : -1))
     .slice(0, 5000);
 
-  // Only a confirmed unfollow removes anyone from the stored lists.
+  // Only a settled unfollow removes anyone from the stored lists.
   const goneFrom = (dir) =>
     new Set(
-      kept
+      confirmedEvents
         .filter((e) => (e.dir ?? 'in') === dir && e.kind === 'unfollow')
         .map((e) => e.username.toLowerCase()),
     );
-  const nextFollowers = stableList(prev?.followers, mergedFollowers, goneFrom('in'));
-  const nextFollowing = stableList(prev?.following, mergedFollowing, goneFrom('out'));
+  const nextFollowers = stableList(prev?.followers, mergedFollowers, goneFrom('in'), absence.in);
+  const nextFollowing = stableList(prev?.following, mergedFollowing, goneFrom('out'), absence.out);
 
   const data = {
     account: creds.account,

@@ -15,6 +15,9 @@ import {
   expectedRelationship,
   stableList,
   verifyCandidates,
+  absenceStreaks,
+  settleAbsences,
+  ABSENCE_LIMIT,
   publishDecision,
   isPushRejection,
 } from '../scripts/instagram-pull.mjs';
@@ -364,6 +367,19 @@ test('stableList — people leave only when an unfollow is confirmed', async (t)
     const out = stableList([P('Alice')], [P('alice')], none);
     assert.equal(out.length, 1);
   });
+
+  await t.test('the absence counter is stamped on, and cleared on return', () => {
+    const streaks = new Map([['gone', 2], ['here', 0]]);
+    const out = stableList(
+      [P('gone', { missing: 1 }), P('here', { missing: 5 })],
+      [P('here')],
+      none,
+      streaks,
+    );
+    const by = Object.fromEntries(out.map((p) => [p.username, p]));
+    assert.equal(by.gone.missing, 2, 'the streak comes from this run, not the stored value');
+    assert.equal('missing' in by.here, false, 'back in the read, so no streak to carry');
+  });
 });
 
 test('verifyCandidates — one bad handle must not sink the run', async (t) => {
@@ -416,6 +432,38 @@ test('verifyCandidates — one bad handle must not sink the run', async (t) => {
     ]);
   });
 
+  await t.test('a 404 is an answer, not a failure to answer', () => {
+    // A handle that no longer resolves cannot still be following you. Read as
+    // "unverifiable" instead, a deleted account could never be confirmed gone,
+    // so it stuck in the list and had its unfollow re-discarded every run.
+    stubFetch({ deleted: { status: 404, body: {} } });
+
+    return verifyCandidates(
+      [
+        { username: 'deleted', kind: 'unfollow', t: NOW },
+        { username: 'deleted', kind: 'unfollow', t: NOW, dir: 'out' },
+      ],
+      CREDS,
+      noPause,
+    ).then(({ kept, dropped }) => {
+      assert.equal(kept.length, 2, 'gone in both directions');
+      assert.deepEqual(dropped, []);
+    });
+  });
+
+  await t.test('but a 404 cannot confirm a *follow*', () => {
+    stubFetch({ deleted: { status: 404, body: {} } });
+
+    return verifyCandidates(
+      [{ username: 'deleted', kind: 'follow', t: NOW }],
+      CREDS,
+      noPause,
+    ).then(({ kept, dropped }) => {
+      assert.deepEqual(kept, []);
+      assert.deepEqual(dropped.map((e) => e.why), ['contradicted']);
+    });
+  });
+
   // A network error takes the same non-fatal path as the 400 above, and covering
   // it here would mean sitting through 90s of real retry backoff.
 
@@ -445,6 +493,116 @@ test('verifyCandidates — one bad handle must not sink the run', async (t) => {
       () => verifyCandidates([{ username: 'alice', kind: 'follow', t: NOW }], CREDS, noPause),
       /HTML instead of JSON/,
     );
+  });
+});
+
+test('absenceStreaks — how long someone has been missing', async (t) => {
+  await t.test('anyone in the read is at zero', () => {
+    const s = absenceStreaks([P('a'), P('b')], [P('a'), P('b')]);
+    assert.equal(s.get('a'), 0);
+    assert.equal(s.get('b'), 0);
+  });
+
+  await t.test('an absence counts, and keeps counting', () => {
+    assert.equal(absenceStreaks([P('a')], []).get('a'), 1);
+    assert.equal(absenceStreaks([P('a', { missing: 2 })], []).get('a'), 3);
+  });
+
+  await t.test('showing up again resets it — the streak has to be unbroken', () => {
+    assert.equal(absenceStreaks([P('a', { missing: 9 })], [P('a')]).get('a'), 0);
+  });
+
+  await t.test('a nonsense counter starts over rather than throwing', () => {
+    for (const junk of ['3', -1.5, null, NaN]) {
+      assert.equal(absenceStreaks([P('a', { missing: junk })], []).get('a'), 1);
+    }
+  });
+
+  await t.test('someone new to this read has no streak to answer for', () => {
+    assert.equal(absenceStreaks([], [P('newcomer')]).get('newcomer'), undefined);
+  });
+});
+
+test('settleAbsences — a disappearance that outlasts the churn explanation', async (t) => {
+  // The defect this exists for: an account whose profile endpoint never answers
+  // cleanly is missing from every read, so its unfollow is re-detected daily and
+  // re-discarded daily, and it sits in the list forever. Seen for real with a
+  // deleted account (404) and one Instagram itself 400s on.
+  const drop = (username, why, extra = {}) => ({
+    username,
+    kind: 'unfollow',
+    t: NOW,
+    why,
+    ...extra,
+  });
+  const streaks = (inPairs = [], outPairs = []) => ({
+    in: new Map(inPairs),
+    out: new Map(outPairs),
+  });
+
+  await t.test('a long enough absence settles an unverifiable unfollow', () => {
+    const { settled, unresolved } = settleAbsences(
+      [drop('ghost', 'unverifiable')],
+      streaks([['ghost', ABSENCE_LIMIT]]),
+    );
+    assert.deepEqual(unresolved, []);
+    assert.equal(settled.length, 1);
+    assert.equal(settled[0].username, 'ghost');
+  });
+
+  await t.test('a short one does not', () => {
+    const { settled, unresolved } = settleAbsences(
+      [drop('blinked', 'unverifiable')],
+      streaks([['blinked', ABSENCE_LIMIT - 1]]),
+    );
+    assert.deepEqual(settled, []);
+    assert.equal(unresolved.length, 1);
+  });
+
+  await t.test('the drop note is stripped, and the streak recorded in its place', () => {
+    // `why` explains a decision not to record; it is not itself history. What
+    // replaces it says this unfollow was inferred rather than confirmed.
+    const [event] = settleAbsences(
+      [drop('ghost', 'unverifiable', { name: 'Ghost' })],
+      streaks([['ghost', 4]]),
+    ).settled;
+    assert.equal(event.why, undefined);
+    assert.equal(event.absent, 4);
+    assert.deepEqual({ ...event, absent: undefined }, {
+      username: 'ghost',
+      kind: 'unfollow',
+      t: NOW,
+      name: 'Ghost',
+      absent: undefined,
+    });
+  });
+
+  await t.test('a contradicted event stays dropped however long the absence', () => {
+    // Instagram saying the relationship is still live outranks a read that keeps
+    // missing them — that is a broken read, not a departure.
+    const { settled, unresolved } = settleAbsences(
+      [drop('stillThere', 'contradicted')],
+      streaks([['stillThere', 99]]),
+    );
+    assert.deepEqual(settled, []);
+    assert.equal(unresolved.length, 1);
+  });
+
+  await t.test('a follow is never settled this way — only a disappearance is', () => {
+    const { settled } = settleAbsences(
+      [{ username: 'x', kind: 'follow', t: NOW, why: 'unverifiable' }],
+      streaks([['x', 99]]),
+    );
+    assert.deepEqual(settled, []);
+  });
+
+  await t.test('each direction is judged on its own list', () => {
+    // Absent from your following list says nothing about your followers list.
+    const dropped = [drop('them', 'unverifiable', { dir: 'out' })];
+    const wrongList = streaks([['them', 99]], []);
+    assert.deepEqual(settleAbsences(dropped, wrongList).settled, []);
+    const rightList = streaks([], [['them', 99]]);
+    assert.equal(settleAbsences(dropped, rightList).settled.length, 1);
   });
 });
 
