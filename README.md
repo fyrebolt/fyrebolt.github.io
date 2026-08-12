@@ -262,6 +262,24 @@ paged against the count Instagram reports for the profile and refuses to write i
 it's short (or if the follower count halved since the last run). `--force`
 overrides it when a drop is genuinely real.
 
+Beyond that, every candidate change is confirmed against the live relationship
+before it becomes history, and the stored lists only ever lose someone to a
+settled unfollow — a read that simply misses a page can't delete anyone.
+
+**And the other way round.** That caution had a failure mode: an account whose
+profile endpoint never answers cleanly could never be confirmed gone, so it was
+missing from every read, re-detected as an unfollow every run, discarded every
+run, and stuck in the list forever. Two things settle it now:
+
+- A **404 is an answer**, not a failure to answer. A handle that no longer
+  resolves isn't still following you.
+- **Absence outlasts churn.** Paging churn is transient by definition — the
+  accounts a bad page drops are back in the next read. Someone missing from three
+  consecutive reads is not churn, so an unfollow nothing could verify is accepted
+  on the strength of the streak alone, and the event records that it was inferred
+  rather than checked. A *contradicted* event is never rescued this way:
+  Instagram saying the relationship is live outranks a read that keeps missing it.
+
 #### The "Update now" button
 
 The deployed site is static, so the page itself can't pull anything — but a
