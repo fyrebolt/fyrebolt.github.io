@@ -20,6 +20,7 @@ import {
   ABSENCE_LIMIT,
   publishDecision,
   isPushRejection,
+  explainDecline,
 } from '../scripts/instagram-pull.mjs';
 
 const P = (username, extra = {}) => ({ username, ...extra });
@@ -652,5 +653,70 @@ test('isPushRejection', async (t) => {
     assert.equal(isPushRejection('fatal: unable to access ... Could not resolve host'), false);
     assert.equal(isPushRejection('fatal: The current branch x has no upstream branch'), false);
     assert.equal(isPushRejection(undefined), false);
+  });
+});
+
+test('explainDecline', async (t) => {
+  /** The body Instagram serves when it wants the tracker to back off. */
+  const SOFT_BLOCK = {
+    message: 'Please wait a few minutes before you try again.',
+    require_login: true,
+    igweb_rollout: true,
+    status: 'fail',
+  };
+
+  await t.test('quotes Instagram verbatim, so the notification says what it said', () => {
+    const out = explainDecline(SOFT_BLOCK);
+    assert.match(out.message, /Please wait a few minutes before you try again\./);
+  });
+
+  await t.test('reads a "please wait" as transient, not as a dead cookie', () => {
+    // The same body arrives with a 401. Reported as an expired session it would
+    // send you to re-paste a cookie that is fine — and to re-run at once, which
+    // is precisely what extends the block.
+    const out = explainDecline(SOFT_BLOCK);
+    assert.equal(out.code, 1);
+    assert.match(out.hint, /not a dead cookie/);
+    assert.doesNotMatch(out.message, /expired/i);
+  });
+
+  await t.test('reports require_login rather than acting on it', () => {
+    // It rides along with these waits even when the session is intact, so it is
+    // worth saying and not worth believing.
+    assert.match(explainDecline(SOFT_BLOCK).message, /fresh login/);
+  });
+
+  await t.test('a refusal with no "wait" in it is for a person to clear', () => {
+    const out = explainDecline({ message: 'login_required', status: 'fail' });
+    assert.equal(out.code, 2);
+    assert.match(out.message, /login_required/);
+  });
+
+  await t.test('a per-profile failure is not a session-level refusal', () => {
+    // The 400 Instagram serves for a profile whose own schema it cannot render.
+    // It carries status:"fail" too, and reading that as a session problem would
+    // kill the whole run over one bad handle — a bug this tracker has had once.
+    assert.equal(
+      explainDecline({
+        message: 'Asset asset://laser.provider/... has been deleted',
+        status: 'fail',
+      }),
+      null,
+    );
+  });
+
+  await t.test('checkpoints keep their own instructions', () => {
+    const out = explainDecline({ message: 'checkpoint_required', status: 'fail' });
+    assert.equal(out.code, 2);
+    assert.match(out.message, /checkpoint/i);
+    assert.match(out.hint, /instagram-setup\.mjs/);
+  });
+
+  await t.test('a normal payload is not a refusal', () => {
+    for (const body of [null, {}, { data: { user: { id: '1' } } }, { message: '' }]) {
+      assert.equal(explainDecline(body), null);
+    }
+    // A message alone isn't one either — Instagram uses that field on success.
+    assert.equal(explainDecline({ message: 'ok', status: 'ok' }), null);
   });
 });
