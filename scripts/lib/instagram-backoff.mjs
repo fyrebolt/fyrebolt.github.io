@@ -15,8 +15,17 @@
 // A person is never held: pressing "Update now" or arming a one-off runs
 // immediately. This governs the job that runs while nobody is watching.
 
-/** Wait after the 1st, 2nd, 3rd… consecutive failure. The last value repeats. */
-export const BACKOFF_HOURS = [1, 3, 6, 12, 24];
+/**
+ * Wait after the 1st, 2nd, 3rd… consecutive failure. The last value repeats.
+ *
+ * The first rung is 45 minutes rather than an hour on purpose, and the schedule
+ * is why: the job fires hourly, so an hour's wait armed at 09:20:06 lands six
+ * seconds after the 10:20 firing and silently costs an hour. A real refusal
+ * looked exactly like this — 09:20 failed, 10:20 succeeded — and a first
+ * failure that lets the next firing through is the behaviour that keeps. The
+ * backoff proper starts at the second one, which is when it's actually earned.
+ */
+export const BACKOFF_MINUTES = [45, 3 * 60, 6 * 60, 12 * 60, 24 * 60];
 
 /**
  * The floor for a failure that needs a person (exit code 2 — expired cookie,
@@ -24,9 +33,9 @@ export const BACKOFF_HOURS = [1, 3, 6, 12, 24];
  * re-pastes a cookie or clears a prompt, so an early attempt is a knock with
  * no question behind it.
  */
-export const ATTENTION_MIN_HOURS = 6;
+export const ATTENTION_MIN_MINUTES = 6 * 60;
 
-const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
 
 /**
  * The failure count and cooling-off time to store after an attempt ends.
@@ -43,9 +52,12 @@ export function nextBackoff(prev, outcome, { code = 1, now = new Date() } = {}) 
   if (outcome !== 'failed') return { failures, retryAfter: prev?.retryAfter ?? null };
 
   const next = failures + 1;
-  const rung = BACKOFF_HOURS[Math.min(next, BACKOFF_HOURS.length) - 1];
-  const hours = Math.max(rung, code === 2 ? ATTENTION_MIN_HOURS : 0);
-  return { failures: next, retryAfter: new Date(now.getTime() + hours * HOUR_MS).toISOString() };
+  const rung = BACKOFF_MINUTES[Math.min(next, BACKOFF_MINUTES.length) - 1];
+  const minutes = Math.max(rung, code === 2 ? ATTENTION_MIN_MINUTES : 0);
+  return {
+    failures: next,
+    retryAfter: new Date(now.getTime() + minutes * MINUTE_MS).toISOString(),
+  };
 }
 
 /**

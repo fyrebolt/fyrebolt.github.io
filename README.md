@@ -290,9 +290,12 @@ fires hourly and stops as soon as a run succeeds — right for a Mac that might 
 asleep at 09:20, wrong once Instagram has actually said no, because then the
 firings aren't catching a missed slot, they're knocking on a door that was just
 shut. A failure now arms a cooling-off period, and the unattended job honours it:
-1 hour after the first failure in a row, then 3, 6, 12 and 24. A failure that
+45 minutes after the first failure in a row, then 3, 6, 12 and 24 hours. A failure that
 needs a person (expired cookie, checkpoint) never retries inside 6 hours, because
-nothing changes until someone re-pastes a cookie. Success clears the count, a git
+nothing changes until someone re-pastes a cookie. The first rung is 45 minutes
+rather than an hour so a single refusal doesn't cost the next hourly firing —
+this job has recovered on its own that way, refused at 09:20 and through at
+10:20, and an hour armed at 09:20:06 would have missed it by six seconds. Success clears the count, a git
 failure doesn't arm one — that's not Instagram's fault — and **a person is never
 held**: "Update now", a scheduled one-off and `--force` all run immediately. The
 panel shows the hold, so a waiting job doesn't read as a dead one.

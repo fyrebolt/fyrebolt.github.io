@@ -8,26 +8,35 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ATTENTION_MIN_HOURS,
-  BACKOFF_HOURS,
+  ATTENTION_MIN_MINUTES,
+  BACKOFF_MINUTES,
   coolingOff,
   nextBackoff,
 } from '../scripts/lib/instagram-backoff.mjs';
 
 const NOW = new Date('2026-08-12T18:00:00Z');
-const hoursBetween = (iso) => (new Date(iso).getTime() - NOW.getTime()) / 3_600_000;
+const minutesBetween = (iso) => (new Date(iso).getTime() - NOW.getTime()) / 60_000;
 
 test('the ladder lengthens with each failure in a row', () => {
   let prev = null;
   const waits = [];
-  for (let i = 0; i < BACKOFF_HOURS.length + 2; i++) {
+  for (let i = 0; i < BACKOFF_MINUTES.length + 2; i++) {
     prev = nextBackoff(prev, 'failed', { now: NOW });
-    waits.push(hoursBetween(prev.retryAfter));
+    waits.push(minutesBetween(prev.retryAfter));
   }
-  assert.deepEqual(waits.slice(0, BACKOFF_HOURS.length), BACKOFF_HOURS);
+  assert.deepEqual(waits.slice(0, BACKOFF_MINUTES.length), BACKOFF_MINUTES);
   // Past the end of the ladder it holds at the longest rung rather than growing.
-  const last = BACKOFF_HOURS[BACKOFF_HOURS.length - 1];
-  assert.deepEqual(waits.slice(BACKOFF_HOURS.length), [last, last]);
+  const last = BACKOFF_MINUTES[BACKOFF_MINUTES.length - 1];
+  assert.deepEqual(waits.slice(BACKOFF_MINUTES.length), [last, last]);
+});
+
+test('one failure does not cost the next hourly firing', () => {
+  // The case this is built from: 09:20 was refused, 10:20 succeeded on its own.
+  // An hour-long first rung armed at 09:20:06 would land six seconds after the
+  // 10:20 firing and silently push recovery to 11:20.
+  const failedAt = new Date('2026-08-13T09:20:06-07:00');
+  const { retryAfter } = nextBackoff(null, 'failed', { now: failedAt });
+  assert.ok(new Date(retryAfter) < new Date('2026-08-13T10:20:00-07:00'));
 });
 
 test('a failure that needs a person waits at least the attention floor', () => {
@@ -35,13 +44,13 @@ test('a failure that needs a person waits at least the attention floor', () => {
   // re-pastes one, so an earlier attempt is a knock with no question behind it.
   const first = nextBackoff(null, 'failed', { code: 2, now: NOW });
   assert.equal(first.failures, 1);
-  assert.equal(hoursBetween(first.retryAfter), ATTENTION_MIN_HOURS);
+  assert.equal(minutesBetween(first.retryAfter), ATTENTION_MIN_MINUTES);
 });
 
 test('a long ladder rung still wins over the attention floor', () => {
   const prev = { failures: 4 };
   const out = nextBackoff(prev, 'failed', { code: 2, now: NOW });
-  assert.equal(hoursBetween(out.retryAfter), BACKOFF_HOURS[4]);
+  assert.equal(minutesBetween(out.retryAfter), BACKOFF_MINUTES[4]);
 });
 
 test('success clears the hold', () => {
