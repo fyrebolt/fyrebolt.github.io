@@ -166,6 +166,13 @@ export interface LastAttempt {
   reason: string | null;
   hint: string | null;
   summary: string | null;
+  /**
+   * Consecutive failures, and how long the unattended job is holding off as a
+   * result. Absent on a healthy record — the hourly job backs off after a
+   * refusal rather than knocking every hour (scripts/lib/instagram-backoff.mjs).
+   */
+  failures?: number;
+  retryAfter?: string;
 }
 
 /**

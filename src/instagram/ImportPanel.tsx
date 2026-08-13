@@ -144,6 +144,12 @@ function CollectionDetails({ data, session }: { data: TrackerData; session: Agen
     return () => clearInterval(id);
   }, []);
 
+  // Owned here rather than by the row that shows it: a cooling-off period
+  // contradicts "Today" and "Next pull" below, and those rows have to be able
+  // to see it.
+  const attempt = useLastAttempt(session);
+  const held = holdUntil(attempt, now);
+
   const collected = new Date(data.generatedAt);
   // A file with no schedule of its own still gets a time, from the default the
   // installer uses — flagged as assumed rather than presented as fact.
@@ -166,7 +172,7 @@ function CollectionDetails({ data, session }: { data: TrackerData; session: Agen
         <span className="ig-live-dim">({timeAgo(data.generatedAt)})</span>
       </dd>
 
-      <LastAttemptRow session={session} />
+      <LastAttemptRow attempt={attempt} now={now} />
 
       <dt>How</dt>
       <dd>
@@ -184,6 +190,8 @@ function CollectionDetails({ data, session }: { data: TrackerData; session: Agen
       <dd>
         {next.satisfied ? (
           <span className="ig-live-done">✓ Daily pull complete</span>
+        ) : held ? (
+          <span className="ig-live-pending">Not in yet — the job is holding off after a refusal</span>
         ) : (
           <span className="ig-live-pending">Not in yet — the job is still retrying</span>
         )}
@@ -197,9 +205,12 @@ function CollectionDetails({ data, session }: { data: TrackerData; session: Agen
         </strong>{' '}
         <span className="ig-live-dim">({formatRelative(next.at, now)})</span>
         <span className="ig-live-note">
-          {next.satisfied
-            ? 'Today is done, so the hourly firings until then will no-op.'
-            : 'This is the next retry — it stops as soon as one succeeds.'}
+          {held
+            ? `Firings before ${formatClock(held, schedule.timeZone)} will no-op — the job is ` +
+              'backing off after a refusal, not following the schedule.'
+            : next.satisfied
+              ? 'Today is done, so the hourly firings until then will no-op.'
+              : 'This is the next retry — it stops as soon as one succeeds.'}
         </span>
       </dd>
 
@@ -231,7 +242,7 @@ const ATTEMPT_POLL_MS = 20_000;
  * published site has no way to hear about it. Renders nothing anywhere else,
  * which is the same deal the Update now button makes.
  */
-function LastAttemptRow({ session }: { session: AgentSession }) {
+function useLastAttempt(session: AgentSession): LastAttempt | null {
   const { available, token } = session;
   const [attempt, setAttempt] = useState<LastAttempt | null>(null);
 
@@ -250,6 +261,10 @@ function LastAttemptRow({ session }: { session: AgentSession }) {
     };
   }, [available, token]);
 
+  return attempt;
+}
+
+function LastAttemptRow({ attempt, now }: { attempt: LastAttempt | null; now: Date }) {
   if (!attempt) return null;
   const { tone, headline } = describeOutcome(attempt);
   // A failure explains itself; a success has counts instead. Never both.
@@ -272,8 +287,33 @@ function LastAttemptRow({ session }: { session: AgentSession }) {
           {detail ? ` — ${detail}` : ''}
         </span>
         {attempt.hint && <span className="ig-live-note">{attempt.hint}</span>}
+        <HoldNote attempt={attempt} now={now} />
       </dd>
     </>
+  );
+}
+
+/**
+ * "Holding off until 9:20 PM" — the hourly job is waiting on purpose.
+ *
+ * Without this the panel reads the same whether the job is about to try again
+ * or has decided not to for the next twelve hours, and the "Next pull" row
+ * above is actively wrong about it: that row knows the installed schedule, not
+ * that this refusal took the next few firings out of play.
+ */
+function HoldNote({ attempt, now }: { attempt: LastAttempt; now: Date }) {
+  const until = holdUntil(attempt, now);
+  if (!until) return null;
+
+  const failures = attempt.failures ?? 1;
+  return (
+    <span className="ig-live-note">
+      <span className="ig-live-pending">
+        Holding off until {until.toLocaleString([], { hour: 'numeric', minute: '2-digit' })}
+      </span>{' '}
+      — {failures} failure{failures === 1 ? '' : 's'} in a row, so the hourly job is backing off
+      rather than retrying. Update now still runs immediately.
+    </span>
   );
 }
 
@@ -304,4 +344,18 @@ function describeOutcome(attempt: LastAttempt): { tone: string; headline: string
     default:
       return { tone: 'ig-live-fail', headline: '✗ Failed' };
   }
+}
+
+/**
+ * When the unattended job is holding off until, or null when it isn't.
+ *
+ * A record written before backoff existed carries no `retryAfter`, and one
+ * whose hold has expired is no different from one that never had it — both
+ * read as "free to run", never as a hold of unknown length.
+ */
+function holdUntil(attempt: LastAttempt | null, now: Date): Date | null {
+  if (!attempt?.retryAfter) return null;
+  const until = new Date(attempt.retryAfter);
+  if (Number.isNaN(until.getTime()) || until <= now) return null;
+  return until;
 }
