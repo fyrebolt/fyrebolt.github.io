@@ -278,6 +278,23 @@ async function getJson(url, creds, referer, attempt = 1) {
     throw requestFailed(`Network error after ${attempt} attempts: ${e.message}`);
   }
 
+  // Read the body before judging the status code. When Instagram declines it
+  // usually says why, in JSON, and its own words beat anything inferred from the
+  // number: a 401 carrying "Please wait a few minutes before you try again" is a
+  // rate limit on a perfectly good session, and answering that with "re-paste
+  // your cookie" sends you off to fix something that isn't broken.
+  const text = await res.text();
+  const json = parseJson(text);
+
+  const declined = explainDecline(json);
+  if (declined) {
+    // The whole body goes to the run log: the flags around the message
+    // (require_login, status) are what tell a wait from a dead session, and
+    // they're worth having when a new phrasing turns up.
+    log(`Instagram declined the request: ${text.slice(0, 400)}`);
+    die(declined.code, declined.message, declined.hint);
+  }
+
   if (res.status === 401 || res.status === 403) {
     // Phrased to read well both in a terminal and as a notification body.
     die(
@@ -307,11 +324,7 @@ async function getJson(url, creds, referer, attempt = 1) {
   // and that says nothing about the next request.
   if (!res.ok) throw requestFailed(`HTTP ${res.status} from ${url}`, res.status);
 
-  const text = await res.text();
-  let json;
-  try {
-    json = JSON.parse(text);
-  } catch {
+  if (!json) {
     // A login wall or challenge page returns HTML rather than JSON.
     die(
       2,
@@ -321,16 +334,76 @@ async function getJson(url, creds, referer, attempt = 1) {
         '  "node scripts/instagram-setup.mjs" with a fresh cookie header.',
     );
   }
-  if (json?.message === 'checkpoint_required' || json?.message === 'challenge_required') {
-    die(
-      2,
-      'Instagram wants a security checkpoint cleared.',
-      'Open instagram.com in a browser, confirm the prompt, then re-paste the cookie:\n' +
-        '      node scripts/instagram-setup.mjs',
-    );
-  }
   return json;
 }
+
+/** The body as JSON, or null when it isn't JSON at all (a login wall is HTML). */
+function parseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Instagram saying no in its own words, turned into a failure — or null when
+ * the body isn't a refusal at all.
+ *
+ * Worth its own function because the status code lies about these. The refusal
+ *
+ *     {"message":"Please wait a few minutes before you try again.",
+ *      "require_login":true,"status":"fail"}
+ *
+ * arrives as a 401, which the code above would otherwise read as an expired
+ * cookie and answer with "re-paste it" — sending you to replace a session that
+ * is working fine, and to re-run immediately, which is the one thing that makes
+ * a wait longer. So the message is quoted verbatim into the notification and the
+ * Last attempt line, and `require_login` is reported rather than acted on: it
+ * rides along with these waits even when the session is intact.
+ *
+ * What this deliberately does *not* key on is `status: "fail"` by itself. That
+ * also appears on a 400 for a single profile Instagram can't render — a
+ * URL-scoped answer the caller is right to shrug off and continue past — and
+ * treating those as session-level would kill the whole run over one bad handle,
+ * which is a bug this tracker has already had once.
+ */
+export function explainDecline(json) {
+  const said = typeof json?.message === 'string' ? json.message.trim() : '';
+  if (!said) return null;
+
+  if (said === 'checkpoint_required' || said === 'challenge_required') {
+    return {
+      code: 2,
+      message: 'Instagram wants a security checkpoint cleared.',
+      hint:
+        'Open instagram.com in a browser, confirm the prompt, then re-paste the cookie:\n' +
+        '      node scripts/instagram-setup.mjs',
+    };
+  }
+
+  // "Wait a few minutes" is a rate limit: transient, so exit 1 and let the next
+  // scheduled attempt have it. A demand to log in wants a person.
+  const waiting = THROTTLED_RE.test(said);
+  if (!waiting && said !== 'login_required' && !json.require_login) return null;
+
+  return {
+    code: waiting ? 1 : 2,
+    message: `Instagram declined: “${said}”${
+      json.require_login ? ' (it also asked for a fresh login)' : ''
+    }`,
+    hint: waiting
+      ? 'That is a rate limit, not a dead cookie — the session is probably fine.\n' +
+        '  Leave it alone for a few hours rather than re-running: every retry while it is\n' +
+        '  saying this extends the block. If it still says it tomorrow, re-paste the cookie\n' +
+        '  with "node scripts/instagram-setup.mjs".'
+      : 'Log in to instagram.com in a browser, clear anything it asks for, then run:\n' +
+        '      node scripts/instagram-setup.mjs',
+  };
+}
+
+/** How Instagram phrases "not now" — matched on the message, not the status. */
+const THROTTLED_RE = /please wait|wait a few|try again|too many|rate limit/i;
 
 // ===== Instagram reads =====
 
