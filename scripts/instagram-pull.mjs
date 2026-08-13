@@ -47,7 +47,8 @@ import {
   profileReferer,
 } from './lib/instagram-session.mjs';
 import { readInstalledSchedule } from './lib/instagram-schedule.mjs';
-import { attemptPath, triggerFrom, writeAttempt } from './lib/instagram-attempt.mjs';
+import { attemptPath, readAttempt, triggerFrom, writeAttempt } from './lib/instagram-attempt.mjs';
+import { coolingOff, nextBackoff } from './lib/instagram-backoff.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '..');
@@ -141,12 +142,16 @@ function writeState(next) {
  */
 function recordAttempt(outcome, extra = {}) {
   if (DRY_RUN) return;
+  // `code` steers the backoff (2 = needs a person) but isn't itself worth
+  // storing — the reason already says what happened, in words.
+  const { code, ...rest } = extra;
   writeAttempt(ATTEMPT, {
     at: STARTED_AT,
     finishedAt: new Date().toISOString(),
     trigger: TRIGGER,
     outcome,
-    ...extra,
+    ...rest,
+    ...nextBackoff(readAttempt(ATTEMPT), outcome, { code }),
   });
 }
 
@@ -728,6 +733,23 @@ async function main() {
     return;
   }
 
+  // Instagram has refused recently and the hourly firings are what turn one
+  // refusal into a day of knocking. Only the unattended job is held: a person
+  // pressing "Update now" — or passing --force — is answered.
+  //
+  // Deliberately records nothing. Nothing was attempted, so the stored record
+  // still describes the last real attempt, and overwriting it with a skip would
+  // throw away the reason the hold exists. `retryAfter` is what the page reads
+  // to say the job is waiting rather than dead.
+  const held = ONCE_DAILY && !DRY_RUN && !FORCE ? coolingOff(readAttempt(ATTEMPT)) : null;
+  if (held) {
+    log(
+      `holding off until ${held.until.toISOString()} after ${held.failures} failure(s) in a row` +
+        (held.reason ? ` — ${held.reason}` : ''),
+    );
+    return;
+  }
+
   const creds = loadSecrets();
   const nowIso = new Date().toISOString();
   const firstRealRun = !prev || prev.sample || !prev.followers?.length;
@@ -1002,7 +1024,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     if (e instanceof PullError) {
       console.error(`\n✗ ${e.message}`);
       if (e.hint) console.error(`\n  ${e.hint}\n`);
-      recordAttempt('failed', { reason: e.message, hint: e.hint });
+      recordAttempt('failed', { reason: e.message, hint: e.hint, code: e.code });
       // Exit 2 means "needs your attention" (expired cookie, bad config); 1 is
       // transient (throttled, network) and the next hourly attempt may well succeed.
       notifyOncePerDay(

@@ -21,6 +21,8 @@ import {
   publishDecision,
   isPushRejection,
   explainDecline,
+  pagingNeeded,
+  FULL_READ_DAYS,
 } from '../scripts/instagram-pull.mjs';
 
 const P = (username, extra = {}) => ({ username, ...extra });
@@ -718,5 +720,55 @@ test('explainDecline', async (t) => {
     }
     // A message alone isn't one either — Instagram uses that field on success.
     assert.equal(explainDecline({ message: 'ok', status: 'ok' }), null);
+  });
+});
+
+test('pagingNeeded', async (t) => {
+  const NOW = new Date('2026-08-12T18:00:00Z');
+  const ago = (days) => new Date(NOW.getTime() - days * 86_400_000).toISOString();
+  const stored = (extra = {}) => ({
+    followers: Array.from({ length: 912 }, (_, i) => ({ username: `f${i}` })),
+    following: Array.from({ length: 870 }, (_, i) => ({ username: `g${i}` })),
+    pagedAt: ago(1),
+    ...extra,
+  });
+  const profile = (followerCount, followingCount) => ({ followerCount, followingCount });
+
+  await t.test('skips the lists when both totals are where it left them', () => {
+    const out = pagingNeeded(profile(912, 870), stored(), NOW);
+    assert.equal(out.needed, false);
+    assert.match(out.why, /unchanged/);
+  });
+
+  await t.test('pages when either total has moved', () => {
+    assert.equal(pagingNeeded(profile(913, 870), stored(), NOW).needed, true);
+    assert.equal(pagingNeeded(profile(912, 869), stored(), NOW).needed, true);
+    assert.match(pagingNeeded(profile(913, 870), stored(), NOW).why, /912→913/);
+  });
+
+  await t.test('pages anyway once the full read is old enough', () => {
+    // The bound on what a stable total can hide: one follow and one unfollow on
+    // the same day net zero, and this is what stops that hiding indefinitely.
+    const out = pagingNeeded(profile(912, 870), stored({ pagedAt: ago(FULL_READ_DAYS) }), NOW);
+    assert.equal(out.needed, true);
+    assert.match(out.why, /since the last full read/);
+  });
+
+  await t.test('a file predating pagedAt falls back to generatedAt', () => {
+    const old = stored({ pagedAt: undefined, generatedAt: ago(0.5) });
+    assert.equal(pagingNeeded(profile(912, 870), old, NOW).needed, false);
+    const stale = stored({ pagedAt: undefined, generatedAt: ago(5) });
+    assert.equal(pagingNeeded(profile(912, 870), stale, NOW).needed, true);
+  });
+
+  await t.test('anything unknown means read the lists', () => {
+    // Never the other way round: skipping on a guess would write a day of
+    // "nothing changed" that nobody checked.
+    assert.equal(pagingNeeded(profile(912, 870), null, NOW).needed, true);
+    assert.equal(pagingNeeded(profile(912, 870), stored({ sample: true }), NOW).needed, true);
+    assert.equal(pagingNeeded(profile(null, 870), stored(), NOW).needed, true);
+    assert.equal(pagingNeeded(profile(912, undefined), stored(), NOW).needed, true);
+    assert.equal(pagingNeeded(profile(912, 870), { followers: [] }, NOW).needed, true);
+    assert.equal(pagingNeeded(profile(912, 870), stored({ pagedAt: 'whenever' }), NOW).needed, true);
   });
 });

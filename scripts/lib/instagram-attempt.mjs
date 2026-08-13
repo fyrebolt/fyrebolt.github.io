@@ -71,6 +71,13 @@ export function normalizeAttempt(entry) {
     reason: text(entry.reason),
     hint: text(entry.hint),
     summary: text(entry.summary),
+    // How many failures in a row, and how long the unattended job is holding off
+    // as a result — see lib/instagram-backoff.mjs. Both are absent on a healthy
+    // record rather than zero/null, so an older file reads as "not holding off".
+    ...(Number.isInteger(entry.failures) && entry.failures > 0
+      ? { failures: entry.failures }
+      : {}),
+    ...(time(entry.retryAfter) ? { retryAfter: time(entry.retryAfter) } : {}),
   };
 }
 
