@@ -70,10 +70,10 @@ export default function AgentControls({
   // ===== The pull =====
 
   const beginPull = useCallback(
-    async (withToken: string) => {
+    async (withToken: string, repage = false) => {
       setBusy(true);
       setNote(null);
-      const res = await startPull(withToken);
+      const res = await startPull(withToken, repage);
       if (res.kind === 'badToken') {
         reject('pull');
         setBusy(false);
@@ -144,7 +144,9 @@ export default function AgentControls({
   /** Carry out an action with a token known to be good. */
   const perform = useCallback(
     (action: Action, withToken: string) => {
-      if (action === 'pull') return beginPull(withToken);
+      if (action === 'pull' || action === 'repage') {
+        return beginPull(withToken, action === 'repage');
+      }
       const at = usableDate(when);
       if (at) commitSchedule(withToken, at);
       else setPicking(true); // asked to schedule before choosing a time
@@ -269,13 +271,27 @@ export default function AgentControls({
           </button>
         </>
       ) : (
-        <button
-          className="ios-btn ios-btn-primary ig-agent-btn"
-          disabled={busy}
-          onClick={() => request('pull')}
-        >
-          ⟳ {busy ? 'Starting…' : 'Update now'}
-        </button>
+        <>
+          <button
+            className="ios-btn ios-btn-primary ig-agent-btn"
+            disabled={busy}
+            onClick={() => request('pull')}
+          >
+            ⟳ {busy ? 'Starting…' : 'Update now'}
+          </button>
+          {/* An ordinary pull trusts the totals: if neither has moved since the
+              last full read, it doesn't page the lists at all. This is the way
+              to say the totals are lying — a follow and an unfollow on the same
+              day net zero — so it pages them regardless. */}
+          <button
+            className="ios-btn ig-agent-btn"
+            disabled={busy}
+            onClick={() => request('repage')}
+            title="Page both lists even though the follower and following totals haven’t moved"
+          >
+            ⟳ Re-read lists
+          </button>
+        </>
       )}
 
       <button className="ios-btn ig-agent-btn" onClick={picking ? () => setPicking(false) : openPicker}>
@@ -418,7 +434,7 @@ export default function AgentControls({
   );
 }
 
-type Action = 'pull' | 'schedule';
+type Action = 'pull' | 'repage' | 'schedule';
 
 function RunningChip({ run }: { run: AgentStatus }) {
   const counts = [
