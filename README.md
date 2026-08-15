@@ -280,6 +280,39 @@ run, and stuck in the list forever. Two things settle it now:
   rather than checked. A *contradicted* event is never rescued this way:
   Instagram saying the relationship is live outranks a read that keeps missing it.
 
+#### Keeping the request footprint small
+
+Instagram flags accounts for looking automated, and the two things that make this
+job look that way are volume and persistence. Both are capped.
+
+**A refusal ends the day, rather than starting fourteen retries.** The LaunchAgent
+fires hourly and stops as soon as a run succeeds — right for a Mac that might be
+asleep at 09:20, wrong once Instagram has actually said no, because then the
+firings aren't catching a missed slot, they're knocking on a door that was just
+shut. A failure now arms a cooling-off period, and the unattended job honours it:
+45 minutes after the first failure in a row, then 3, 6, 12 and 24 hours. A failure that
+needs a person (expired cookie, checkpoint) never retries inside 6 hours, because
+nothing changes until someone re-pastes a cookie. The first rung is 45 minutes
+rather than an hour so a single refusal doesn't cost the next hourly firing —
+this job has recovered on its own that way, refused at 09:20 and through at
+10:20, and an hour armed at 09:20:06 would have missed it by six seconds. Success clears the count, a git
+failure doesn't arm one — that's not Instagram's fault — and **a person is never
+held**: "Update now", a scheduled one-off and `--force` all run immediately. The
+panel shows the hold, so a waiting job doesn't read as a dead one.
+
+**A quiet day costs one request instead of forty.** Paging is nearly the whole
+budget of a run — about one request per 50 accounts, twice over — and the profile
+read at the start already reports the authoritative totals. If neither total has
+moved since the last full read, there is nothing to diff, so the run stops there
+and writes the day's snapshot from what it already knows.
+
+The trade is deliberate and bounded: equal totals don't mean an unchanged *set* —
+one follow and one unfollow on the same day net zero — so the lists are re-paged
+in full every 2 days regardless. Churn hiding behind a stable total is still
+found; the only thing lost is the date it gets stamped with. `--force` always
+pages. On an account that changes most days this fires rarely, which is fine: the
+retry storm was the expensive part.
+
 #### The "Update now" button
 
 The deployed site is static, so the page itself can't pull anything — but a
@@ -583,6 +616,7 @@ There's no build step; run each from the repo root.
 | `gen_sample_instagram.mjs`<br>`gen_sample_linkedin.mjs` | **Sample data.** Regenerate the committed `history.json` each tracker ships with, so both apps are fully demoable with no session connected. Deterministic — the same run gives the same data. |
 | `lib/instagram-session.mjs` | Not a command. The cookie assembly and request headers that the pull and the agent both have to agree on, kept in one place so they can't drift apart. |
 | `lib/instagram-attempt.mjs` | Not a command. The note every run leaves behind — when, who asked, how it ended, why it failed — written by the pull and served to the page by the agent. Somewhere for the failures to go, since those write no `history.json`. |
+| `lib/instagram-backoff.mjs` | Not a command. How long the unattended job waits after a refusal, so one "please wait" doesn't become a day of hourly knocking. Holds the schedule back, never a person. |
 
 Both pull jobs take the same flags:
 

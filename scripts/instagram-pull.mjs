@@ -47,7 +47,8 @@ import {
   profileReferer,
 } from './lib/instagram-session.mjs';
 import { readInstalledSchedule } from './lib/instagram-schedule.mjs';
-import { attemptPath, triggerFrom, writeAttempt } from './lib/instagram-attempt.mjs';
+import { attemptPath, readAttempt, triggerFrom, writeAttempt } from './lib/instagram-attempt.mjs';
+import { coolingOff, nextBackoff } from './lib/instagram-backoff.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '..');
@@ -141,12 +142,16 @@ function writeState(next) {
  */
 function recordAttempt(outcome, extra = {}) {
   if (DRY_RUN) return;
+  // `code` steers the backoff (2 = needs a person) but isn't itself worth
+  // storing — the reason already says what happened, in words.
+  const { code, ...rest } = extra;
   writeAttempt(ATTEMPT, {
     at: STARTED_AT,
     finishedAt: new Date().toISOString(),
     trigger: TRIGGER,
     outcome,
-    ...extra,
+    ...rest,
+    ...nextBackoff(readAttempt(ATTEMPT), outcome, { code }),
   });
 }
 
@@ -728,6 +733,23 @@ async function main() {
     return;
   }
 
+  // Instagram has refused recently and the hourly firings are what turn one
+  // refusal into a day of knocking. Only the unattended job is held: a person
+  // pressing "Update now" — or passing --force — is answered.
+  //
+  // Deliberately records nothing. Nothing was attempted, so the stored record
+  // still describes the last real attempt, and overwriting it with a skip would
+  // throw away the reason the hold exists. `retryAfter` is what the page reads
+  // to say the job is waiting rather than dead.
+  const held = ONCE_DAILY && !DRY_RUN && !FORCE ? coolingOff(readAttempt(ATTEMPT)) : null;
+  if (held) {
+    log(
+      `holding off until ${held.until.toISOString()} after ${held.failures} failure(s) in a row` +
+        (held.reason ? ` — ${held.reason}` : ''),
+    );
+    return;
+  }
+
   const creds = loadSecrets();
   const nowIso = new Date().toISOString();
   const firstRealRun = !prev || prev.sample || !prev.followers?.length;
@@ -739,6 +761,17 @@ async function main() {
     `resolved id ${profile.id} · ${profile.followerCount ?? '?'} followers · ` +
       `${profile.followingCount ?? '?'} following`,
   );
+
+  // Paging is nearly the whole request budget of a run — roughly one request
+  // per 50 accounts, twice over. The profile read above already carries the
+  // authoritative totals, so a day on which neither has moved can usually be
+  // answered from that one request instead of forty.
+  const paging = FORCE ? { needed: true, why: '--force' } : pagingNeeded(profile, prev);
+  if (!paging.needed) {
+    log(`skipping the paging — ${paging.why}`);
+    return finishUnchanged(prev, nowIso);
+  }
+  log(`full read — ${paging.why}`);
 
   const followers = await fetchList(creds, profile.id, 'followers');
   await sleep(jitter() * 2);
@@ -805,6 +838,10 @@ async function main() {
   const data = {
     account: creds.account,
     generatedAt: nowIso,
+    // When the lists themselves were last read, as opposed to when the totals
+    // were last confirmed. pagingNeeded reads it to force a full read every
+    // couple of days regardless of the counts.
+    pagedAt: nowIso,
     sample: false,
     // Recorded on every write so the static page can say when the next attempt
     // is due. Re-read each time rather than remembered: a re-install at a
@@ -855,6 +892,100 @@ async function main() {
 
   // "Pulled but not published" is its own outcome: the numbers are safe on disk,
   // and the thing that needs fixing is git, not Instagram.
+  if (publishProblem) recordAttempt('unpublished', publishProblem);
+  else recordAttempt('ok', { summary });
+}
+
+/**
+ * Force a full read this often regardless of the counts.
+ *
+ * The bound on what the cheap path can hide. Equal totals do not mean an
+ * unchanged set — one follow and one unfollow on the same day nets zero — so
+ * skipping on equal counts trades a little accuracy for most of the requests.
+ * This caps the trade: churn that hides behind a stable total is still found,
+ * within two days, and the only thing lost is the date it's stamped with.
+ */
+export const FULL_READ_DAYS = 2;
+
+/**
+ * Does this run have to page the lists, or will the profile totals do?
+ *
+ * Always returns a `why`, because both answers get logged: a run that decided
+ * not to look should say what it decided on, and one that did should say what
+ * moved.
+ */
+export function pagingNeeded(profile, prev, now = new Date()) {
+  if (!prev || prev.sample || !prev.followers?.length) {
+    return { needed: true, why: 'no stored lists to compare against' };
+  }
+  const { followerCount, followingCount } = profile ?? {};
+  if (followerCount == null || followingCount == null) {
+    return { needed: true, why: 'the profile did not report both totals' };
+  }
+
+  const storedFollowers = prev.followers.length;
+  const storedFollowing = prev.following?.length ?? 0;
+  if (followerCount !== storedFollowers || followingCount !== storedFollowing) {
+    return {
+      needed: true,
+      why:
+        `totals moved (followers ${storedFollowers}→${followerCount}, ` +
+        `following ${storedFollowing}→${followingCount})`,
+    };
+  }
+
+  // Missing or unreadable means "never paged as far as this file knows", which
+  // is a reason to page rather than an excuse not to.
+  const last = new Date(prev.pagedAt ?? prev.generatedAt ?? NaN).getTime();
+  const days = Number.isNaN(last) ? Infinity : (now.getTime() - last) / 86_400_000;
+  if (days >= FULL_READ_DAYS) {
+    return {
+      needed: true,
+      why: `${Math.floor(days)} day(s) since the last full read of the lists`,
+    };
+  }
+
+  return {
+    needed: false,
+    why: `totals unchanged at ${followerCount} followers · ${followingCount} following`,
+  };
+}
+
+/**
+ * Close out a run that confirmed the totals without reading the lists.
+ *
+ * Everything about the people is carried over untouched — the point is that
+ * nothing about them was learned. What does change is `generatedAt` and the
+ * day's snapshot, so the page can say the tracker is alive and today's numbers
+ * are in, which is true: they were read from Instagram, just cheaply.
+ */
+function finishUnchanged(prev, nowIso) {
+  const summary =
+    `followers ${prev.followers.length} · following ${prev.following?.length ?? 0} · ` +
+    'totals unchanged, lists not re-read';
+  log(summary);
+
+  if (DRY_RUN) {
+    log('dry run: history.json not written');
+    return;
+  }
+
+  const data = {
+    ...prev,
+    generatedAt: nowIso,
+    schedule: readInstalledSchedule() ?? undefined,
+    snapshots: appendSnapshot(prev.snapshots, {
+      t: nowIso,
+      followers: prev.followers.length,
+      following: prev.following?.length ?? 0,
+    }),
+  };
+
+  mkdirSync(dirname(OUT), { recursive: true });
+  writeFileSync(OUT, JSON.stringify(data, null, 2) + '\n');
+  log(`wrote ${OUT}`);
+
+  const publishProblem = COMMIT ? commitAndPush(0, 0) : null;
   if (publishProblem) recordAttempt('unpublished', publishProblem);
   else recordAttempt('ok', { summary });
 }
@@ -1002,7 +1133,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     if (e instanceof PullError) {
       console.error(`\n✗ ${e.message}`);
       if (e.hint) console.error(`\n  ${e.hint}\n`);
-      recordAttempt('failed', { reason: e.message, hint: e.hint });
+      recordAttempt('failed', { reason: e.message, hint: e.hint, code: e.code });
       // Exit 2 means "needs your attention" (expired cookie, bad config); 1 is
       // transient (throttled, network) and the next hourly attempt may well succeed.
       notifyOncePerDay(
