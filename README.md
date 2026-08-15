@@ -309,9 +309,14 @@ and writes the day's snapshot from what it already knows.
 The trade is deliberate and bounded: equal totals don't mean an unchanged *set* —
 one follow and one unfollow on the same day net zero — so the lists are re-paged
 in full every 2 days regardless. Churn hiding behind a stable total is still
-found; the only thing lost is the date it gets stamped with. `--force` always
-pages. On an account that changes most days this fires rarely, which is fine: the
-retry storm was the expensive part.
+found; the only thing lost is the date it gets stamped with. On an account that
+changes most days this fires rarely, which is fine: the retry storm was the
+expensive part.
+
+And when you know the totals are lying, **Re-read lists** — next to "Update now"
+— pages both regardless. `--repage` does the same from a terminal. Deliberately
+not `--force`: that one also overrides the completeness guard, and a button has
+no business switching off the protection against recording phantom unfollows.
 
 #### The "Update now" button
 
