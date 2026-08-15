@@ -20,6 +20,7 @@
 //   node scripts/instagram-pull.mjs --dry-run   # pull, print a summary, write nothing
 //   node scripts/instagram-pull.mjs --commit    # write, then git commit + push
 //   node scripts/instagram-pull.mjs --force     # write even if the read looks partial
+//   node scripts/instagram-pull.mjs --repage    # page the lists even if the totals match
 //   node scripts/instagram-pull.mjs --once-daily  # no-op if today already succeeded
 //   node scripts/instagram-pull.mjs --trigger=scheduled   # label the attempt record
 //
@@ -75,6 +76,16 @@ const args = new Set(argv);
 const DRY_RUN = args.has('--dry-run');
 const COMMIT = args.has('--commit');
 const FORCE = args.has('--force');
+/**
+ * Page the lists even when the totals say nothing moved.
+ *
+ * Deliberately not `--force`, which also overrides the completeness guard: the
+ * two have nothing to do with each other, and the button behind this must not
+ * be able to switch off the protection against recording phantom unfollows.
+ * This one only answers "I know something changed even though the numbers
+ * match" — one follow and one unfollow the same day net zero.
+ */
+const REPAGE = args.has('--repage');
 const NO_NOTIFY = args.has('--no-notify');
 const ONCE_DAILY = args.has('--once-daily');
 /** 'automatic' | 'scheduled' | 'manual' — recorded with the attempt. */
@@ -766,7 +777,10 @@ async function main() {
   // per 50 accounts, twice over. The profile read above already carries the
   // authoritative totals, so a day on which neither has moved can usually be
   // answered from that one request instead of forty.
-  const paging = FORCE ? { needed: true, why: '--force' } : pagingNeeded(profile, prev);
+  const paging =
+    FORCE || REPAGE
+      ? { needed: true, why: REPAGE ? 'asked for a full re-read' : '--force' }
+      : pagingNeeded(profile, prev);
   if (!paging.needed) {
     log(`skipping the paging — ${paging.why}`);
     return finishUnchanged(prev, nowIso);
