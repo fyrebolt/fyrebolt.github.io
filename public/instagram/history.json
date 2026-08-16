@@ -1,6 +1,6 @@
 {
   "account": "hastinchen",
-  "generatedAt": "2026-08-16T04:01:49.074Z",
+  "generatedAt": "2026-08-16T16:27:21.539Z",
   "pagedAt": "2026-08-16T03:55:36.339Z",
   "sample": false,
   "schedule": {
@@ -1921,7 +1921,7 @@
       "following": 870
     },
     {
-      "t": "2026-08-16T04:01:49.074Z",
+      "t": "2026-08-16T16:27:21.539Z",
       "followers": 913,
       "following": 871
     }
