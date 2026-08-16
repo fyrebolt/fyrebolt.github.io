@@ -12,6 +12,7 @@
 //   GET  /attempt  → how the last attempt ended, and why       (token required)
 //   GET  /history  → the freshly written history.json          (token required)
 //   POST /pull     → start a pull, returns immediately         (token required)
+//                    ?repage=1 pages the lists even if the totals match
 //   POST /cancel   → stop the running pull                     (token required)
 //   GET  /schedule → the one-off pull that's armed, if any     (token required)
 //   POST /schedule → arm one for a given time, or cancel it    (token required)
@@ -227,7 +228,7 @@ function send(res, status, body, origin) {
 
 // ===== The pull =====
 
-function startPull(kind) {
+function startPull(kind, repage = false) {
   state.running = true;
   state.startedAt = new Date().toISOString();
   state.finishedAt = null;
@@ -241,14 +242,17 @@ function startPull(kind) {
   state.cancelled = false;
   trigger = kind;
 
-  // Fixed argv — nothing from the request reaches the child except which of the
-  // two buttons pressed it, which is checked against a fixed list before it gets
-  // here and only ever ends up in a log line.
+  // Fixed argv — nothing from the request reaches the child except which button
+  // pressed it and whether it asked for a full re-read. The first is checked
+  // against a fixed list before it gets here; the second is a boolean, so
+  // neither can carry a value of its own into the command line.
   //
   // detached so the pull becomes its own process group leader: it spawns git,
   // which spawns more, and "stop it" has to mean the whole tree rather than the
   // node process with a push still running underneath it.
-  child = spawn(process.execPath, [PULL, '--commit', `--trigger=${kind}`], {
+  const argv = [PULL, '--commit', `--trigger=${kind}`];
+  if (repage) argv.push('--repage');
+  child = spawn(process.execPath, argv, {
     cwd: REPO,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
@@ -525,8 +529,11 @@ const server = createServer((req, res) => {
         origin,
       );
     }
-    log(`starting pull (requested by ${origin})`);
-    startPull('manual');
+    // A boolean, compared rather than parsed: the query string never becomes an
+    // argument, it only chooses between two fixed argument lists.
+    const repage = url.searchParams.get('repage') === '1';
+    log(`starting ${repage ? 'full re-read' : 'pull'} (requested by ${origin})`);
+    startPull('manual', repage);
     return send(res, 202, { started: true }, origin);
   }
 

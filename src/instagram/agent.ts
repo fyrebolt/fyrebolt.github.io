@@ -93,11 +93,16 @@ export type StartResult =
 /**
  * Ask the agent to run a pull. The custom header is deliberate: it forces a CORS
  * preflight, which the agent refuses for any origin outside its allowlist.
+ *
+ * `repage` pages both lists even when the totals haven't moved — the answer to
+ * "I know something changed even though the numbers are the same", which is a
+ * follow and an unfollow on the same day cancelling out. It does not touch the
+ * completeness guard; that stays on whatever the button says.
  */
-export async function startPull(token: string): Promise<StartResult> {
+export async function startPull(token: string, repage = false): Promise<StartResult> {
   try {
     const res = await withTimeout(
-      '/pull',
+      repage ? '/pull?repage=1' : '/pull',
       { method: 'POST', headers: { 'x-tracker-token': token } },
       8000,
     );
