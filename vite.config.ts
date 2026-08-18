@@ -31,6 +31,8 @@ export default defineConfig({
         instagram: resolve(__dirname, 'instagram/index.html'),
         // LinkedIn Tracker (served at /linkedin/)
         linkedin: resolve(__dirname, 'linkedin/index.html'),
+        // Drift → pointer-lock cursor game (served at /game/)
+        game: resolve(__dirname, 'game/index.html'),
       },
     },
   },

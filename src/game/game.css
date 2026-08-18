@@ -1,0 +1,345 @@
+/* ===== Drift ===== */
+/* The arena is a dark slab dropped into the otherwise-light iOS shell, so the
+   HUD here is styled against black rather than reusing the glass tokens. */
+
+.game-stage {
+  position: relative;
+  width: 100%;
+  height: clamp(260px, 50dvh, 520px);
+  border-radius: 22px;
+  overflow: hidden;
+  background: #070912;
+  box-shadow:
+    0 24px 60px -24px rgba(8, 12, 26, 0.75),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  isolation: isolate;
+  touch-action: none;
+}
+
+.game-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: none;
+}
+
+/* ===== Timer ===== */
+
+.game-timebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  z-index: 2;
+}
+.game-timebar-fill {
+  height: 100%;
+  width: 100%;
+  transform-origin: left center;
+  background: #5ac8fa;
+  will-change: transform;
+}
+
+/* ===== HUD ===== */
+
+.game-hud {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  pointer-events: none;
+  z-index: 2;
+  font-variant-numeric: tabular-nums;
+}
+.game-hud-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.game-score {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  color: #f2f7ff;
+  text-shadow: 0 2px 14px rgba(90, 200, 250, 0.45);
+}
+.game-sub {
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  font-weight: 600;
+  color: rgba(200, 216, 240, 0.5);
+}
+.game-hud-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.game-combo {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffd60a;
+  text-shadow: 0 2px 14px rgba(255, 214, 10, 0.5);
+  animation: game-combo-pop 0.3s var(--ease-spring);
+}
+@keyframes game-combo-pop {
+  from {
+    transform: scale(1.45);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+.game-shields {
+  display: inline-flex;
+  gap: 5px;
+}
+.game-shields i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+.game-shields i.on {
+  background: #ff375f;
+  box-shadow: 0 0 10px rgba(255, 55, 95, 0.75);
+}
+
+/* ===== Active-warp chips ===== */
+
+.game-warps {
+  position: absolute;
+  left: 16px;
+  bottom: 14px;
+  display: flex;
+  gap: 8px;
+  z-index: 2;
+  pointer-events: none;
+}
+.game-chip {
+  position: relative;
+  overflow: hidden;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chip);
+  background: rgba(10, 14, 26, 0.72);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chip) 55%, transparent);
+  animation: game-chip-in 0.3s var(--ease-spring) both;
+}
+.game-chip > span {
+  position: relative;
+}
+/* Remaining duration, draining left to right behind the label. */
+.game-chip-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  background: color-mix(in srgb, var(--chip) 22%, transparent);
+  transition: transform 0.12s linear;
+}
+@keyframes game-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.9);
+  }
+}
+
+/* ===== Warp banner ===== */
+
+.game-banner {
+  position: absolute;
+  left: 50%;
+  top: 38%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+  pointer-events: none;
+  z-index: 3;
+  animation: game-banner 2s var(--ease-out-ios) both;
+}
+.game-banner strong {
+  font-size: clamp(30px, 6vw, 52px);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-shadow: 0 0 34px currentColor;
+}
+.game-banner span {
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  color: rgba(235, 243, 255, 0.82);
+}
+@keyframes game-banner {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.82);
+    filter: blur(6px);
+  }
+  14% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+    filter: blur(0);
+  }
+  72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -62%) scale(1.04);
+  }
+}
+
+/* ===== Overlays ===== */
+
+.game-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: radial-gradient(120% 100% at 50% 40%, rgba(7, 9, 18, 0.66), rgba(7, 9, 18, 0.9));
+  backdrop-filter: blur(3px);
+  cursor: pointer;
+  animation: game-fade 0.35s var(--ease-out-ios) both;
+}
+@keyframes game-fade {
+  from {
+    opacity: 0;
+  }
+}
+.game-card {
+  max-width: 460px;
+  text-align: center;
+  color: #e9f0ff;
+  cursor: default;
+  animation: game-card-in 0.4s var(--ease-spring) both;
+}
+@keyframes game-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+}
+.game-title {
+  font-size: clamp(44px, 9vw, 76px);
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  margin-left: 0.22em;
+  line-height: 1;
+  background: linear-gradient(100deg, #7ff0ff 0%, #a9b6ff 45%, #ff7ab6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.game-heading {
+  font-size: clamp(26px, 5vw, 38px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.game-final {
+  font-size: clamp(40px, 8vw, 62px);
+  font-weight: 800;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+  color: #7ff0ff;
+  text-shadow: 0 0 30px rgba(127, 240, 255, 0.35);
+}
+.game-tag {
+  margin-top: 6px;
+  font-size: 14px;
+  color: rgba(206, 219, 242, 0.72);
+}
+.game-rules {
+  margin: 16px auto 20px;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 7px;
+  max-width: 400px;
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(206, 219, 242, 0.78);
+}
+.game-rules b {
+  color: #e9f0ff;
+}
+.game-card .ios-btn {
+  margin-top: 16px;
+}
+.game-best {
+  margin-top: 10px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(206, 219, 242, 0.5);
+}
+
+/* ===== Chrome ===== */
+
+.game-mute {
+  border: 0;
+  background: transparent;
+  font-size: 17px;
+  line-height: 1;
+  padding: 6px 8px;
+  border-radius: 12px;
+  transition: background-color 0.18s ease, transform 0.3s var(--ease-spring);
+}
+.game-mute:hover {
+  background: rgba(0, 122, 255, 0.08);
+}
+.game-mute:active {
+  transform: scale(0.92);
+}
+
+.game-footnote {
+  margin: 14px auto 0;
+  max-width: 620px;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+}
+.game-footnote kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(60, 60, 67, 0.1);
+  box-shadow: inset 0 0 0 1px var(--color-hairline);
+}
+
+/* The site's soft trailing cursor would freeze mid-arena under pointer lock. */
+html.game-owns-cursor .ios-soft-cursor {
+  opacity: 0 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .game-banner,
+  .game-card,
+  .game-chip,
+  .game-combo,
+  .game-overlay {
+    animation-duration: 0.01ms;
+  }
+  .game-banner {
+    animation: none;
+  }
+}
