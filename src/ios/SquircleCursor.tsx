@@ -78,6 +78,7 @@ export default function SquircleCursor() {
   return createPortal(
     <div
       ref={dotRef}
+      className="ios-soft-cursor"
       aria-hidden
       style={{
         position: 'fixed',

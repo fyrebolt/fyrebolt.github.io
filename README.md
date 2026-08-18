@@ -25,6 +25,7 @@ frame becomes a full-screen surface, and on a desktop it sits centered as a devi
 | 🎥 **Camera** | `/video/` | Layer-based video editor. Decoding, compositing and MP4 export all happen in the browser. |
 | 🖨️ **Printer** | `/printer/` | Renders the résumé PDF to a canvas with a "printing" animation. |
 | 👋 **About Me** | `/about/` | Bio, skills, writing, and contact links. |
+| 🎯 **Drift** | `/game/` | A game that takes your cursor with Pointer Lock and hands back a warped one. |
 | 📸 **Instagram Tracker** | `/instagram/` | Who follows and unfollows you, diffed once a day from one committed history file. |
 | 💼 **LinkedIn Tracker** | `/linkedin/` | The same idea for LinkedIn, built around profile views. **Unfinished** — deliberately not on the home screen. |
 
@@ -131,6 +132,56 @@ opens the raw file; **Print again** replays the animation. Swap
 
 Bio, skills, writing, and contact links. Content lives in
 [`src/about/data.ts`](src/about/data.ts).
+
+### 🎯 Drift (`/game/`)
+
+A game about losing control of your own cursor.
+
+Click **Take the cursor** and the page calls
+[Pointer Lock](https://developer.mozilla.org/en-US/docs/Web/API/Pointer_Lock_API):
+the real pointer disappears and the browser stops reporting a position at all —
+only raw `movementX/Y` deltas. The game integrates those deltas into a cursor of
+its own, which means it gets to decide what your hand meant.
+
+**Everything is a ratio, never a pixel.** Deltas are divided by the arena's
+on-screen height before anything else touches them, and the whole simulation
+runs in *arena units* where the arena is exactly 1.0 tall. Sweeping the mouse
+across the arena always sweeps the arena, whether that's 300 px on a laptop or
+900 px on a monitor — so difficulty doesn't change when the window does, and
+resizing mid-run is not an exploit. Only [`render.ts`](src/game/render.ts) and
+[`pointer.ts`](src/game/pointer.ts) know what a pixel is.
+
+Collect cyan orbs (each buys time and builds a combo), dodge red hunters (three
+hits ends the run), and survive the clock. Every wave the arena adds a hunter —
+and from wave 2 it starts rewriting your controls.
+
+| Warp | What it does to your hand |
+| --- | --- |
+| **Mirror** / **Flip** | Negates one axis. |
+| **Swap** | Exchanges the axes. |
+| **Spin** | Rotates your frame of reference — and keeps rotating. |
+| **Twitch** | Doubles the gain. |
+| **Ice** | Input becomes momentum instead of position; you steer a puck. |
+| **Syrup** | A first-order lag on velocity — the cursor leans in late and overshoots. |
+| **Tide** | A constant drift, slowly changing direction. |
+| **Wells** | Gravity wells that pull (or shove) you as you pass. |
+
+Wave 2 runs one warp at a time, wave 5 runs two, wave 8 runs three. Warps that
+would cancel each other out (Spin + Swap, Ice + Syrup) never co-occur.
+
+The floor grid is the tell. It's drawn through the *same* matrix your input goes
+through — recovered by pushing the basis vectors back through the real transform
+— so it physically cannot describe a warp the controls aren't applying. Under
+Spin the grid turns; under Twitch it coarsens; under Mirror it flips. A faint
+white chevron on the cursor shows the direction your hand actually went, which
+under Spin is often the only honest thing on screen.
+[`test/game-warps.test.mjs`](test/game-warps.test.mjs) pins the transform and
+asserts the grid basis reproduces it exactly.
+
+<kbd>Esc</kbd> releases the pointer and pauses. Pointer lock is a nicety, not a
+requirement — if it's denied (touch devices, embedded frames), the game
+differences client coordinates into the identical pipeline and plays the same,
+minus the "you cannot leave the arena" part.
 
 ### 📸 Instagram Tracker (`/instagram/`)
 
@@ -667,11 +718,12 @@ src/
   video/       # Camera video editor (layer model + compositor in src/video/project/)
   printer/     # Résumé PDF viewer
   about/       # About Me
+  game/        # Drift — pointer-lock cursor game (engine / render / warps / pointer)
   instagram/   # Instagram follower tracker
   linkedin/    # LinkedIn tracker (unfinished; not on the home screen)
   components/  # shared UI + section components
 scripts/       # daily pull jobs + launchd installers for both trackers
-test/          # node:test suites for the tracker parsers and pull logic
+test/          # node:test suites for the tracker parsers, pull logic, and Drift's warp maths
 public/        # static assets served as-is (resume.pdf, fonts, icons)
 ```
 

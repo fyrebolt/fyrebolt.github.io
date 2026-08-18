@@ -61,6 +61,14 @@ export const APPS: HomeApp[] = [
     blurb: 'Who I am, what I write, how to reach me.',
   },
   {
+    id: 'game',
+    label: 'Drift',
+    glyph: '🎯',
+    route: '/game/',
+    gradient: 'linear-gradient(160deg, #7ff0ff 0%, #5856d6 55%, #ff7ab6 100%)',
+    blurb: 'A cursor game that takes the cursor.',
+  },
+  {
     id: 'instagram',
     label: 'Instagram',
     glyph: '📸',
