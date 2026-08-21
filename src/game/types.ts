@@ -79,6 +79,16 @@ export interface Well {
   phase: number;
 }
 
+/**
+ * Where the player is in the guided tutorial (see tutorial.ts). Non-null for
+ * the whole of a tutorial run, including the completion card, which is what
+ * every "is this a lesson, not a run?" check in the engine reads.
+ */
+export interface TutorialState {
+  /** Index into `LESSONS` — equal to `LESSONS.length` once the last is banked. */
+  step: number;
+}
+
 export interface ActiveWarp {
   id: WarpId;
   remaining: number;
@@ -115,6 +125,8 @@ export interface GameState {
   wells: Well[];
 
   warps: ActiveWarp[];
+  /** Non-null while the guided tutorial is running instead of a scored run. */
+  tutorial: TutorialState | null;
   /** Ever-turning angle used by the `spin` warp, radians. */
   spinAngle: number;
   /** Ever-turning angle used by the `tide` warp, radians. */
@@ -148,4 +160,6 @@ export interface HudSnapshot {
   wave: number;
   warps: ActiveWarp[];
   locked: boolean;
+  /** Lesson index and total, or null during an ordinary run. */
+  tutorial: { step: number; total: number } | null;
 }

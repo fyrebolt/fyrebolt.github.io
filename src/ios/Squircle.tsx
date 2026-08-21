@@ -47,15 +47,25 @@ export default function Squircle({
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const update = () => {
-      const { width, height } = el.getBoundingClientRect();
-      if (width && height) {
-        const r = radius === Infinity ? Math.min(width, height) / 2 : radius;
-        setClip(`path('${squirclePath(width, height, r, exponent)}')`);
-      }
+    // Measure the *layout* box, never getBoundingClientRect(): the rect is
+    // scaled by any CSS transform in force (the icon-pop / launch-zoom
+    // animations, the iPad's entrance scale), while clip-path coordinates live
+    // in the element's own untransformed space. Measuring the rect mid-animation
+    // bakes a too-small squircle onto a full-size tile — the glyph then sits
+    // outside the visible clip, and nothing re-measures because the layout box
+    // never actually changed.
+    const update = (width: number, height: number) => {
+      if (!width || !height) return;
+      const r = radius === Infinity ? Math.min(width, height) / 2 : radius;
+      setClip(`path('${squirclePath(width, height, r, exponent)}')`);
     };
-    update();
-    const ro = new ResizeObserver(update);
+    update(el.offsetWidth, el.offsetHeight);
+    const ro = new ResizeObserver(([entry]) => {
+      // borderBoxSize keeps sub-pixel precision; offsetWidth is integer-rounded.
+      const box = entry?.borderBoxSize?.[0];
+      if (box) update(box.inlineSize, box.blockSize);
+      else update(el.offsetWidth, el.offsetHeight);
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, [radius, exponent]);

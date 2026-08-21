@@ -40,6 +40,7 @@ font sizes rasterise badly.
 | [`render.ts`](render.ts) | All drawing. Reads state, mutates nothing. |
 | [`types.ts`](types.ts) | Shared shapes, plus `HUNTER_GRACE` (the one constant the engine and renderer must agree on). |
 | [`sfx.ts`](sfx.ts) | Oscillators and envelopes. No audio files anywhere. |
+| [`tutorial.ts`](tutorial.ts) | The lesson catalogue — order, teaching copy, and which lessons bring a hunter. Data only. |
 | [`GameApp.tsx`](GameApp.tsx) / [`game.css`](game.css) | Shell, HUD, overlays, mute. |
 
 ### Why React never sees a frame
@@ -86,6 +87,12 @@ doesn't change with frame rate. `dt` is clamped to 50 ms.
 3. If it's `integration` or `force`, it belongs in `stepPlayer` instead, and
    `transformDelta` must leave the delta untouched.
 
+4. Add a lesson for it to `LESSONS` in [`tutorial.ts`](tutorial.ts) — one
+   sentence on *what to do about it*, since the name and hint are read from the
+   catalogue. This isn't optional politeness:
+   [`test/game-tutorial.test.mjs`](../../test/game-tutorial.test.mjs) fails if a
+   warp the scheduler can throw at players goes untaught.
+
 Exclusions must be mutual; the test suite enforces it.
 
 ### The grid is derived, not drawn to match
@@ -99,6 +106,32 @@ Don't "optimise" this into a hand-written matrix.
 [`test/game-warps.test.mjs`](../../test/game-warps.test.mjs) asserts the basis
 reproduces the transform exactly, because if those two ever disagree the game
 shows one lie while telling another — unplayable rather than hard.
+
+## The tutorial
+
+`startTutorial()` runs the ordinary loop with three things taken away — the
+clock, the score, and the cost of a mistake — and everything else left exactly
+as it is. `st.tutorial` being non-null is the single flag the engine reads:
+
+- `stepWarps` is skipped, so the one armed warp never expires and no second one
+  rolls in.
+- `timeLeft` stops draining, so nothing ends a lesson but the orb.
+- `takeHit` still flashes, shoves and stuns; it just doesn't decrement
+  `shields`, and can't reach `gameOver`.
+- `collect` banks nothing and scores nothing — it calls `advanceLesson`.
+
+`applyLesson` clears the floor (including `player.v` and `smooth`, or the ice
+you built up in one lesson coasts you through the start of the next), arms the
+lesson's warp through the same `armWarp` the scheduler uses, and spawns exactly
+one orb. Lessons are therefore the real warp, not a simplified imitation of it.
+
+Spawns are cropped to `LESSON_TOP` while teaching, orbs, wells and hunter entry
+edges alike, because the bottom of the arena is under the lesson card — an orb
+you can't see isn't a lesson, and a hunter you can't see is an ambush.
+
+`toMenu()` is the way out of both a lesson and a run. An abandoned *run* still
+banks its score: withholding the record for quitting would only teach players
+to sit in a corner waiting out the clock.
 
 ## Tuning
 
@@ -121,7 +154,13 @@ All of it is the constant block at the top of [`engine.ts`](engine.ts).
   `unadjustedMovement: true` is tried first to bypass OS mouse acceleration,
   with a plain retry on rejection.
 - **Esc is the pause gesture.** Losing the lock for any reason pauses the run;
-  there is no separate pause key to keep in sync.
+  there is no separate pause key to keep in sync. That makes the pause card the
+  only place a player can ask for anything, so it carries Restart and Menu (and
+  Leave tutorial, mid-lesson) rather than just Resume. Under lock the browser
+  eats the `Escape` keydown and releases the lock instead, so the keyboard
+  handler in [`GameApp.tsx`](GameApp.tsx) only ever sees Esc when there is no
+  lock to lose: the unlocked fallback, and the pause card itself — where a
+  second Esc leaves the tutorial.
 - **The site's soft cursor is parked during play** via `html.game-owns-cursor`,
   because [`SquircleCursor`](../ios/SquircleCursor.tsx) tracks `clientX/Y`,
   which freezes under lock.

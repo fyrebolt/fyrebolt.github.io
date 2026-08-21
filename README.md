@@ -178,10 +178,18 @@ under Spin is often the only honest thing on screen.
 [`test/game-warps.test.mjs`](test/game-warps.test.mjs) pins the transform and
 asserts the grid basis reproduces it exactly.
 
-<kbd>Esc</kbd> releases the pointer and pauses. Pointer lock is a nicety, not a
-requirement — if it's denied (touch devices, embedded frames), the game
-differences client coordinates into the identical pipeline and plays the same,
-minus the "you cannot leave the arena" part.
+**Learn the warps** runs a guided tutorial instead: no clock, no score, no cost
+to being hit, and one warp at a time. Each lesson names the warp, says what to
+actually do about it, and waits — collecting the orb is what moves you on, so
+you can sit inside Spin for a minute if that's what it takes. Every warp above
+gets a lesson, and a test fails if a new one doesn't.
+
+<kbd>Esc</kbd> releases the pointer and pauses. The pause card is where you can
+restart the run, drop back to the title screen, or leave a lesson (a second
+<kbd>Esc</kbd> does the same). Pointer lock is a nicety, not a requirement — if
+it's denied (touch devices, embedded frames), the game differences client
+coordinates into the identical pipeline and plays the same, minus the "you
+cannot leave the arena" part.
 
 ### 📸 Instagram Tracker (`/instagram/`)
 

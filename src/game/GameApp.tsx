@@ -4,6 +4,7 @@ import { Button } from '../ios';
 import { createGame, type GameEvent, type GameHandle } from './engine';
 import { sfx } from './sfx';
 import { WARP_BY_ID } from './warps';
+import { LESSONS } from './tutorial';
 import type { HudSnapshot } from './types';
 import './game.css';
 
@@ -18,6 +19,7 @@ const EMPTY_HUD: HudSnapshot = {
   wave: 1,
   warps: [],
   locked: false,
+  tutorial: null,
 };
 
 interface Banner {
@@ -95,11 +97,31 @@ export default function GameApp() {
 
   const startRun = useCallback(() => gameRef.current?.start(), []);
   const resumeRun = useCallback(() => gameRef.current?.resume(), []);
+  const startTutorial = useCallback(() => gameRef.current?.startTutorial(), []);
+  const toMenu = useCallback(() => gameRef.current?.toMenu(), []);
 
-  // Space / Enter mirrors whatever the visible primary button does, so a run
-  // can be restarted without ever going back to the mouse.
+  // Keys mirror whatever the visible buttons do, so a run can be restarted —
+  // or a lesson abandoned — without ever going back to the mouse.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const game = gameRef.current;
+      if (!game) return;
+
+      if (e.key === 'Escape') {
+        // Under pointer lock the browser eats this keydown and releases the
+        // lock instead, which pauses us through `onLockChange`. This branch is
+        // for the cases where there is no lock to lose: the unlocked fallback,
+        // and the pause card itself, where a second Esc leaves the tutorial.
+        if (hud.phase === 'playing' && !hud.locked) {
+          e.preventDefault();
+          game.pause();
+        } else if (hud.phase === 'paused' && hud.tutorial) {
+          e.preventDefault();
+          toMenu();
+        }
+        return;
+      }
+
       if (e.key !== ' ' && e.key !== 'Enter') return;
       if (hud.phase === 'playing') return;
       e.preventDefault();
@@ -108,9 +130,16 @@ export default function GameApp() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [hud.phase, resumeRun, startRun]);
+  }, [hud.phase, hud.locked, hud.tutorial, toMenu, resumeRun, startRun]);
 
   const overlayClick = hud.phase === 'paused' ? resumeRun : startRun;
+
+  // The tutorial owns the whole arena chrome: no score, no clock and no warp
+  // chips, because the lesson card already names the one warp in force. That
+  // holds through the closing card too, where the bar reads a full eleven of
+  // eleven instead of flashing a meaningless clock back at you.
+  const tut = hud.tutorial;
+  const teaching = tut !== null && tut.step < tut.total;
 
   return (
     <AppShell
@@ -132,45 +161,58 @@ export default function GameApp() {
         <canvas ref={canvasRef} className="game-canvas" aria-label="Drift arena" />
 
         <div className="game-timebar" aria-hidden>
-          <div ref={barRef} className="game-timebar-fill" />
+          {tut ? (
+            // Same bar, different quantity: lessons banked instead of seconds.
+            <div
+              key="lessons"
+              className="game-timebar-fill"
+              style={{ transform: `scaleX(${tut.step / tut.total})`, background: '#bf5af2' }}
+            />
+          ) : (
+            <div key="clock" ref={barRef} className="game-timebar-fill" />
+          )}
         </div>
 
-        <div className="game-hud" aria-hidden={hud.phase !== 'playing'}>
-          <div className="game-hud-left">
-            <span className="game-score">{hud.score.toLocaleString()}</span>
-            <span className="game-sub">
-              WAVE {hud.wave} · BEST {hud.best.toLocaleString()}
-            </span>
-          </div>
-          <div className="game-hud-right">
-            {hud.combo > 1 && <span className="game-combo">×{hud.combo}</span>}
-            <span className="game-shields">
-              {[0, 1, 2].map((i) => (
-                <i key={i} className={i < hud.shields ? 'on' : ''} />
-              ))}
-            </span>
-          </div>
-        </div>
-
-        <div className="game-warps" aria-live="polite">
-          {hud.warps.map((w) => {
-            const def = WARP_BY_ID[w.id];
-            return (
-              <span
-                key={w.id}
-                className="game-chip"
-                style={{ '--chip': def.color } as CSSProperties}
-                title={def.hint}
-              >
-                <b
-                  className="game-chip-fill"
-                  style={{ transform: `scaleX(${w.remaining / w.total})` }}
-                />
-                <span>{def.name}</span>
+        {!tut && (
+          <div className="game-hud" aria-hidden={hud.phase !== 'playing'}>
+            <div className="game-hud-left">
+              <span className="game-score">{hud.score.toLocaleString()}</span>
+              <span className="game-sub">
+                WAVE {hud.wave} · BEST {hud.best.toLocaleString()}
               </span>
-            );
-          })}
-        </div>
+            </div>
+            <div className="game-hud-right">
+              {hud.combo > 1 && <span className="game-combo">×{hud.combo}</span>}
+              <span className="game-shields">
+                {[0, 1, 2].map((i) => (
+                  <i key={i} className={i < hud.shields ? 'on' : ''} />
+                ))}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {!tut && (
+          <div className="game-warps" aria-live="polite">
+            {hud.warps.map((w) => {
+              const def = WARP_BY_ID[w.id];
+              return (
+                <span
+                  key={w.id}
+                  className="game-chip"
+                  style={{ '--chip': def.color } as CSSProperties}
+                  title={def.hint}
+                >
+                  <b
+                    className="game-chip-fill"
+                    style={{ transform: `scaleX(${w.remaining / w.total})` }}
+                  />
+                  <span>{def.name}</span>
+                </span>
+              );
+            })}
+          </div>
+        )}
 
         {banner && (
           <div key={banner.key} className="game-banner" style={{ color: banner.color }} role="status">
@@ -178,6 +220,8 @@ export default function GameApp() {
             <span>{banner.hint}</span>
           </div>
         )}
+
+        {teaching && <LessonCard step={tut.step} total={tut.total} />}
 
         {hud.phase !== 'playing' && (
           <div
@@ -188,9 +232,23 @@ export default function GameApp() {
               if (e.target === e.currentTarget) overlayClick();
             }}
           >
-            {hud.phase === 'menu' && <Menu onStart={startRun} best={hud.best} />}
-            {hud.phase === 'paused' && <Paused onResume={resumeRun} />}
-            {hud.phase === 'over' && <Over hud={hud} onAgain={startRun} />}
+            {hud.phase === 'menu' && (
+              <Menu onStart={startRun} onLearn={startTutorial} best={hud.best} />
+            )}
+            {hud.phase === 'paused' && (
+              <Paused
+                onResume={resumeRun}
+                onRestart={startRun}
+                onMenu={toMenu}
+                tutorial={hud.tutorial !== null}
+              />
+            )}
+            {hud.phase === 'over' &&
+              (hud.tutorial ? (
+                <TutorialDone onPlay={startRun} onRepeat={startTutorial} />
+              ) : (
+                <Over hud={hud} onAgain={startRun} onLearn={startTutorial} />
+              ))}
           </div>
         )}
       </div>
@@ -198,15 +256,63 @@ export default function GameApp() {
       <p className="game-footnote">
         Drift takes your cursor with the Pointer Lock API and hands back a fake one, moved by the
         <em> fraction</em> of the arena your hand covered — so the arena always feels the same size,
-        whatever the window is doing. Press <kbd>Esc</kbd> to give the cursor back.
+        whatever the window is doing. Press <kbd>Esc</kbd> to give the cursor back, resume, or
+        restart.
       </p>
     </AppShell>
   );
 }
 
+// --- The lesson card --------------------------------------------------------
+
+/**
+ * The persistent caption for the warp currently being taught. It sits inside
+ * the arena rather than under it because under pointer lock the arena is the
+ * whole world — a caption below the slab is a caption nobody reads.
+ */
+function LessonCard({ step, total }: { step: number; total: number }) {
+  const lesson = LESSONS[step];
+  if (!lesson) return null;
+  // Warp lessons borrow their name, one-liner and colour from the catalogue, so
+  // the card and the HUD chip can never describe the same warp differently.
+  const { name, hint, color } = lesson.warp
+    ? WARP_BY_ID[lesson.warp]
+    : { name: lesson.title, hint: lesson.hint, color: lesson.color };
+  return (
+    <div
+      key={step}
+      className="game-lesson"
+      style={{ '--lesson': color } as CSSProperties}
+      role="status"
+      aria-live="polite"
+    >
+      <div className="game-lesson-bar">
+        <span className="game-lesson-step">
+          Lesson {step + 1} / {total}
+        </span>
+        <span className="game-lesson-exit">
+          <kbd>Esc</kbd> to leave
+        </span>
+      </div>
+      <strong>{name}</strong>
+      <em>{hint}</em>
+      <p>{lesson.body}</p>
+      <span className="game-lesson-go">Collect the orb to continue</span>
+    </div>
+  );
+}
+
 // --- Overlays ---------------------------------------------------------------
 
-function Menu({ onStart, best }: { onStart: () => void; best: number }) {
+function Menu({
+  onStart,
+  onLearn,
+  best,
+}: {
+  onStart: () => void;
+  onLearn: () => void;
+  best: number;
+}) {
   return (
     <div className="game-card">
       <h1 className="game-title">DRIFT</h1>
@@ -223,27 +329,83 @@ function Menu({ onStart, best }: { onStart: () => void; best: number }) {
           floor grid always shows you the lie.
         </li>
       </ul>
-      <Button variant="primary" onClick={onStart}>
-        Take the cursor
-      </Button>
+      <div className="game-actions">
+        <Button variant="primary" onClick={onStart}>
+          Take the cursor
+        </Button>
+        <Button onClick={onLearn}>Learn the warps</Button>
+      </div>
       {best > 0 && <p className="game-best">Best {best.toLocaleString()}</p>}
     </div>
   );
 }
 
-function Paused({ onResume }: { onResume: () => void }) {
+/**
+ * Esc is the only pause gesture (see pointer.ts), so this card is where every
+ * "I want out of this" lands: restart the run, or drop back to the title —
+ * which is the one route from a run to the tutorial that isn't dying first.
+ */
+function Paused({
+  onResume,
+  onRestart,
+  onMenu,
+  tutorial,
+}: {
+  onResume: () => void;
+  onRestart: () => void;
+  onMenu: () => void;
+  tutorial: boolean;
+}) {
   return (
     <div className="game-card">
       <h2 className="game-heading">Paused</h2>
       <p className="game-tag">You have your cursor back.</p>
-      <Button variant="primary" onClick={onResume}>
-        Resume
-      </Button>
+      <div className="game-actions">
+        <Button variant="primary" onClick={onResume}>
+          Resume
+        </Button>
+        {tutorial ? (
+          <Button onClick={onMenu}>Leave tutorial</Button>
+        ) : (
+          <>
+            <Button onClick={onRestart}>Restart</Button>
+            <Button variant="ghost" onClick={onMenu}>
+              Menu
+            </Button>
+          </>
+        )}
+      </div>
+      <p className="game-best">{tutorial ? 'Esc again to leave' : 'Space to resume'}</p>
     </div>
   );
 }
 
-function Over({ hud, onAgain }: { hud: HudSnapshot; onAgain: () => void }) {
+function TutorialDone({ onPlay, onRepeat }: { onPlay: () => void; onRepeat: () => void }) {
+  return (
+    <div className="game-card">
+      <h2 className="game-heading">That's every warp</h2>
+      <p className="game-tag">
+        In a real run they arrive on a clock, up to three at once, and the hunters don't miss.
+      </p>
+      <div className="game-actions">
+        <Button variant="primary" onClick={onPlay}>
+          Take the cursor
+        </Button>
+        <Button onClick={onRepeat}>Run it again</Button>
+      </div>
+    </div>
+  );
+}
+
+function Over({
+  hud,
+  onAgain,
+  onLearn,
+}: {
+  hud: HudSnapshot;
+  onAgain: () => void;
+  onLearn: () => void;
+}) {
   const record = hud.score > 0 && hud.score >= hud.best;
   return (
     <div className="game-card">
@@ -252,9 +414,12 @@ function Over({ hud, onAgain }: { hud: HudSnapshot; onAgain: () => void }) {
       <p className="game-tag">
         Wave {hud.wave} · Best {hud.best.toLocaleString()}
       </p>
-      <Button variant="primary" onClick={onAgain}>
-        Again
-      </Button>
+      <div className="game-actions">
+        <Button variant="primary" onClick={onAgain}>
+          Again
+        </Button>
+        <Button onClick={onLearn}>Learn the warps</Button>
+      </div>
     </div>
   );
 }
