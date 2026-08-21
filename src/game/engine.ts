@@ -10,6 +10,7 @@ import { createPointerInput } from './pointer';
 import { sfx } from './sfx';
 import { draw, type View } from './render';
 import { WARPS, WARP_BY_ID, transformDelta, type WarpDef, type WarpId } from './warps';
+import { LESSONS } from './tutorial';
 import { HUNTER_GRACE } from './types';
 import type { GameState, HudSnapshot, Hunter, Orb, Vec } from './types';
 
@@ -41,6 +42,15 @@ const TIDE_TURN = 0.32;
 const WELL_G = 0.012;
 const WELL_CAP = 0.75;
 
+/**
+ * Lessons keep their orbs and wells above this line. The bottom of the arena is
+ * under the lesson card, and an orb you can't see isn't a lesson, it's a hunt.
+ * Expressed as a fraction of the arena like everything else, so it holds at any
+ * window size — the card is widest relative to the arena in a short window,
+ * which is exactly where this matters most.
+ */
+const LESSON_TOP = 0.55;
+
 const BEST_KEY = 'drift.best.v1';
 
 export interface GameEvent {
@@ -52,6 +62,10 @@ export interface GameEvent {
 export interface GameHandle {
   /** Begin a fresh run (also grabs pointer lock — call from a user gesture). */
   start(): void;
+  /** Begin the guided tutorial at lesson one. Also a user-gesture call. */
+  startTutorial(): void;
+  /** Abandon whatever is running — a run or a lesson — for the title card. */
+  toMenu(): void;
   pause(): void;
   /** Resume a paused run, re-acquiring pointer lock. */
   resume(): void;
@@ -123,6 +137,7 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
       wave: st.wave,
       warps: st.warps.map((w) => ({ ...w })),
       locked: pointer.isLocked(),
+      tutorial: st.tutorial ? { step: st.tutorial.step, total: LESSONS.length } : null,
     });
   }
 
@@ -159,6 +174,26 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
     pushHud(true);
   }
 
+  /**
+   * Give up on whatever is on the floor and go back to the title card — the
+   * only route from a run to the tutorial that doesn't involve dying first.
+   *
+   * An abandoned run still counts for the record: the score was earned, and
+   * withholding it for quitting would only teach players to sit in a corner
+   * waiting out the clock instead.
+   */
+  function toMenu() {
+    if (st.phase === 'menu') return;
+    if (!st.tutorial && st.score > st.best) {
+      st.best = st.score;
+      saveBest(st.best);
+    }
+    Object.assign(st, freshState(st.best));
+    st.aspect = view.aspect;
+    pointer.release();
+    pushHud(true);
+  }
+
   function gameOver() {
     if (st.phase === 'over') return;
     st.phase = 'over';
@@ -177,6 +212,72 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
     pushHud(true);
   }
 
+  // --- The tutorial ---------------------------------------------------------
+  //
+  // A tutorial run is an ordinary run with three things taken away: the clock,
+  // the score, and the cost of a mistake. What's left is one warp and one orb,
+  // and banking the orb is what turns the page — so the player sets the pace
+  // and can sit inside a lie until it makes sense. See tutorial.ts.
+
+  function startTutorial() {
+    Object.assign(st, freshState(st.best));
+    st.aspect = view.aspect;
+    st.player.p = { x: view.aspect / 2, y: LESSON_TOP / 2 };
+    st.phase = 'playing';
+    st.tutorial = { step: 0 };
+    recentWarps.length = 0;
+    pointer.consume();
+    sfx.start();
+    void pointer.lock();
+    prev = performance.now();
+    applyLesson(0);
+  }
+
+  function applyLesson(i: number) {
+    if (!st.tutorial) return;
+    st.tutorial.step = i;
+    const lesson = LESSONS[i];
+
+    // Clear the last lesson's apparatus so each one starts from a clean arena —
+    // including the ice velocity and the syrup accumulator, which would
+    // otherwise coast the player across the first second of the next lesson.
+    st.warps.length = 0;
+    st.wells.length = 0;
+    st.hunters.length = 0;
+    st.orbs.length = 0;
+    st.player.v = { x: 0, y: 0 };
+    st.smooth = { x: 0, y: 0 };
+
+    if (lesson.warp) armWarp(WARP_BY_ID[lesson.warp], WARP_LIFE);
+    else ring({ x: st.aspect / 2, y: 0.5 }, 1.2, lesson.color, 0.6, 0.008);
+    if (lesson.hunter) spawnHunter();
+    spawnOrb();
+    pushHud(true);
+  }
+
+  function advanceLesson() {
+    if (!st.tutorial) return;
+    const next = st.tutorial.step + 1;
+    if (next >= LESSONS.length) finishTutorial();
+    else applyLesson(next);
+  }
+
+  function finishTutorial() {
+    if (!st.tutorial) return;
+    st.tutorial.step = LESSONS.length;
+    st.phase = 'over';
+    st.warps.length = 0;
+    st.wells.length = 0;
+    st.hunters.length = 0;
+    st.orbs.length = 0;
+    burst(st.player.p, 40, '#7ff0ff', 0.9);
+    ring(st.player.p, 1.4, '#7ff0ff', 0.9, 0.01);
+    pointer.release();
+    sfx.wave();
+    opts.onEvent({ kind: 'over' });
+    pushHud(true);
+  }
+
   // --- Spawning -------------------------------------------------------------
 
   function spawnOrb() {
@@ -184,14 +285,20 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
     st.orbs.push({ p, r: ORB_R, age: 0, seed: Math.random() * 6.283 });
   }
 
+  /** How far down the arena spawns may reach — cropped while teaching. */
+  function spawnMaxY() {
+    return st.tutorial ? LESSON_TOP : 1;
+  }
+
   function findOpenSpot(fromPlayer: number, fromHunters: number): Vec {
     const m = 0.08;
-    let bestP: Vec = { x: st.aspect / 2, y: 0.5 };
+    const maxY = spawnMaxY();
+    let bestP: Vec = { x: st.aspect / 2, y: maxY / 2 };
     let bestScore = -1;
     for (let i = 0; i < 30; i++) {
       const p = {
         x: m + Math.random() * (st.aspect - 2 * m),
-        y: m + Math.random() * (1 - 2 * m),
+        y: m + Math.random() * (maxY - 2 * m),
       };
       let score = dist(p, st.player.p) - fromPlayer;
       for (const h of st.hunters) score = Math.min(score, dist(p, h.p) - fromHunters);
@@ -207,17 +314,21 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
 
   function spawnHunter() {
     // Enter from just outside a random edge so hunters always arrive from the
-    // rim rather than materialising on top of you.
-    const edge = Math.floor(Math.random() * 4);
+    // rim rather than materialising on top of you. While teaching, the bottom
+    // edge is off the table and the sides are cropped: a hunter that creeps in
+    // underneath the lesson card is an ambush, not a lesson.
+    const maxY = spawnMaxY();
+    const edges = st.tutorial ? [0, 1, 3] : [0, 1, 2, 3];
+    const edge = edges[Math.floor(Math.random() * edges.length)];
     const a = st.aspect;
     const p: Vec =
       edge === 0
         ? { x: Math.random() * a, y: -0.08 }
         : edge === 1
-          ? { x: a + 0.08, y: Math.random() }
+          ? { x: a + 0.08, y: Math.random() * maxY }
           : edge === 2
             ? { x: Math.random() * a, y: 1.08 }
-            : { x: -0.08, y: Math.random() };
+            : { x: -0.08, y: Math.random() * maxY };
     st.hunters.push({
       p,
       v: { x: 0, y: 0 },
@@ -256,12 +367,13 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
     return pool[Math.floor(Math.random() * pool.length)];
   }
 
-  function engageWarp() {
-    const def = pickWarp();
-    if (!def) return;
-    st.warps.push({ id: def.id, remaining: WARP_LIFE, total: WARP_LIFE });
-    recentWarps.push(def.id);
-    if (recentWarps.length > 4) recentWarps.shift();
+  /**
+   * Put a warp into force, with its apparatus and its arrival fanfare. The
+   * scheduler and the tutorial both come through here, so a lesson is exactly
+   * the thing a run would have thrown at you — never a simplified imitation.
+   */
+  function armWarp(def: WarpDef, life: number) {
+    st.warps.push({ id: def.id, remaining: life, total: life });
 
     if (def.id === 'wells') {
       st.wells = [];
@@ -282,6 +394,14 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
     st.shake = reduceMotion ? 0 : 0.012;
     sfx.warp();
     opts.onEvent({ kind: 'warp', warp: def });
+  }
+
+  function engageWarp() {
+    const def = pickWarp();
+    if (!def) return;
+    recentWarps.push(def.id);
+    if (recentWarps.length > 4) recentWarps.shift();
+    armWarp(def, WARP_LIFE);
     pushHud(true);
   }
 
@@ -390,15 +510,23 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
 
   function collect(o: Orb, i: number) {
     st.orbs.splice(i, 1);
+    burst(o.p, 16, '#7ff0ff', 0.55);
+    ring(o.p, 0.16, '#7ff0ff', 0.4, 0.006);
+
+    // In the tutorial the orb is a page-turn, not a score: banking it is the
+    // player saying "I've got this one", so the next lesson rolls in.
+    if (st.tutorial) {
+      sfx.collect(2);
+      advanceLesson();
+      return;
+    }
+
     st.combo = Math.min(MAX_COMBO, st.combo + 1);
     st.comboTimer = COMBO_WINDOW;
     const points = 10 * st.combo;
     st.score += points;
     st.collected++;
     st.timeLeft = Math.min(TIME_CAP, st.timeLeft + ORB_TIME);
-
-    burst(o.p, 16, '#7ff0ff', 0.55);
-    ring(o.p, 0.16, '#7ff0ff', 0.4, 0.006);
     st.pops.push({
       p: { ...o.p },
       text: `+${points}`,
@@ -423,7 +551,10 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
   }
 
   function takeHit(h: Hunter) {
-    st.shields--;
+    // A tutorial hit still stings — the flash, the shove and the noise are the
+    // lesson — it just doesn't cost anything, because a lesson you can fail is
+    // one you have to replay from the top.
+    if (!st.tutorial) st.shields--;
     st.player.invuln = 1.5;
     st.combo = 0;
     st.shake = reduceMotion ? 0 : 0.032;
@@ -451,7 +582,7 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
     }
 
     pushHud(true);
-    if (st.shields <= 0) gameOver();
+    if (!st.tutorial && st.shields <= 0) gameOver();
   }
 
   // --- Effects --------------------------------------------------------------
@@ -481,13 +612,19 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
     st.t += dt;
     st.spinAngle += dt * 0.62;
 
-    stepWarps(dt);
+    // The tutorial holds its one warp open indefinitely, so the scheduler —
+    // which is what expires warps and rolls new ones in — stays out of it.
+    if (!st.tutorial) stepWarps(dt);
     stepPlayer(dt);
 
     for (let i = st.orbs.length - 1; i >= 0; i--) {
       const o = st.orbs[i];
       o.age += dt;
-      if (dist(o.p, st.player.p) < o.r + PLAYER_R + 0.012) collect(o, i);
+      if (dist(o.p, st.player.p) < o.r + PLAYER_R + 0.012) {
+        collect(o, i);
+        // A tutorial pickup re-seeds the orb list underneath this loop.
+        if (st.tutorial) break;
+      }
     }
 
     for (const h of st.hunters) {
@@ -562,10 +699,13 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
     st.shake *= Math.exp(-6 * dt);
     st.flash *= Math.exp(-5 * dt);
 
-    st.timeLeft -= dt;
-    if (st.timeLeft <= 0) {
-      st.timeLeft = 0;
-      gameOver();
+    // No clock in the tutorial: the only thing that ends a lesson is the orb.
+    if (!st.tutorial) {
+      st.timeLeft -= dt;
+      if (st.timeLeft <= 0) {
+        st.timeLeft = 0;
+        gameOver();
+      }
     }
   }
 
@@ -598,6 +738,8 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
 
   return {
     start,
+    startTutorial,
+    toMenu,
     pause,
     resume,
     state: () => st,
@@ -632,6 +774,7 @@ function freshState(best: number): GameState {
     pops: [],
     wells: [],
     warps: [],
+    tutorial: null,
     spinAngle: 0,
     tideAngle: Math.random() * 6.283,
     nextWarpAt: 0,
