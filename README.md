@@ -26,6 +26,7 @@ frame becomes a full-screen surface, and on a desktop it sits centered as a devi
 | 🖨️ **Printer** | `/printer/` | Renders the résumé PDF to a canvas with a "printing" animation. |
 | 👋 **About Me** | `/about/` | Bio, skills, writing, and contact links. |
 | 🎯 **Drift** | `/game/` | A game that takes your cursor with Pointer Lock and hands back a warped one. |
+| 📱 **Doomscroll** | `/feed/` | A game that takes your scroll wheel. Stop to read, fly past the bait, relearn scrolling every ten seconds. |
 | 📸 **Instagram Tracker** | `/instagram/` | Who follows and unfollows you, diffed once a day from one committed history file. |
 | 💼 **LinkedIn Tracker** | `/linkedin/` | The same idea for LinkedIn, built around profile views. **Unfinished** — deliberately not on the home screen. |
 
@@ -190,6 +191,71 @@ restart the run, drop back to the title screen, or leave a lesson (a second
 it's denied (touch devices, embedded frames), the game differences client
 coordinates into the identical pipeline and plays the same, minus the "you
 cannot leave the arena" part.
+
+### 📱 Doomscroll (`/feed/`)
+
+A game about the scroll wheel, and about what a feed is for.
+
+An endless column of cards travels past a **read line** across the middle of the
+screen. Stopping on a post reads it: that banks points and buys back attention,
+which is the clock. But everything on the line works on you the same way, and
+red bait drains attention while you look at it — so the only defence is speed,
+and the only way to score is to stop.
+
+**One number does all of it.** `engagement` is derived from scroll speed alone:
+a standstill is total engagement, a flick past is none. Reading a post, bleeding
+attention to bait and triggering an ad are the same mechanic seen from three
+sides. Nothing in the game asks what kind of card you are looking at before
+deciding how hard it lands.
+
+| Card | What it does on the line |
+| --- | --- |
+| **Post** | Reads in about a second at a standstill. Banks points, buys attention, builds a combo. |
+| **Trending** | A rarer post: slower to read, worth two and a half times as much. |
+| **For You** (bait) | Drains attention fast while you look at it, and hooks you if you linger. Three hooks ends the run. |
+| **Sponsored** | Takes the feed for a second and a quarter — unless you were already moving fast enough to blow past it. |
+
+Like Drift, everything is a ratio and never a pixel: wheel notches, finger drags
+and arrow keys are all divided by the viewport's on-screen height before
+anything else sees them, and the whole simulation runs in *feed units* where the
+viewport is exactly 1.0 tall. A flick covers the same fraction of the feed on a
+laptop and on a monitor. Momentum is real — the feed coasts after your hand
+stops, and comes to rest on its own.
+
+From wave 2 the algorithm starts rewriting what scrolling does.
+
+| Quirk | What it does to your scroll |
+| --- | --- |
+| **Inverted** | Down is up. |
+| **Firehose** | Doubles the gain. |
+| **Sticky** | Swallows any scroll under a threshold, so small corrections do nothing. |
+| **Slick** | Almost no friction; a flick keeps going for ten screens. |
+| **Molasses** | A first-order lag — the feed leans into a flick late and drags. |
+| **Snap** | Pulls the nearest card onto the line, whether or not you wanted that card. |
+| **Autoplay** | Scrolls itself. |
+| **Rubberband** | An anchor trailing a couple of seconds behind, pulling you back up. |
+
+Wave 2 runs one quirk at a time, wave 4 runs two, wave 7 runs three. Quirks that
+would cancel out (Slick + Molasses, Slick + Snap, Autoplay + Rubberband) never
+co-occur.
+
+The rail down the right-hand side is the tell — Drift's floor grid, in one
+dimension. Its ticks are spaced by the distance one notch of your hand now
+covers, and its arrow points wherever a downward flick actually sends the feed,
+both recovered by pushing a unit scroll through the *real* transform. So it
+cannot promise a direction the controls aren't taking, and under Sticky it draws
+the dead band at exactly the size being swallowed.
+[`test/feed-quirks.test.mjs`](test/feed-quirks.test.mjs) pins the transform and
+asserts the rail's gain reproduces it;
+[`test/feed-engine.test.mjs`](test/feed-engine.test.mjs) drives the whole loop
+headlessly — stub canvas, hand-cranked clock — and checks the things a
+screenshot can't show, like whether slowing down is really what makes a card
+land on you.
+
+<kbd>Esc</kbd> pauses. Scroll with the wheel, by dragging, or with
+<kbd>↑</kbd> <kbd>↓</kbd> and <kbd>PgUp</kbd> <kbd>PgDn</kbd> — all three feed
+the identical pipeline, so the game plays the same on a trackpad, a phone and a
+keyboard.
 
 ### 📸 Instagram Tracker (`/instagram/`)
 
@@ -713,7 +779,7 @@ npm test          # run the node:test suites in test/ (tracker parsers and pulls
 ```
 
 Each app is its own Vite entry point (`index.html`, `video/`, `appstore/`,
-`printer/`, `about/`, `instagram/`, `linkedin/`) wired up in
+`printer/`, `about/`, `game/`, `feed/`, `instagram/`, `linkedin/`) wired up in
 [`vite.config.ts`](vite.config.ts).
 
 ### Project layout
@@ -727,11 +793,13 @@ src/
   printer/     # Résumé PDF viewer
   about/       # About Me
   game/        # Drift — pointer-lock cursor game (engine / render / warps / pointer)
+  feed/        # Doomscroll — scroll-driven feed game (engine / render / quirks / scroll)
   instagram/   # Instagram follower tracker
   linkedin/    # LinkedIn tracker (unfinished; not on the home screen)
   components/  # shared UI + section components
+  utils/       # shared helpers, incl. the oscillator kit both games make sound with
 scripts/       # daily pull jobs + launchd installers for both trackers
-test/          # node:test suites for the tracker parsers, pull logic, and Drift's warp maths
+test/          # node:test suites for the tracker parsers, pull logic, and both games' input maths
 public/        # static assets served as-is (resume.pdf, fonts, icons)
 ```
 
