@@ -69,6 +69,14 @@ export const APPS: HomeApp[] = [
     blurb: 'A cursor game that takes the cursor.',
   },
   {
+    id: 'feed',
+    label: 'Doomscroll',
+    glyph: '📱',
+    route: '/feed/',
+    gradient: 'linear-gradient(160deg, #ffd60a 0%, #ff375f 52%, #bf5af2 100%)',
+    blurb: 'A feed game that takes the scroll wheel.',
+  },
+  {
     id: 'instagram',
     label: 'Instagram',
     glyph: '📸',
