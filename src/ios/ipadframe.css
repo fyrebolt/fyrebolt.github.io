@@ -33,6 +33,12 @@
   animation: ipad-in 0.9s var(--ease-out-ios) both;
 }
 
+/* The frame is a flex item, so its automatic minimum size would otherwise let
+   a wide app stretch the bezel out of shape. Its own aspect ratio decides. */
+.ipad-frame {
+  min-width: 0;
+}
+
 /* Portrait: driven by height so the tall shape never overflows vertically. */
 .ipad-portrait {
   aspect-ratio: 3 / 4;
