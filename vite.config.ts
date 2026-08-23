@@ -33,6 +33,8 @@ export default defineConfig({
         linkedin: resolve(__dirname, 'linkedin/index.html'),
         // Drift → pointer-lock cursor game (served at /game/)
         game: resolve(__dirname, 'game/index.html'),
+        // Doomscroll → scroll-driven feed game (served at /feed/)
+        feed: resolve(__dirname, 'feed/index.html'),
       },
     },
   },

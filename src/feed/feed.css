@@ -1,0 +1,356 @@
+/* ===== Doomscroll ===== */
+/* Same idea as Drift's arena: a dark slab dropped into the otherwise-light iOS
+   shell, with the HUD styled against black rather than the glass tokens. The
+   two games are deliberately separate stylesheets — they look like siblings,
+   but neither should be able to break the other by being restyled. */
+
+.feed-stage {
+  position: relative;
+  width: 100%;
+  height: clamp(280px, 56dvh, 560px);
+  border-radius: 22px;
+  overflow: hidden;
+  background: #070912;
+  box-shadow:
+    0 24px 60px -24px rgba(8, 12, 26, 0.75),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  isolation: isolate;
+  /* The feed is the scroller. Without this a touch drag pans the page instead. */
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+.feed-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+}
+.feed-canvas:active {
+  cursor: grabbing;
+}
+
+/* ===== Attention meter ===== */
+
+.feed-timebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  z-index: 2;
+}
+.feed-timebar-fill {
+  height: 100%;
+  width: 100%;
+  transform-origin: left center;
+  background: #5ac8fa;
+  will-change: transform;
+}
+
+/* ===== HUD ===== */
+
+.feed-hud {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  pointer-events: none;
+  z-index: 2;
+  font-variant-numeric: tabular-nums;
+}
+.feed-hud-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.feed-score {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  color: #f2f7ff;
+  text-shadow: 0 2px 14px rgba(90, 200, 250, 0.45);
+}
+.feed-sub {
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  font-weight: 600;
+  color: rgba(200, 216, 240, 0.5);
+}
+.feed-hud-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.feed-combo {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffd60a;
+  text-shadow: 0 2px 14px rgba(255, 214, 10, 0.5);
+  animation: feed-combo-pop 0.3s var(--ease-spring);
+}
+@keyframes feed-combo-pop {
+  from {
+    transform: scale(1.45);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+.feed-shields {
+  display: inline-flex;
+  gap: 5px;
+}
+.feed-shields i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+.feed-shields i.on {
+  background: #ff375f;
+  box-shadow: 0 0 10px rgba(255, 55, 95, 0.75);
+}
+
+/* ===== Active-quirk chips ===== */
+
+.feed-quirks {
+  position: absolute;
+  left: 16px;
+  bottom: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  z-index: 2;
+  pointer-events: none;
+}
+.feed-chip {
+  position: relative;
+  overflow: hidden;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chip);
+  background: rgba(10, 14, 26, 0.72);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chip) 55%, transparent);
+  animation: feed-chip-in 0.3s var(--ease-spring) both;
+}
+.feed-chip > span {
+  position: relative;
+}
+/* Remaining duration, draining left to right behind the label. */
+.feed-chip-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  background: color-mix(in srgb, var(--chip) 22%, transparent);
+  transition: transform 0.12s linear;
+}
+@keyframes feed-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.9);
+  }
+}
+
+/* ===== Quirk banner ===== */
+
+.feed-banner {
+  position: absolute;
+  left: 50%;
+  top: 24%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+  pointer-events: none;
+  z-index: 3;
+  animation: feed-banner 2s var(--ease-out-ios) both;
+}
+.feed-banner strong {
+  font-size: clamp(28px, 5.4vw, 48px);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-shadow: 0 0 34px currentColor;
+}
+.feed-banner span {
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  color: rgba(235, 243, 255, 0.82);
+}
+@keyframes feed-banner {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.82);
+    filter: blur(6px);
+  }
+  14% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+    filter: blur(0);
+  }
+  72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -62%) scale(1.04);
+  }
+}
+
+/* ===== Overlays ===== */
+
+.feed-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: radial-gradient(120% 100% at 50% 40%, rgba(7, 9, 18, 0.68), rgba(7, 9, 18, 0.92));
+  backdrop-filter: blur(3px);
+  cursor: pointer;
+  animation: feed-fade 0.35s var(--ease-out-ios) both;
+}
+@keyframes feed-fade {
+  from {
+    opacity: 0;
+  }
+}
+.feed-card {
+  max-width: 470px;
+  text-align: center;
+  color: #e9f0ff;
+  cursor: default;
+  animation: feed-card-in 0.4s var(--ease-spring) both;
+}
+@keyframes feed-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+}
+.feed-title {
+  /* Ten letters and a wide track: sized to fit the card, not to match Drift's
+     five-letter title, which can afford to be twice this big. */
+  font-size: clamp(26px, 5.2vw, 44px);
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  margin-left: 0.15em;
+  line-height: 1;
+  background: linear-gradient(100deg, #ffd60a 0%, #ff7ab6 48%, #bf5af2 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.feed-heading {
+  font-size: clamp(26px, 5vw, 38px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.feed-final {
+  font-size: clamp(40px, 8vw, 62px);
+  font-weight: 800;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+  color: #ffd60a;
+  text-shadow: 0 0 30px rgba(255, 214, 10, 0.32);
+}
+.feed-tag {
+  margin-top: 6px;
+  font-size: 14px;
+  color: rgba(206, 219, 242, 0.72);
+}
+.feed-rules {
+  margin: 16px auto 20px;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 7px;
+  max-width: 410px;
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(206, 219, 242, 0.78);
+}
+.feed-rules b {
+  color: #e9f0ff;
+}
+.feed-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+.feed-actions .ios-btn {
+  margin-top: 0;
+}
+.feed-best {
+  margin-top: 10px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(206, 219, 242, 0.5);
+}
+
+/* ===== Chrome ===== */
+
+.feed-mute {
+  border: 0;
+  background: transparent;
+  font-size: 17px;
+  line-height: 1;
+  padding: 6px 8px;
+  border-radius: 12px;
+  transition: background-color 0.18s ease, transform 0.3s var(--ease-spring);
+}
+.feed-mute:hover {
+  background: rgba(0, 122, 255, 0.08);
+}
+.feed-mute:active {
+  transform: scale(0.92);
+}
+
+.feed-footnote {
+  margin: 14px auto 0;
+  max-width: 640px;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+}
+.feed-footnote kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(60, 60, 67, 0.1);
+  box-shadow: inset 0 0 0 1px var(--color-hairline);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feed-card,
+  .feed-chip,
+  .feed-combo,
+  .feed-overlay {
+    animation-duration: 0.01ms;
+  }
+  .feed-banner {
+    animation: none;
+  }
+}
