@@ -16,7 +16,7 @@
 // (so you can reach the panel and unlock) but refuse every drag: the guard sits
 // in the `on*Down` handlers, which are the only way a row edit starts.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { Attachment, CaptionEl } from '../captions/types';
 import { elementEnd as captionEnd, staticWindowOf } from '../captions/types';
@@ -102,6 +102,28 @@ function RowBadge({ layer }: { layer: Layer }) {
       {layer.locked ? '🔒' : '🚫'}
     </span>
   );
+}
+
+/**
+ * Group rows for display: audio (music) layers sharing an explicit `lane`
+ * number are drawn together in ONE row (front-first order preserved); every
+ * other layer — and any audio track without a lane — keeps its own row.
+ */
+function groupIntoRows(layers: Layer[]): Layer[][] {
+  const laneRowIndex = new Map<number, number>();
+  const rows: Layer[][] = [];
+  for (const l of layers) {
+    if (l.kind === 'music' && l.lane != null) {
+      const existing = laneRowIndex.get(l.lane);
+      if (existing !== undefined) {
+        rows[existing].push(l);
+        continue;
+      }
+      laneRowIndex.set(l.lane, rows.length);
+    }
+    rows.push([l]);
+  }
+  return rows;
 }
 
 interface Props {
@@ -251,6 +273,7 @@ export default function ProjectTimeline({
   const [snapGuide, setSnapGuide] = useState<number | null>(null);
 
   const dur = Math.max(0.001, duration);
+  const rows = useMemo(() => groupIntoRows(layers), [layers]);
 
   const secFromClientX = useCallback(
     (clientX: number) => {
@@ -759,7 +782,44 @@ export default function ProjectTimeline({
           </div>
         )}
 
-        {layers.map((layer, i) => {
+        {rows.map((rowLayers, i) => {
+          // Lane-grouped audio tracks: several MusicLayers sharing one row, each
+          // still its own draggable bar (positioned by its own start/dur).
+          if (rowLayers.length > 1) {
+            const musicRow = rowLayers as MusicLayer[];
+            return (
+              <div key={musicRow.map((m) => m.id).join('+')} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
+                <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                {musicRow.map((layer) => {
+                  const m = layer.el;
+                  const leftPct = (m.start / dur) * 100;
+                  const widthPct = (m.dur / dur) * 100;
+                  const itemSelected = layer.id === selectedLayerId;
+                  const itemRing = itemSelected ? 'ring-2 ring-[var(--color-primary-green)]' : '';
+                  const itemBar = `absolute top-0 bottom-0 rounded-md flex items-center px-2 touch-none overflow-hidden ${rowClasses(layer)} ${itemRing}`;
+                  return (
+                    <div
+                      key={layer.id}
+                      onPointerDown={(e) => onRangeDown(e, layer, 'move')}
+                      onPointerMove={onRangeMove}
+                      onPointerUp={onUp}
+                      className={itemBar}
+                      style={{ left: `${leftPct}%`, width: `${Math.max(2, widthPct)}%`, background: MUSIC_COLOR, zIndex: itemSelected ? 10 : 1 }}
+                      title="Drag to move · drag the right edge for the track length"
+                    >
+                      <RowBadge layer={layer} />
+                      <span className="relative text-[10px] font-medium text-black/80 whitespace-nowrap truncate pointer-events-none">
+                        🎵 {m.loop ? '↻ ' : ''}{layer.name}
+                      </span>
+                      <div onPointerDown={(e) => onRangeDown(e, layer, 'end')} onPointerMove={onRangeMove} onPointerUp={onUp} className="absolute right-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-md touch-none z-20" />
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          }
+
+          const layer = rowLayers[0];
           const selected = layer.id === selectedLayerId;
           const ring = selected ? 'ring-2 ring-[var(--color-primary-green)]' : '';
           // Shared bar chrome: hidden rows dim, locked rows lose the grab cursor.
