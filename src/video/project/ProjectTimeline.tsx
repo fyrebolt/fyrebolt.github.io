@@ -104,22 +104,56 @@ function RowBadge({ layer }: { layer: Layer }) {
   );
 }
 
+/** Layer kinds that pack into shared rows when they don't overlap in time. */
+const PACKABLE_KINDS = new Set<Layer['kind']>(['caption', 'music']);
+
 /**
- * Group rows for display: audio (music) layers sharing an explicit `lane`
- * number are drawn together in ONE row (front-first order preserved); every
- * other layer — and any audio track without a lane — keeps its own row.
+ * Greedy interval packing (classic "minimum platforms" scheduling): assign
+ * each item the earliest lane whose last occupant ends at or before it
+ * starts. Items are packed in START-time order for a minimal lane count.
+ * Returns a map from layer id to its lane index.
+ */
+function packLanes(items: Layer[]): Map<string, number> {
+  const laneEnds: number[] = [];
+  const laneOf = new Map<string, number>();
+  const sorted = [...items].sort((a, b) => layerSpan(a).start - layerSpan(b).start);
+  for (const item of sorted) {
+    const { start, end } = layerSpan(item);
+    let lane = laneEnds.findIndex((e) => start >= e);
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(end);
+    } else {
+      laneEnds[lane] = end;
+    }
+    laneOf.set(item.id, lane);
+  }
+  return laneOf;
+}
+
+/**
+ * Group rows for display: captions and audio tracks that don't overlap in
+ * time are packed into shared rows automatically (front-first order
+ * preserved; packing is computed separately per kind, so a caption never
+ * shares a row with an audio track). Every other layer keeps its own row —
+ * as does any caption/audio track once it overlaps its row-mates in time.
  */
 function groupIntoRows(layers: Layer[]): Layer[][] {
-  const laneRowIndex = new Map<number, number>();
+  const lanesByKind = new Map<Layer['kind'], Map<string, number>>();
+  for (const kind of PACKABLE_KINDS) lanesByKind.set(kind, packLanes(layers.filter((l) => l.kind === kind)));
+
+  const rowIndexByKey = new Map<string, number>();
   const rows: Layer[][] = [];
   for (const l of layers) {
-    if (l.kind === 'music' && l.lane != null) {
-      const existing = laneRowIndex.get(l.lane);
+    const lane = PACKABLE_KINDS.has(l.kind) ? lanesByKind.get(l.kind)!.get(l.id) : undefined;
+    if (lane != null) {
+      const key = `${l.kind}:${lane}`;
+      const existing = rowIndexByKey.get(key);
       if (existing !== undefined) {
         rows[existing].push(l);
         continue;
       }
-      laneRowIndex.set(l.lane, rows.length);
+      rowIndexByKey.set(key, rows.length);
     }
     rows.push([l]);
   }
@@ -274,6 +308,14 @@ export default function ProjectTimeline({
 
   const dur = Math.max(0.001, duration);
   const rows = useMemo(() => groupIntoRows(layers), [layers]);
+  // Stable per-caption color index (independent of which row it's packed
+  // into), so captions sharing a row still read as visually distinct.
+  const captionColorIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    let idx = 0;
+    for (const l of layers) if (l.kind === 'caption') map.set(l.id, idx++);
+    return map;
+  }, [layers]);
 
   const secFromClientX = useCallback(
     (clientX: number) => {
@@ -670,6 +712,94 @@ export default function ProjectTimeline({
   const zoomIn = () => setZoom((z) => Math.min(40, +(z * 1.5).toFixed(3)));
   const zoomOut = () => setZoom((z) => Math.max(1, +(z / 1.5).toFixed(3)));
 
+  /**
+   * One caption's bar + its attachments, positioned absolutely within
+   * whatever row container it's placed in — reused for a caption alone in
+   * its own row and for several captions packed into a shared row.
+   */
+  const renderCaptionBar = (layer: CaptionLayer, colorIdx: number) => {
+    const el = layer.el;
+    const start = el.start;
+    const end = captionEnd(el);
+    const leftPct = (start / dur) * 100;
+    const widthPct = ((end - start) / dur) * 100;
+    const label = el.text.split('\n')[0] || (el.kind === 'typewriter' ? 'typewriter' : 'caption');
+    const sw = staticWindowOf(el);
+    const total = Math.max(0.001, end - start);
+    const typingF = el.kind === 'typewriter' ? el.typingDur / total : 0;
+    const holdF = el.kind === 'typewriter' ? el.holdDur / total : 0;
+    const div1Left = `${typingF * 100}%`;
+    const div2Left = `${(typingF + holdF) * 100}%`;
+    const rowColor = ROW_COLORS[colorIdx % ROW_COLORS.length];
+    const itemSelected = layer.id === selectedLayerId;
+    const itemRing = itemSelected ? 'ring-2 ring-[var(--color-primary-green)]' : '';
+    const itemBar = `absolute top-0 bottom-0 rounded-md flex items-center px-2 touch-none overflow-hidden ${rowClasses(layer)} ${itemRing}`;
+
+    return (
+      <div key={layer.id} className="contents">
+        <RowBadge layer={layer} />
+        <div
+          onPointerDown={(e) => onCapDown(e, layer, 'body')}
+          onPointerMove={onCapMove}
+          onPointerUp={onUp}
+          className={itemBar}
+          style={{
+            left: `${leftPct}%`,
+            width: `${Math.max(1.5, widthPct)}%`,
+            background: el.kind === 'typewriter' ? 'transparent' : rowColor,
+            zIndex: itemSelected ? 10 : 1,
+          }}
+        >
+          {el.kind === 'typewriter' && (
+            <>
+              <div className="absolute inset-y-0 left-0 pointer-events-none" style={{ width: div1Left, background: PHASE_COLORS.typing }} />
+              <div className="absolute inset-y-0 pointer-events-none" style={{ left: div1Left, width: `${holdF * 100}%`, background: PHASE_COLORS.hold }} />
+              {el.deleteEnabled && (
+                <div className="absolute inset-y-0 right-0 pointer-events-none" style={{ left: div2Left, background: PHASE_COLORS.del }} />
+              )}
+            </>
+          )}
+          <span className="relative text-[10px] font-medium text-black/80 whitespace-nowrap truncate pointer-events-none">
+            {el.kind === 'typewriter' ? `⌨ ${label}` : label}
+          </span>
+          <div onPointerDown={(e) => onCapDown(e, layer, 'start')} onPointerMove={onCapMove} onPointerUp={onUp} className="absolute left-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-l-md touch-none z-20" />
+          <div onPointerDown={(e) => onCapDown(e, layer, 'end')} onPointerMove={onCapMove} onPointerUp={onUp} className="absolute right-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-md touch-none z-20" />
+          {el.kind === 'typewriter' && (
+            <>
+              <div onPointerDown={(e) => onCapDown(e, layer, 'div1')} onPointerMove={onCapMove} onPointerUp={onUp} className="absolute top-0 bottom-0 w-1.5 -translate-x-1/2 bg-black/50 hover:bg-black/80 cursor-ew-resize touch-none z-20" style={{ left: div1Left }} />
+              {el.deleteEnabled && (
+                <div onPointerDown={(e) => onCapDown(e, layer, 'div2')} onPointerMove={onCapMove} onPointerUp={onUp} className="absolute top-0 bottom-0 w-1.5 -translate-x-1/2 bg-black/50 hover:bg-black/80 cursor-ew-resize touch-none z-20" style={{ left: div2Left }} />
+              )}
+            </>
+          )}
+        </div>
+
+        {sw &&
+          el.attachments.map((att) => {
+            const absStart = sw.start + att.startInStatic;
+            const absEnd = Math.min(sw.end, absStart + att.duration);
+            const aLeft = (absStart / dur) * 100;
+            const aWidth = Math.max(0.8, ((absEnd - absStart) / dur) * 100);
+            const attSel = att.id === selectedAttachmentId;
+            return (
+              <div
+                key={att.id}
+                onPointerDown={(e) => onAttachDown(e, layer, att, 'move')}
+                onPointerMove={onAttachMove}
+                onPointerUp={onUp}
+                title={`${att.type} · words ${Math.min(att.wordStart, att.wordEnd) + 1}–${Math.max(att.wordStart, att.wordEnd) + 1}`}
+                className={`absolute bottom-[2px] h-2.5 rounded-[3px] cursor-grab active:cursor-grabbing touch-none z-30 ${attSel ? 'ring-2 ring-white' : 'ring-1 ring-black/40'}`}
+                style={{ left: `${aLeft}%`, width: `${aWidth}%`, background: att.color, opacity: att.type === 'highlight' ? 0.7 : 1 }}
+              >
+                {att.type === 'underline' && <span className="absolute inset-x-0 bottom-[1px] h-[2px] bg-black/50 rounded-full pointer-events-none" />}
+                <div onPointerDown={(e) => onAttachDown(e, layer, att, 'resize')} onPointerMove={onAttachMove} onPointerUp={onUp} className="absolute right-0 top-0 bottom-0 w-1.5 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-[3px] touch-none z-40" />
+              </div>
+            );
+          })}
+      </div>
+    );
+  };
+
   return (
     <div className="mt-4 select-none">
       {/* header: time readout + horizontal zoom controls */}
@@ -782,13 +912,23 @@ export default function ProjectTimeline({
           </div>
         )}
 
-        {rows.map((rowLayers, i) => {
-          // Lane-grouped audio tracks: several MusicLayers sharing one row, each
-          // still its own draggable bar (positioned by its own start/dur).
+        {rows.map((rowLayers) => {
+          // Packed rows: several captions or several audio tracks that don't
+          // overlap in time, sharing one row — each still its own draggable bar.
           if (rowLayers.length > 1) {
+            const rowKey = rowLayers.map((l) => l.id).join('+');
+            if (rowLayers[0].kind === 'caption') {
+              const captionRow = rowLayers as CaptionLayer[];
+              return (
+                <div key={rowKey} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
+                  <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
+                  {captionRow.map((layer) => renderCaptionBar(layer, captionColorIndex.get(layer.id) ?? 0))}
+                </div>
+              );
+            }
             const musicRow = rowLayers as MusicLayer[];
             return (
-              <div key={musicRow.map((m) => m.id).join('+')} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
+              <div key={rowKey} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
                 <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
                 {musicRow.map((layer) => {
                   const m = layer.el;
@@ -1070,82 +1210,11 @@ export default function ProjectTimeline({
             );
           }
 
-          // caption (boil | typewriter)
-          const el = layer.el;
-          const start = el.start;
-          const end = captionEnd(el);
-          const leftPct = (start / dur) * 100;
-          const widthPct = ((end - start) / dur) * 100;
-          const label = el.text.split('\n')[0] || (el.kind === 'typewriter' ? 'typewriter' : 'caption');
-          const sw = staticWindowOf(el);
-          const total = Math.max(0.001, end - start);
-          const typingF = el.kind === 'typewriter' ? el.typingDur / total : 0;
-          const holdF = el.kind === 'typewriter' ? el.holdDur / total : 0;
-          const div1Left = `${typingF * 100}%`;
-          const div2Left = `${(typingF + holdF) * 100}%`;
-          const rowColor = ROW_COLORS[i % ROW_COLORS.length];
-
+          // caption (boil | typewriter), alone in its own row
           return (
             <div key={layer.id} className="relative h-10 rounded-md bg-[var(--color-bg-elevated)]">
               <div className="absolute top-0 bottom-0 w-px bg-[rgba(116,185,255,0.5)] pointer-events-none z-10" style={{ left: playLeft }} />
-                <RowBadge layer={layer} />
-              <div
-                onPointerDown={(e) => onCapDown(e, layer, 'body')}
-                onPointerMove={onCapMove}
-                onPointerUp={onUp}
-                className={bar}
-                style={{
-                  left: `${leftPct}%`,
-                  width: `${Math.max(1.5, widthPct)}%`,
-                  background: el.kind === 'typewriter' ? 'transparent' : rowColor,
-                }}
-              >
-                {el.kind === 'typewriter' && (
-                  <>
-                    <div className="absolute inset-y-0 left-0 pointer-events-none" style={{ width: div1Left, background: PHASE_COLORS.typing }} />
-                    <div className="absolute inset-y-0 pointer-events-none" style={{ left: div1Left, width: `${holdF * 100}%`, background: PHASE_COLORS.hold }} />
-                    {el.deleteEnabled && (
-                      <div className="absolute inset-y-0 right-0 pointer-events-none" style={{ left: div2Left, background: PHASE_COLORS.del }} />
-                    )}
-                  </>
-                )}
-                <span className="relative text-[10px] font-medium text-black/80 whitespace-nowrap truncate pointer-events-none">
-                  {el.kind === 'typewriter' ? `⌨ ${label}` : label}
-                </span>
-                <div onPointerDown={(e) => onCapDown(e, layer, 'start')} onPointerMove={onCapMove} onPointerUp={onUp} className="absolute left-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-l-md touch-none z-20" />
-                <div onPointerDown={(e) => onCapDown(e, layer, 'end')} onPointerMove={onCapMove} onPointerUp={onUp} className="absolute right-0 top-0 bottom-0 w-2 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-md touch-none z-20" />
-                {el.kind === 'typewriter' && (
-                  <>
-                    <div onPointerDown={(e) => onCapDown(e, layer, 'div1')} onPointerMove={onCapMove} onPointerUp={onUp} className="absolute top-0 bottom-0 w-1.5 -translate-x-1/2 bg-black/50 hover:bg-black/80 cursor-ew-resize touch-none z-20" style={{ left: div1Left }} />
-                    {el.deleteEnabled && (
-                      <div onPointerDown={(e) => onCapDown(e, layer, 'div2')} onPointerMove={onCapMove} onPointerUp={onUp} className="absolute top-0 bottom-0 w-1.5 -translate-x-1/2 bg-black/50 hover:bg-black/80 cursor-ew-resize touch-none z-20" style={{ left: div2Left }} />
-                    )}
-                  </>
-                )}
-              </div>
-
-              {sw &&
-                el.attachments.map((att) => {
-                  const absStart = sw.start + att.startInStatic;
-                  const absEnd = Math.min(sw.end, absStart + att.duration);
-                  const aLeft = (absStart / dur) * 100;
-                  const aWidth = Math.max(0.8, ((absEnd - absStart) / dur) * 100);
-                  const attSel = att.id === selectedAttachmentId;
-                  return (
-                    <div
-                      key={att.id}
-                      onPointerDown={(e) => onAttachDown(e, layer, att, 'move')}
-                      onPointerMove={onAttachMove}
-                      onPointerUp={onUp}
-                      title={`${att.type} · words ${Math.min(att.wordStart, att.wordEnd) + 1}–${Math.max(att.wordStart, att.wordEnd) + 1}`}
-                      className={`absolute bottom-[2px] h-2.5 rounded-[3px] cursor-grab active:cursor-grabbing touch-none z-30 ${attSel ? 'ring-2 ring-white' : 'ring-1 ring-black/40'}`}
-                      style={{ left: `${aLeft}%`, width: `${aWidth}%`, background: att.color, opacity: att.type === 'highlight' ? 0.7 : 1 }}
-                    >
-                      {att.type === 'underline' && <span className="absolute inset-x-0 bottom-[1px] h-[2px] bg-black/50 rounded-full pointer-events-none" />}
-                      <div onPointerDown={(e) => onAttachDown(e, layer, att, 'resize')} onPointerMove={onAttachMove} onPointerUp={onUp} className="absolute right-0 top-0 bottom-0 w-1.5 bg-black/40 hover:bg-black/70 cursor-ew-resize rounded-r-[3px] touch-none z-40" />
-                    </div>
-                  );
-                })}
+              {renderCaptionBar(layer, captionColorIndex.get(layer.id) ?? 0)}
             </div>
           );
         })}

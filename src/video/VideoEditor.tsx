@@ -38,7 +38,6 @@ import type {
   DramaticLayer,
   HighlighterLayer,
   Layer,
-  MusicLayer,
   Project,
   SketchLayer,
   Span,
@@ -1878,36 +1877,6 @@ export default function VideoEditor() {
       }),
     );
   }, [renamingLayerId, renameLayerText, sealDiscrete]);
-
-  /** Share a row with the nearest audio track above this one in the Layers list
-   *  (assigning both a fresh lane if that neighbour doesn't have one yet). */
-  const mergeMusicLaneUp = useCallback(
-    (id: string) => {
-      const idx = displayLayers.findIndex((l) => l.id === id);
-      if (idx < 0) return;
-      const prev = displayLayers.slice(0, idx).reverse().find((l): l is MusicLayer => l.kind === 'music');
-      if (!prev) return;
-      sealDiscrete();
-      setLayers((ls) => {
-        const lane =
-          prev.lane ??
-          ls.reduce((max, l) => (l.kind === 'music' && l.lane != null ? Math.max(max, l.lane) : max), 0) + 1;
-        return ls.map((l): Layer =>
-          l.kind === 'music' && (l.id === id || l.id === prev.id) ? { ...l, lane } : l,
-        );
-      });
-    },
-    [displayLayers, sealDiscrete],
-  );
-
-  /** Give an audio track back its own row. */
-  const splitMusicLane = useCallback(
-    (id: string) => {
-      sealDiscrete();
-      setLayers((ls) => ls.map((l): Layer => (l.id === id && l.kind === 'music' ? { ...l, lane: undefined } : l)));
-    },
-    [sealDiscrete],
-  );
 
   const removeLayer = useCallback(
     (id: string) => {
@@ -3935,17 +3904,6 @@ export default function VideoEditor() {
                       // Reordering is itself a positional edit, so a lock stops it too.
                       const canMove =
                         l.kind !== 'zoom' && l.kind !== 'timemachine' && l.kind !== 'music' && !l.locked;
-                      // Audio tracks can share a timeline row instead of each getting
-                      // their own — cuts down on a long stack of near-empty rows.
-                      const musicLane = l.kind === 'music' ? l.lane : undefined;
-                      const sharesLane =
-                        l.kind === 'music' &&
-                        musicLane != null &&
-                        displayLayers.some((x) => x.id !== l.id && x.kind === 'music' && x.lane === musicLane);
-                      const canMergeUp =
-                        l.kind === 'music' &&
-                        !sharesLane &&
-                        displayLayers.slice(0, displayLayers.indexOf(l)).some((x) => x.kind === 'music');
                       return (
                         <div key={l.id} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md border ${isSel ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]' : 'border-[var(--color-glass-border)]'}`}>
                           {isRenaming ? (
@@ -3983,26 +3941,6 @@ export default function VideoEditor() {
                               <button onClick={() => moveLayer(l.id, 1)} title="Bring forward" className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-1">↑</button>
                               <button onClick={() => moveLayer(l.id, -1)} title="Send backward" className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-1">↓</button>
                             </>
-                          )}
-                          {!isRenaming && canMergeUp && (
-                            <button
-                              onClick={() => mergeMusicLaneUp(l.id)}
-                              title="Merge with the audio track above (share one row)"
-                              aria-label={`Merge ${label} with the audio track above`}
-                              className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-1 text-[11px]"
-                            >
-                              🔗
-                            </button>
-                          )}
-                          {!isRenaming && sharesLane && (
-                            <button
-                              onClick={() => splitMusicLane(l.id)}
-                              title="Give this track its own row"
-                              aria-label={`Give ${label} its own row`}
-                              className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-1 text-[11px]"
-                            >
-                              ⊘
-                            </button>
                           )}
                           <button
                             onClick={() => toggleLayerFlag(l.id, 'hidden')}
