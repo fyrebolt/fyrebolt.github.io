@@ -35,9 +35,18 @@ see [Command-line tools](#command-line-tools).
 
 ### 🏠 Home screen (`/`)
 
-The iPad home screen. Four app icons in a grid plus a dock of favorites. Each icon
-is a real route you can bookmark directly. Add or reorder apps by editing a single
-list — [`src/home/apps.ts`](src/home/apps.ts).
+The iPad home screen: a grid of app icons plus a dock of favorites. Each icon is a
+real route you can bookmark directly. Add or reorder apps by editing a single list
+— [`src/home/apps.ts`](src/home/apps.ts).
+
+The grid pages sideways, like a real iPad. Nothing here scrolls vertically —
+the dock has to stay reachable at the bottom of the frame on any screen — so the
+screen measures the room the grid actually has, fits as many icons into it as
+will go, and spills the rest onto the next page. Swipe, scroll, press ← / →, or
+tap a page dot to move between pages; the icon size shrinks a step at a time only
+when the frame gets too cramped for a proper grid. The fitting rules live in
+[`src/home/layout.ts`](src/home/layout.ts) and are tested in
+[`test/home-layout.test.mjs`](test/home-layout.test.mjs).
 
 ### 🛍️ App Store — Portfolio (`/appstore/`)
 
@@ -786,7 +795,7 @@ Each app is its own Vite entry point (`index.html`, `video/`, `appstore/`,
 
 ```
 src/
-  home/        # iPad home screen (icons, grid, dock)
+  home/        # iPad home screen (icons, paged grid, dock)
   ios/         # shared "device" chrome: iPad frame, app shell, squircles, cursor
   appstore/    # App Store portfolio
   video/       # Camera video editor (layer model + compositor in src/video/project/)

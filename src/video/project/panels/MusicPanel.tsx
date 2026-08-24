@@ -75,7 +75,7 @@ export default function MusicPanel({ el, onEdit }: Props) {
 
       <Toggle
         label="Mute this track"
-        hint="Silences the music entirely. The curve below is kept for un-muting."
+        hint="Silences the audio entirely. The curve below is kept for un-muting."
         checked={muted}
         onChange={(v) => onEdit({ muted: v }, true)}
       />

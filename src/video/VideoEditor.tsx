@@ -20,6 +20,7 @@ import type { BoilPoolId } from './captions/fonts';
 import { createAttachment, staticWindowOf } from './captions/types';
 import type { Attachment, AttachmentType, Caption, CaptionEl, TypewriterCaption } from './captions/types';
 import FindReplace from './captions/FindReplace';
+import HelpPanel from './HelpPanel';
 import { replaceAllInText, replaceOneAt } from './captions/search';
 import type { CaptionText } from './captions/search';
 import { createZoom } from './zoom/types';
@@ -37,6 +38,7 @@ import type {
   DramaticLayer,
   HighlighterLayer,
   Layer,
+  MusicLayer,
   Project,
   SketchLayer,
   Span,
@@ -290,7 +292,7 @@ const ADD_GROUPS: { group: string; items: { kind: AddKind; label: string; icon: 
     items: [
       { kind: 'sticker-image', label: 'Image sticker', icon: '🖼️' },
       { kind: 'sticker-video', label: 'Video sticker', icon: '🎬' },
-      { kind: 'music', label: 'Music track', icon: '🎵' },
+      { kind: 'music', label: 'Audio track', icon: '🎵' },
     ],
   },
   {
@@ -318,17 +320,24 @@ const LIBRARY_INTENT_MEDIA: Record<LibraryIntent, LibraryMedia[]> = {
   'sticker-video': ['video'],
   music: ['audio'],
 };
+/** MIME-type prefixes accepted when a file is dropped onto the library browser. */
+const LIBRARY_INTENT_ACCEPT: Record<LibraryIntent, string[]> = {
+  clip: ['image', 'video'],
+  'sticker-image': ['image'],
+  'sticker-video': ['video'],
+  music: ['audio'],
+};
 const LIBRARY_INTENT_TITLE: Record<LibraryIntent, string> = {
   clip: 'Add a clip',
   'sticker-image': 'Add an image sticker',
   'sticker-video': 'Add a video sticker',
-  music: 'Add a music track',
+  music: 'Add an audio track',
 };
 const LIBRARY_INTENT_EMPTY: Record<LibraryIntent, string> = {
   clip: 'No saved clips yet. Upload one and it’ll appear here for reuse in any project.',
   'sticker-image': 'No saved image stickers yet. Upload one and it’ll appear here for reuse.',
   'sticker-video': 'No saved video stickers yet. Upload one and it’ll appear here for reuse.',
-  music: 'No saved music yet. Upload a track and it’ll appear here for reuse in any project.',
+  music: 'No saved audio yet. Upload a track and it’ll appear here for reuse in any project.',
 };
 
 export default function VideoEditor() {
@@ -373,6 +382,7 @@ export default function VideoEditor() {
   const [fullscreen, setFullscreen] = useState(false);
   /** Find & Replace panel (Cmd/Ctrl+F) open state. */
   const [findOpen, setFindOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   // ---- ui ----
   const [showSafeZones, setShowSafeZones] = useState(true);
@@ -420,6 +430,14 @@ export default function VideoEditor() {
   const redo = useCallback(() => historyRef.current?.redo(), []);
   /** Layer id pending a delete confirmation, else null. */
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  /** Layer id being renamed inline in the Layers list (double-click), else null. */
+  const [renamingLayerId, setRenamingLayerId] = useState<string | null>(null);
+  const [renameLayerText, setRenameLayerText] = useState('');
+  const renameLayerRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (renamingLayerId) renameLayerRef.current?.select();
+  }, [renamingLayerId]);
 
   /** Autosave indicator: 'idle' (nothing pending), 'saving' (write in flight), 'saved'. */
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -649,6 +667,12 @@ export default function VideoEditor() {
         setFindOpen(true);
         return;
       }
+      // '/' opens the keyboard-shortcuts reference.
+      if (e.key === '/' && !mod && !editable) {
+        e.preventDefault();
+        setHelpOpen(true);
+        return;
+      }
 
       if (mod && (e.key === 'z' || e.key === 'Z')) {
         if (editable) return; // let native text-undo win inside form fields
@@ -851,19 +875,6 @@ export default function VideoEditor() {
       else if (file.type.startsWith('image')) void saveUploadToLibrary(file, name, 'image');
     },
     [ingestClipBlob, saveUploadToLibrary],
-  );
-
-  /** Accept any image/video files dropped onto the upload or preview zone. */
-  const onDropFiles = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      setDragOver(false);
-      const files = Array.from(e.dataTransfer.files).filter(
-        (f) => f.type.startsWith('image') || f.type.startsWith('video'),
-      );
-      for (const f of files) onFile(f);
-    },
-    [onFile],
   );
 
   const onDragOverFiles = useCallback((e: React.DragEvent) => {
@@ -1622,7 +1633,7 @@ export default function VideoEditor() {
   /** Decode a picked audio file into a music layer + auto-save it to the library. */
   const onMusicFile = useCallback(
     (file: File) => {
-      const name = file.name.replace(/\.[^.]+$/, '') || 'Music';
+      const name = file.name.replace(/\.[^.]+$/, '') || 'Audio';
       ingestMusicBlob(file, name);
       void saveUploadToLibrary(file, name, 'audio');
     },
@@ -1655,6 +1666,19 @@ export default function VideoEditor() {
     else if (intent === 'sticker-video') stickerVideoInput.current?.click();
     else musicInput.current?.click();
   }, []);
+
+  /** A file dropped directly onto the library browser — uploads it without the
+   *  hidden-input round trip. */
+  const libraryUploadFile = useCallback(
+    (intent: LibraryIntent, file: File) => {
+      setLibraryOpen(null);
+      if (intent === 'clip') onFile(file);
+      else if (intent === 'sticker-image') onStickerFile(file, 'image');
+      else if (intent === 'sticker-video') onStickerFile(file, 'video');
+      else onMusicFile(file);
+    },
+    [onFile, onStickerFile, onMusicFile],
+  );
 
   const libraryPick = useCallback(
     (entry: LibraryEntry) => {
@@ -1828,6 +1852,59 @@ export default function VideoEditor() {
           return flag === 'hidden' ? { ...l, hidden: !l.hidden } : { ...l, locked: !l.locked };
         }),
       );
+    },
+    [sealDiscrete],
+  );
+
+  /** Open the inline rename field for a layer, seeded with its current label. */
+  const startLayerRename = useCallback((id: string, currentLabel: string) => {
+    setRenamingLayerId(id);
+    setRenameLayerText(currentLabel);
+  }, []);
+
+  /** Commit the inline rename field — sets the layer's own `name`, the single
+   *  label shown in both the Layers list and its timeline row. */
+  const commitLayerRename = useCallback(() => {
+    const id = renamingLayerId;
+    setRenamingLayerId(null);
+    if (!id) return;
+    const name = renameLayerText.trim();
+    if (!name) return;
+    sealDiscrete();
+    setLayers((ls) =>
+      ls.map((l): Layer => {
+        if (l.id !== id) return l;
+        return { ...l, name };
+      }),
+    );
+  }, [renamingLayerId, renameLayerText, sealDiscrete]);
+
+  /** Share a row with the nearest audio track above this one in the Layers list
+   *  (assigning both a fresh lane if that neighbour doesn't have one yet). */
+  const mergeMusicLaneUp = useCallback(
+    (id: string) => {
+      const idx = displayLayers.findIndex((l) => l.id === id);
+      if (idx < 0) return;
+      const prev = displayLayers.slice(0, idx).reverse().find((l): l is MusicLayer => l.kind === 'music');
+      if (!prev) return;
+      sealDiscrete();
+      setLayers((ls) => {
+        const lane =
+          prev.lane ??
+          ls.reduce((max, l) => (l.kind === 'music' && l.lane != null ? Math.max(max, l.lane) : max), 0) + 1;
+        return ls.map((l): Layer =>
+          l.kind === 'music' && (l.id === id || l.id === prev.id) ? { ...l, lane } : l,
+        );
+      });
+    },
+    [displayLayers, sealDiscrete],
+  );
+
+  /** Give an audio track back its own row. */
+  const splitMusicLane = useCallback(
+    (id: string) => {
+      sealDiscrete();
+      setLayers((ls) => ls.map((l): Layer => (l.id === id && l.kind === 'music' ? { ...l, lane: undefined } : l)));
     },
     [sealDiscrete],
   );
@@ -2887,6 +2964,19 @@ export default function VideoEditor() {
     return () => window.clearTimeout(id);
   }, [clips, layers, ratio, fillMode, boilPool, normalize, sfxEnabled, sfxVolume, imageDuration, markers, currentSnapshot, blobForSrc]);
 
+  // Warn before leaving (close tab, reload, back/forward, typing a new URL)
+  // while the debounced autosave still has an edit in flight — that write
+  // hasn't landed in IndexedDB yet, so leaving now could drop it.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (saveState !== 'saving') return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [saveState]);
+
   const saveProjectFile = useCallback(async () => {
     const snapshot = currentSnapshot();
     try {
@@ -2915,6 +3005,24 @@ export default function VideoEditor() {
       }
     },
     [applyLoadedProject],
+  );
+
+  /** Accept image/video files dropped onto the upload or preview zone (added as
+   *  a clip), or a saved project JSON dropped there (loaded wholesale). */
+  const onDropFiles = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      const dropped = Array.from(e.dataTransfer.files);
+      const mediaFiles = dropped.filter((f) => f.type.startsWith('image') || f.type.startsWith('video'));
+      if (mediaFiles.length > 0) {
+        for (const f of mediaFiles) onFile(f);
+        return;
+      }
+      const projectFile = dropped.find((f) => f.type === 'application/json' || f.name.toLowerCase().endsWith('.json'));
+      if (projectFile) void loadProjectFile(projectFile);
+    },
+    [onFile, loadProjectFile],
   );
 
   const clearAutosave = useCallback(async () => {
@@ -3225,6 +3333,15 @@ export default function VideoEditor() {
               >
                 <span aria-hidden>{fullscreen ? '🡿' : '⛶'}</span>
                 <span className="hidden sm:inline">{fullscreen ? 'Exit' : 'Full screen'}</span>
+              </button>
+              <button
+                onClick={() => setHelpOpen(true)}
+                title="Keyboard shortcuts (/)"
+                aria-label="Keyboard shortcuts"
+                className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] px-2 py-1.5 rounded-lg hover:bg-[rgba(0,122,255,0.08)] transition-colors"
+              >
+                <span aria-hidden>ⓘ</span>
+                <span className="hidden sm:inline">Help</span>
               </button>
               <a href="/video-classic/" className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)] font-mono hidden lg:block ml-1">
                 classic ↗
@@ -3810,27 +3927,82 @@ export default function VideoEditor() {
                           ? l.el.text.split('\n')[0] || l.name
                           : l.kind === 'dramatic'
                             ? (l.el.text || l.name).toUpperCase()
-                            : l.kind === 'music'
-                              ? l.el.name || l.name
-                              : l.name;
+                            : l.name;
+                      // Captions/dramatic words are self-labelling from their text; everything
+                      // else carries a plain `name` (or, for audio, its file name) worth renaming.
+                      const isRenamable = l.kind !== 'caption' && l.kind !== 'dramatic';
+                      const isRenaming = renamingLayerId === l.id;
                       // Reordering is itself a positional edit, so a lock stops it too.
                       const canMove =
                         l.kind !== 'zoom' && l.kind !== 'timemachine' && l.kind !== 'music' && !l.locked;
+                      // Audio tracks can share a timeline row instead of each getting
+                      // their own — cuts down on a long stack of near-empty rows.
+                      const musicLane = l.kind === 'music' ? l.lane : undefined;
+                      const sharesLane =
+                        l.kind === 'music' &&
+                        musicLane != null &&
+                        displayLayers.some((x) => x.id !== l.id && x.kind === 'music' && x.lane === musicLane);
+                      const canMergeUp =
+                        l.kind === 'music' &&
+                        !sharesLane &&
+                        displayLayers.slice(0, displayLayers.indexOf(l)).some((x) => x.kind === 'music');
                       return (
                         <div key={l.id} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md border ${isSel ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]' : 'border-[var(--color-glass-border)]'}`}>
-                          <button
-                            onClick={() => selectLayer(l.id)}
-                            className={`flex items-center gap-2 text-left text-[13px] min-w-0 flex-1 ${l.hidden ? 'opacity-45' : ''}`}
-                          >
-                            <span aria-hidden>{icon}</span>
-                            <span className={`truncate ${l.hidden ? 'line-through decoration-[var(--color-text-muted)]' : ''}`}>{label}</span>
-                            {(l.kind === 'zoom' || l.kind === 'timemachine') && <span className="text-[10px] text-[var(--color-text-muted)]">base</span>}
-                          </button>
-                          {canMove && (
+                          {isRenaming ? (
+                            <input
+                              ref={renameLayerRef}
+                              value={renameLayerText}
+                              onChange={(e) => setRenameLayerText(e.target.value)}
+                              onBlur={commitLayerRename}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  commitLayerRename();
+                                } else if (e.key === 'Escape') {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setRenamingLayerId(null);
+                                }
+                              }}
+                              className="flex-1 min-w-0 px-1.5 py-0.5 rounded bg-[var(--color-bg-surface)] border border-[var(--color-primary-green)] text-[13px]"
+                            />
+                          ) : (
+                            <button
+                              onClick={() => selectLayer(l.id)}
+                              onDoubleClick={() => isRenamable && startLayerRename(l.id, label)}
+                              title={isRenamable ? 'Double-click to rename' : undefined}
+                              className={`flex items-center gap-2 text-left text-[13px] min-w-0 flex-1 ${l.hidden ? 'opacity-45' : ''}`}
+                            >
+                              <span aria-hidden>{icon}</span>
+                              <span className={`truncate ${l.hidden ? 'line-through decoration-[var(--color-text-muted)]' : ''}`}>{label}</span>
+                              {(l.kind === 'zoom' || l.kind === 'timemachine') && <span className="text-[10px] text-[var(--color-text-muted)]">base</span>}
+                            </button>
+                          )}
+                          {!isRenaming && canMove && (
                             <>
                               <button onClick={() => moveLayer(l.id, 1)} title="Bring forward" className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-1">↑</button>
                               <button onClick={() => moveLayer(l.id, -1)} title="Send backward" className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-1">↓</button>
                             </>
+                          )}
+                          {!isRenaming && canMergeUp && (
+                            <button
+                              onClick={() => mergeMusicLaneUp(l.id)}
+                              title="Merge with the audio track above (share one row)"
+                              aria-label={`Merge ${label} with the audio track above`}
+                              className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-1 text-[11px]"
+                            >
+                              🔗
+                            </button>
+                          )}
+                          {!isRenaming && sharesLane && (
+                            <button
+                              onClick={() => splitMusicLane(l.id)}
+                              title="Give this track its own row"
+                              aria-label={`Give ${label} its own row`}
+                              className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-1 text-[11px]"
+                            >
+                              ⊘
+                            </button>
                           )}
                           <button
                             onClick={() => toggleLayerFlag(l.id, 'hidden')}
@@ -3876,7 +4048,7 @@ export default function VideoEditor() {
                           : selectedLayer.kind === 'highlighter'
                             ? 'Highlighter'
                             : selectedLayer.kind === 'music'
-                              ? 'Music track'
+                              ? 'Audio track'
                             : selectedLayer.kind === 'dramatic'
                               ? selectedLayer.el.mode === 'inverse'
                                 ? 'Inverse word'
@@ -4170,14 +4342,19 @@ export default function VideoEditor() {
           />
         )}
 
+        {/* keyboard-shortcuts reference (info button, or "/") */}
+        {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
+
         {/* asset-library browser (choose from library / upload new) */}
         {libraryOpen && (
           <LibraryBrowser
             title={LIBRARY_INTENT_TITLE[libraryOpen]}
             emptyHint={LIBRARY_INTENT_EMPTY[libraryOpen]}
             entries={library.filter((e) => LIBRARY_INTENT_MEDIA[libraryOpen].includes(e.media))}
+            accept={LIBRARY_INTENT_ACCEPT[libraryOpen]}
             onClose={() => setLibraryOpen(null)}
             onUploadNew={() => libraryUploadNew(libraryOpen)}
+            onUploadFile={(file) => libraryUploadFile(libraryOpen, file)}
             onPick={libraryPick}
             onRename={libraryRename}
             onDelete={libraryDelete}

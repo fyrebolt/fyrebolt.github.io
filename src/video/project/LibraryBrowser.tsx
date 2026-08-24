@@ -15,8 +15,12 @@ interface Props {
   /** Entries already filtered to the media kinds valid for this intent. */
   entries: LibraryEntry[];
   emptyHint: string;
+  /** MIME-type prefixes ('image', 'video', 'audio') accepted when a file is dropped. */
+  accept: string[];
   onClose: () => void;
   onUploadNew: () => void;
+  /** A file dropped anywhere on the browser, matching `accept` — uploads it directly. */
+  onUploadFile: (file: File) => void;
   onPick: (entry: LibraryEntry) => void;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
@@ -26,8 +30,10 @@ export default function LibraryBrowser({
   title,
   entries,
   emptyHint,
+  accept,
   onClose,
   onUploadNew,
+  onUploadFile,
   onPick,
   onRename,
   onDelete,
@@ -35,7 +41,22 @@ export default function LibraryBrowser({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const renameRef = useRef<HTMLInputElement>(null);
+
+  const onDragOver = (e: React.DragEvent) => {
+    if (Array.from(e.dataTransfer.types).includes('Files')) {
+      e.preventDefault();
+      setDragOver(true);
+    }
+  };
+  const onDragLeave = () => setDragOver(false);
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = Array.from(e.dataTransfer.files).find((f) => accept.some((prefix) => f.type.startsWith(prefix)));
+    if (file) onUploadFile(file);
+  };
 
   // Escape closes the browser (unless mid-rename, where it cancels the rename).
   useEffect(() => {
@@ -70,7 +91,19 @@ export default function LibraryBrowser({
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-6" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative glass-card p-5 w-full max-w-lg max-h-[80vh] flex flex-col">
+      <div
+        className={`relative glass-card p-5 w-full max-w-lg max-h-[80vh] flex flex-col rounded-2xl transition-colors ${
+          dragOver ? 'outline outline-2 outline-[var(--color-primary-green)] outline-offset-2' : ''
+        }`}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        {dragOver && (
+          <div className="pointer-events-none absolute inset-0 z-10 rounded-2xl border-2 border-dashed border-[var(--color-primary-green)] bg-[rgba(139,233,199,0.12)] flex items-center justify-center">
+            <span className="text-sm font-semibold text-[var(--color-primary-green)]">Drop to upload</span>
+          </div>
+        )}
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-base font-semibold flex items-center gap-2">
             <span aria-hidden>📚</span>
@@ -87,10 +120,11 @@ export default function LibraryBrowser({
 
         <button
           onClick={onUploadNew}
-          className="mb-4 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-[var(--color-primary-green)] text-black font-semibold text-sm hover:opacity-90"
+          className="mb-1 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-[var(--color-primary-green)] text-black font-semibold text-sm hover:opacity-90"
         >
           <span aria-hidden>⬆</span> Upload new file
         </button>
+        <div className="mb-4 text-center text-[10px] text-[var(--color-text-muted)]">or drag & drop a file anywhere here</div>
 
         <div className="text-[11px] font-medium text-[var(--color-text-muted)] mb-2">
           {entries.length > 0 ? 'Or reuse from your library' : 'Your library'}

@@ -143,6 +143,13 @@ export interface StickerLayer extends LayerBase {
 export interface MusicLayer extends LayerBase {
   kind: 'music';
   el: MusicElement;
+  /**
+   * Timeline row grouping: audio tracks sharing the same `lane` number are drawn
+   * in ONE row instead of each getting its own (so a project with many short,
+   * non-overlapping tracks doesn't grow a tall stack of near-empty rows).
+   * Absent == this track gets its own row, so old projects render unchanged.
+   */
+  lane?: number;
 }
 
 export type Layer =
@@ -426,7 +433,7 @@ export function createMusicLayer(
     kind: 'music',
     id: id('mus'),
     z,
-    name: 'Music',
+    name: seed.name || 'Audio',
     el: createMusic(seed, start),
     ...overrides,
   };

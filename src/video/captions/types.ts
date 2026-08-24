@@ -53,6 +53,9 @@ export interface CaptionTextStyle {
   rotation: number;
   align: TextAlign;
   legibility: Legibility;
+  /** Stack characters top-to-bottom in right-to-left columns instead of wrapping
+   *  horizontally. Absent == false, so old projects stay horizontal. */
+  vertical?: boolean;
 }
 
 interface BaseElement extends CaptionTextStyle {

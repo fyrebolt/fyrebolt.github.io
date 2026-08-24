@@ -670,6 +670,9 @@ export function drawBanner(
 
 const CAPTION_BASE_FRAC = 0.055; // base font size as a fraction of frame height
 const CAPTION_MAX_WIDTH_FRAC = 0.86; // wrap width relative to frame width
+const CAPTION_MAX_HEIGHT_FRAC = 0.86; // vertical-mode wrap height relative to frame height
+const VERTICAL_CHAR_STEP_FRAC = 1.05; // character stacking pitch, as a multiple of sizePx
+const VERTICAL_COL_STEP_FRAC = 1.1; // column-to-column pitch, as a multiple of sizePx
 
 /** Wrap `text` to `maxWidth`, respecting manual line breaks. ctx.font must be set. */
 function layoutCaptionLines(
@@ -699,10 +702,43 @@ function layoutCaptionLines(
   return lines;
 }
 
+/**
+ * Wrap `text` into vertical columns of at most `maxChars` characters, respecting
+ * manual line breaks (each becomes its own column run). Characters stack at a
+ * fixed pitch, so — unlike horizontal wrapping — no glyph measurement is needed:
+ * character count alone determines column height.
+ */
+function layoutCaptionColumns(text: string, maxChars: number): string[] {
+  const paras = text.replace(/\r/g, '').split('\n');
+  const columns: string[] = [];
+  for (const para of paras) {
+    const words = para.split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+      columns.push('');
+      continue;
+    }
+    let cur = words[0];
+    for (let i = 1; i < words.length; i++) {
+      const test = `${cur} ${words[i]}`;
+      if (test.length <= maxChars) cur = test;
+      else {
+        columns.push(cur);
+        cur = words[i];
+      }
+    }
+    columns.push(cur);
+  }
+  return columns;
+}
+
 export interface CaptionLayout {
+  /** Wrapped horizontal lines, or (when vertical) the character runs per column. */
   lines: string[];
   sizePx: number;
+  /** Pitch between successive lines (horizontal) or columns (vertical). */
   lineHeight: number;
+  /** Vertical-mode only: pitch between successive stacked characters within a column. */
+  charStep?: number;
   blockW: number;
   blockH: number;
   cx: number;
@@ -753,17 +789,56 @@ export function measureCaption(
   normalize: boolean,
 ): CaptionLayout {
   const sizePx = out.h * CAPTION_BASE_FRAC * cap.sizeScale * fontHeightScale(font, normalize);
-  const maxWidth = out.w * CAPTION_MAX_WIDTH_FRAC;
   ctx.font = fontCss(font, sizePx);
+  const cx = cap.x * out.w;
+  const cy = cap.y * out.h;
+
+  if (cap.vertical) {
+    const charStep = sizePx * VERTICAL_CHAR_STEP_FRAC;
+    const colStep = sizePx * VERTICAL_COL_STEP_FRAC;
+    const maxChars = Math.max(1, Math.floor((out.h * CAPTION_MAX_HEIGHT_FRAC) / charStep));
+    const cols = layoutCaptionColumns(cap.text || ' ', maxChars);
+    let maxColChars = 0;
+    for (const col of cols) maxColChars = Math.max(maxColChars, col.length);
+    const blockH = Math.min(out.h * CAPTION_MAX_HEIGHT_FRAC, Math.max(1, maxColChars) * charStep);
+    const blockW = cols.length * colStep;
+    return {
+      lines: cols,
+      sizePx,
+      lineHeight: colStep,
+      charStep,
+      blockW,
+      blockH,
+      cx,
+      cy,
+      left: cx - blockW / 2,
+      top: cy - blockH / 2,
+    };
+  }
+
+  const maxWidth = out.w * CAPTION_MAX_WIDTH_FRAC;
   const lines = layoutCaptionLines(ctx, cap.text || ' ', maxWidth);
   const lineHeight = sizePx * 1.18;
   let maxLineWidth = 0;
   for (const ln of lines) maxLineWidth = Math.max(maxLineWidth, ctx.measureText(ln).width);
   const blockW = Math.min(maxWidth, maxLineWidth);
   const blockH = lines.length * lineHeight;
-  const cx = cap.x * out.w;
-  const cy = cap.y * out.h;
   return { lines, sizePx, lineHeight, blockW, blockH, cx, cy, left: cx - blockW / 2, top: cy - blockH / 2 };
+}
+
+/** Vertical-mode: horizontal centre x of column `i` (0 = rightmost, reading right-to-left). */
+function verticalColumnX(L: CaptionLayout, i: number): number {
+  const right = L.cx + L.blockW / 2;
+  return right - L.lineHeight * (i + 0.5);
+}
+
+/** Vertical-mode: top y of a ragged column of `chars` characters, per the block's align
+ *  (reusing the horizontal-align enum: left→top, center→middle, right→bottom). */
+function verticalColumnTop(cap: Pick<CaptionTextStyle, 'align'>, L: CaptionLayout, chars: number): number {
+  const colH = chars * (L.charStep ?? L.lineHeight);
+  if (cap.align === 'left') return L.top;
+  if (cap.align === 'right') return L.top + L.blockH - colH;
+  return L.cy - colH / 2;
 }
 
 /** Draw a caption (wrapped, aligned, with the chosen legibility treatment). */
@@ -779,15 +854,8 @@ export function drawCaption(
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.textBaseline = 'middle';
-  ctx.textAlign = cap.align;
   ctx.font = fontCss(font, L.sizePx);
   ctx.lineJoin = 'round';
-
-  // Block is centred on (cap.x, cap.y); pick the per-line anchor for the alignment.
-  let anchorX = L.cx;
-  if (cap.align === 'left') anchorX = L.cx - L.blockW / 2;
-  else if (cap.align === 'right') anchorX = L.cx + L.blockW / 2;
-  const firstLineY = L.cy - L.blockH / 2 + L.lineHeight / 2;
 
   if (cap.legibility === 'shadow') {
     ctx.shadowColor = 'rgba(0,0,0,0.75)';
@@ -797,6 +865,34 @@ export function drawCaption(
   const outline = cap.legibility === 'outline';
   ctx.lineWidth = L.sizePx * 0.16;
   ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+
+  if (cap.vertical) {
+    ctx.textAlign = 'center';
+    const charStep = L.charStep ?? L.lineHeight;
+    for (let i = 0; i < L.lines.length; i++) {
+      const col = L.lines[i];
+      if (!col) continue;
+      const x = verticalColumnX(L, i);
+      const top = verticalColumnTop(cap, L, col.length);
+      for (let k = 0; k < col.length; k++) {
+        const ch = col[k];
+        if (ch === ' ') continue;
+        const y = top + charStep * (k + 0.5);
+        if (outline) ctx.strokeText(ch, x, y);
+        ctx.fillStyle = cap.color;
+        ctx.fillText(ch, x, y);
+      }
+    }
+    ctx.restore();
+    return L;
+  }
+
+  ctx.textAlign = cap.align;
+  // Block is centred on (cap.x, cap.y); pick the per-line anchor for the alignment.
+  let anchorX = L.cx;
+  if (cap.align === 'left') anchorX = L.cx - L.blockW / 2;
+  else if (cap.align === 'right') anchorX = L.cx + L.blockW / 2;
+  const firstLineY = L.cy - L.blockH / 2 + L.lineHeight / 2;
 
   for (let i = 0; i < L.lines.length; i++) {
     const y = firstLineY + i * L.lineHeight;
@@ -829,7 +925,6 @@ export function drawTypewriter(
   const sizePx = L.sizePx;
   ctx.save();
   ctx.textBaseline = 'middle';
-  ctx.textAlign = 'left'; // anchor each line from a fixed left edge so text doesn't reflow while typing
   ctx.font = fontCss(font, sizePx);
   ctx.lineJoin = 'round';
 
@@ -837,7 +932,6 @@ export function drawTypewriter(
   const revealCount = prog.showText
     ? Math.round(Math.max(0, Math.min(1, prog.revealFrac)) * totalChars)
     : 0;
-  const firstLineY = L.cy - L.blockH / 2 + L.lineHeight / 2;
 
   const outline = style.legibility === 'outline';
   if (style.legibility === 'shadow') {
@@ -847,6 +941,66 @@ export function drawTypewriter(
   }
   ctx.lineWidth = sizePx * 0.16;
   ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+
+  if (style.vertical) {
+    ctx.textAlign = 'center';
+    const charStep = L.charStep ?? L.lineHeight;
+    let seen = 0;
+    let cursorX: number | null = null;
+    let cursorY = 0;
+
+    for (let i = 0; i < L.lines.length; i++) {
+      const col = L.lines[i];
+      const x = verticalColumnX(L, i);
+      const top = verticalColumnTop(style, L, col.length);
+      const visibleCount = prog.showText ? Math.max(0, Math.min(col.length, revealCount - seen)) : 0;
+
+      if (prog.selectAll && col.length > 0) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(80,140,255,0.55)';
+        ctx.fillRect(x - sizePx * 0.62, top - sizePx * 0.06, sizePx * 1.24, col.length * charStep + sizePx * 0.12);
+        ctx.restore();
+      }
+
+      for (let k = 0; k < visibleCount; k++) {
+        const ch = col[k];
+        if (ch === ' ') continue;
+        const y = top + charStep * (k + 0.5);
+        if (outline) ctx.strokeText(ch, x, y);
+        ctx.fillStyle = style.color;
+        ctx.fillText(ch, x, y);
+      }
+
+      if (prog.cursor) {
+        const endsHere = seen < revealCount && seen + col.length >= revealCount;
+        const fullyRevealedLast = revealCount >= totalChars && i === lastTextLine(L.lines);
+        if (endsHere || fullyRevealedLast) {
+          cursorX = x;
+          cursorY = top + charStep * visibleCount;
+        }
+      }
+      seen += col.length;
+    }
+
+    // Cursor at the very start (nothing revealed yet).
+    if (prog.cursor && cursorX === null && prog.showText) {
+      const col0 = L.lines[0] ?? '';
+      cursorX = verticalColumnX(L, 0);
+      cursorY = verticalColumnTop(style, L, col0.length);
+    }
+
+    if (prog.cursor && prog.cursorOn && cursorX !== null) {
+      ctx.fillStyle = style.color;
+      // Text advances downward, so the cursor is a horizontal bar under the last char.
+      ctx.fillRect(cursorX - sizePx * 0.42, cursorY + sizePx * 0.04, sizePx * 0.84, Math.max(2, sizePx * 0.08));
+    }
+
+    ctx.restore();
+    return;
+  }
+
+  ctx.textAlign = 'left'; // anchor each line from a fixed left edge so text doesn't reflow while typing
+  const firstLineY = L.cy - L.blockH / 2 + L.lineHeight / 2;
 
   const lineLeft = (fullW: number): number => {
     if (style.align === 'center') return L.cx - fullW / 2;
@@ -969,6 +1123,54 @@ function captionWordBoxes(
   return { sizePx: L.sizePx, totalWords: gIndex, lines };
 }
 
+interface WordBoxV {
+  index: number;
+  top: number;
+  bottom: number;
+}
+interface ColumnV {
+  xMid: number;
+  words: WordBoxV[];
+}
+interface WordBoxesV {
+  sizePx: number;
+  totalWords: number;
+  columns: ColumnV[];
+}
+
+/** Vertical-mode counterpart of {@link captionWordBoxes}: per-word y extents within
+ *  each right-to-left column, matching exactly how {@link drawCaption} lays out text. */
+function captionWordBoxesVertical(
+  ctx: CanvasRenderingContext2D,
+  out: OutputSize,
+  cap: CaptionTextStyle,
+  font: BoilFont,
+  normalize: boolean,
+): WordBoxesV {
+  const L = measureCaption(ctx, out, cap, font, normalize);
+  const charStep = L.charStep ?? L.lineHeight;
+
+  const columns: ColumnV[] = [];
+  let gIndex = 0;
+  for (let i = 0; i < L.lines.length; i++) {
+    const colStr = L.lines[i];
+    const top = verticalColumnTop(cap, L, colStr.length);
+    const xMid = verticalColumnX(L, i);
+    const tokens = colStr.length ? colStr.split(' ') : [];
+    const words: WordBoxV[] = [];
+    let charOffset = 0;
+    for (let k = 0; k < tokens.length; k++) {
+      if (k > 0) charOffset += 1; // the joining space
+      const wTop = top + charOffset * charStep;
+      charOffset += tokens[k].length;
+      const wBottom = top + charOffset * charStep;
+      words.push({ index: gIndex++, top: wTop, bottom: wBottom });
+    }
+    columns.push({ xMid, words });
+  }
+  return { sizePx: L.sizePx, totalWords: gIndex, columns };
+}
+
 function hexToRgba(hex: string, alpha: number): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   const a = Math.max(0, Math.min(1, alpha));
@@ -998,6 +1200,49 @@ export function drawAttachmentsLayer(
   const wantType = layer === 'below' ? 'highlight' : 'underline';
   const relevant = el.attachments.filter((a) => a.type === wantType);
   if (relevant.length === 0) return;
+
+  if (el.vertical) {
+    const boxes = captionWordBoxesVertical(ctx, out, el, font, normalize);
+    if (boxes.totalWords === 0) return;
+    const sizePx = boxes.sizePx;
+    const maxIdx = boxes.totalWords - 1;
+
+    ctx.save();
+    for (const att of relevant) {
+      const absStart = sw.start + att.startInStatic;
+      const p = (sec - absStart) / Math.max(0.001, att.duration);
+      const reveal = attachmentReveal(att, p);
+      if (!reveal) continue;
+
+      const lo = Math.max(0, Math.min(maxIdx, Math.min(att.wordStart, att.wordEnd)));
+      const hi = Math.max(0, Math.min(maxIdx, Math.max(att.wordStart, att.wordEnd)));
+
+      for (const col of boxes.columns) {
+        const inSpan = col.words.filter((w) => w.index >= lo && w.index <= hi);
+        if (inSpan.length === 0) continue;
+        const padY = sizePx * (att.type === 'highlight' ? 0.12 : 0.04);
+        const segTop = Math.min(...inSpan.map((w) => w.top)) - padY;
+        const segBottom = Math.max(...inSpan.map((w) => w.bottom)) + padY;
+        const segH = segBottom - segTop;
+        const visTop = segTop + segH * reveal.a;
+        const visBottom = segTop + segH * reveal.b;
+        const visH = visBottom - visTop;
+        if (visH <= 0.5) continue;
+
+        if (att.type === 'highlight') {
+          ctx.fillStyle = hexToRgba(att.color, att.opacity);
+          ctx.fillRect(col.xMid - sizePx * 0.62, visTop, sizePx * 1.24, visH);
+        } else {
+          const thickness = Math.max(2, sizePx * 0.09);
+          const x = col.xMid - sizePx * 0.5;
+          ctx.fillStyle = att.color;
+          ctx.fillRect(x, visTop, thickness, visH);
+        }
+      }
+    }
+    ctx.restore();
+    return;
+  }
 
   const boxes = captionWordBoxes(ctx, out, el, font, normalize);
   if (boxes.totalWords === 0) return;
