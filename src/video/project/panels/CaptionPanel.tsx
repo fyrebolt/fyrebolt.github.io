@@ -57,6 +57,11 @@ export default function CaptionPanel({
         <textarea value={el.text} rows={3} onChange={(e) => onEdit({ text: e.target.value })} className="input resize-y" />
       </Field>
 
+      <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+        <input type="checkbox" checked={!!el.vertical} onChange={(e) => onEdit({ vertical: e.target.checked })} />
+        Vertical text (characters stack top-to-bottom, columns right-to-left)
+      </label>
+
       {el.kind === 'boil' ? (
         <>
           <NumberField
@@ -198,7 +203,7 @@ export default function CaptionPanel({
         <Slider label={`Size — ${el.sizeScale.toFixed(1)}×`} min={0.5} max={2.5} step={0.1} value={el.sizeScale} onChange={(v) => onEdit({ sizeScale: v })} />
       </div>
 
-      <Field label="Alignment">
+      <Field label={el.vertical ? 'Column alignment' : 'Alignment'}>
         <div className="grid grid-cols-3 gap-1.5">
           {(['left', 'center', 'right'] as TextAlign[]).map((a) => (
             <button
@@ -208,7 +213,7 @@ export default function CaptionPanel({
                 el.align === a ? 'border-[var(--color-primary-green)] bg-[var(--color-glass-hover)]' : 'border-[var(--color-glass-border)]'
               }`}
             >
-              {a}
+              {el.vertical ? { left: 'Top', center: 'Middle', right: 'Bottom' }[a] : a}
             </button>
           ))}
         </div>
