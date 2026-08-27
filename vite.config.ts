@@ -35,6 +35,8 @@ export default defineConfig({
         game: resolve(__dirname, 'game/index.html'),
         // Doomscroll → scroll-driven feed game (served at /feed/)
         feed: resolve(__dirname, 'feed/index.html'),
+        // GIF Shop → video-to-GIF converter (served at /gif/)
+        gif: resolve(__dirname, 'gif/index.html'),
       },
     },
   },

@@ -27,6 +27,7 @@ frame becomes a full-screen surface, and on a desktop it sits centered as a devi
 | 👋 **About Me** | `/about/` | Bio, skills, writing, and contact links. |
 | 🎯 **Drift** | `/game/` | A game that takes your cursor with Pointer Lock and hands back a warped one. |
 | 📱 **Doomscroll** | `/feed/` | A game that takes your scroll wheel. Stop to read, fly past the bait, relearn scrolling every ten seconds. |
+| 🎞️ **GIF Shop** | `/gif/` | Drop any video in, get a GIF back. Two-pass palette, full source quality by default, converted in the tab. |
 | 📸 **Instagram Tracker** | `/instagram/` | Who follows and unfollows you, diffed once a day from one committed history file. |
 | 💼 **LinkedIn Tracker** | `/linkedin/` | The same idea for LinkedIn, built around profile views. **Unfinished** — deliberately not on the home screen. |
 
@@ -265,6 +266,45 @@ land on you.
 <kbd>↑</kbd> <kbd>↓</kbd> and <kbd>PgUp</kbd> <kbd>PgDn</kbd> — all three feed
 the identical pipeline, so the game plays the same on a trackpad, a phone and a
 keyboard.
+
+### 🎞️ GIF Shop (`/gif/`)
+
+Drop a video anywhere on the page and a GIF comes back, ready to download.
+Anything ffmpeg can demux works — MP4, MOV, WebM, AVI, MKV, an existing GIF, or
+a still image — and several files at once queue up and convert one after
+another. Like the video editor, it runs entirely on ffmpeg.wasm inside the tab:
+nothing is uploaded, which is the only reason it's reasonable to accept
+"anything".
+
+**Why it looks like the source.** A GIF holds 256 colours, so the only question
+that matters is *which* 256. Converting in one pass uses ffmpeg's fixed web
+palette, and anything with a gradient in it bands immediately. So each file gets
+two passes ([`src/gif/convert.ts`](src/gif/convert.ts)): the first reads the
+whole clip and generates a palette fitted to that clip, the second re-reads it
+and maps onto that palette. `stats_mode=diff` weights the palette toward the
+parts of the frame that actually move, and `diff_mode=rectangle` limits each
+frame to the rectangle that changed, which is what keeps mostly-static footage
+from producing an enormous file.
+
+The two passes are run as separate `exec`s rather than one `split` filter graph
+on purpose: `split` has to buffer every decoded frame until the palette exists,
+which exhausts the wasm heap on a long clip. Reading the input twice is slower
+and always finishes.
+
+**Defaults are the full-quality ones** — the source's own frame rate and its own
+resolution, no resampling at all. Frame rate and width are there to trade
+quality for size when a file has to be smaller; width is applied as
+`min(iw, W)`, so choosing a size larger than the source is a no-op rather than
+an upscale that costs bytes and adds no detail.
+
+The filter graphs live apart from the wasm in
+[`src/gif/options.ts`](src/gif/options.ts), because that is the part worth
+testing directly — a malformed filter string is a silently wrong GIF, and a
+string is much easier to assert on than an image.
+[`test/gif-options.test.mjs`](test/gif-options.test.mjs) pins both passes: that
+the default really does emit no rate or size filter, that the palette is fitted
+and capped, that pass two wires the palette in as its second input, and that a
+width larger than the source can't upscale.
 
 ### 📸 Instagram Tracker (`/instagram/`)
 
@@ -803,6 +843,7 @@ src/
   about/       # About Me
   game/        # Drift — pointer-lock cursor game (engine / render / warps / pointer)
   feed/        # Doomscroll — scroll-driven feed game (engine / render / quirks / scroll)
+  gif/         # GIF Shop — video-to-GIF converter (two-pass palette via ffmpeg.wasm)
   instagram/   # Instagram follower tracker
   linkedin/    # LinkedIn tracker (unfinished; not on the home screen)
   components/  # shared UI + section components

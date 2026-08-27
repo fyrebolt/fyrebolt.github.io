@@ -1,0 +1,240 @@
+/* ===== GIF Shop ===== */
+
+.gif-file-input {
+  display: none;
+}
+
+/* ===== Drop zone =====
+   The window is the real drop target (see the listeners in GifApp); this box
+   is the part that says so, and doubles as the file picker. */
+.gif-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: clamp(22px, 5vh, 44px) 24px;
+  text-align: center;
+  border-radius: 26px;
+  border: 2px dashed rgba(60, 60, 67, 0.22);
+  background: var(--color-glass-bg);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.3s var(--ease-spring);
+}
+.gif-drop:hover {
+  border-color: rgba(0, 122, 255, 0.4);
+  background: var(--color-glass-hover);
+}
+.gif-drop:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 3px;
+}
+.gif-drop.is-dragging {
+  border-color: var(--color-accent);
+  background: rgba(0, 122, 255, 0.1);
+  transform: scale(1.012);
+}
+.gif-drop-glyph {
+  font-size: 40px;
+  line-height: 1;
+  filter: drop-shadow(0 3px 6px rgba(17, 24, 39, 0.18));
+}
+.gif-drop-title {
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.gif-drop-sub {
+  max-width: 46ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+/* ===== Settings ===== */
+.gif-settings {
+  margin-top: 20px;
+  padding: 16px 18px;
+  border-radius: 24px;
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-1);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.gif-field-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 7px;
+  flex-wrap: wrap;
+}
+.gif-field-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+.gif-field-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.gif-settings-note {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+  padding-top: 2px;
+  border-top: 1px solid var(--color-hairline);
+  margin-top: 2px;
+  padding-top: 12px;
+}
+
+/* ===== Queue ===== */
+.gif-queue {
+  margin-top: 20px;
+}
+.gif-queue-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.gif-queue-title {
+  font-size: 15px;
+  font-weight: 650;
+}
+.gif-queue-busy {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+.gif-queue-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gif-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gif-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 20px;
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-1);
+  animation: gif-row-in 0.4s var(--ease-out-ios) both;
+}
+.gif-row-error-state,
+.gif-row-error {
+  color: var(--color-primary-pink);
+}
+
+.gif-row-thumb {
+  flex: none;
+  width: 58px;
+  height: 58px;
+  border-radius: 14px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  background: var(--color-fill-secondary);
+}
+.gif-row-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.gif-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.gif-row-name {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gif-row-meta {
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+}
+
+.gif-progress {
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-fill-secondary);
+  overflow: hidden;
+}
+.gif-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--color-accent);
+  transition: width 0.25s var(--ease-out-ios);
+}
+
+.gif-row-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.gif-row-actions .ios-btn {
+  text-decoration: none;
+}
+.gif-row-remove {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 7px;
+  border-radius: 50%;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+.gif-row-remove:hover {
+  background: var(--color-fill-secondary);
+  color: var(--color-text-primary);
+}
+
+.gif-note {
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+@media (max-width: 560px) {
+  .gif-row {
+    flex-wrap: wrap;
+  }
+  .gif-row-main {
+    flex-basis: calc(100% - 72px);
+  }
+  .gif-row-actions {
+    margin-left: auto;
+  }
+}
+
+@keyframes gif-row-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

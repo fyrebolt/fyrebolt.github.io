@@ -77,6 +77,14 @@ export const APPS: HomeApp[] = [
     blurb: 'A feed game that takes the scroll wheel.',
   },
   {
+    id: 'gif',
+    label: 'GIF Shop',
+    glyph: '🎞️',
+    route: '/gif/',
+    gradient: 'linear-gradient(160deg, #5ac8fa 0%, #5856d6 58%, #af52de 100%)',
+    blurb: 'Turn any video into a full-quality GIF, in the browser.',
+  },
+  {
     id: 'instagram',
     label: 'Instagram',
     glyph: '📸',
