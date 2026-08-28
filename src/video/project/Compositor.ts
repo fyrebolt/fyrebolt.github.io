@@ -76,10 +76,12 @@ import {
   baseDuration,
   clipCrop,
   clipLen,
+  clipSpeed,
   clipTransform,
   clipZ,
   hasVideoClip,
   isBlank,
+  isFrozen,
   isPlainClip,
   resolveBase,
   sampleVolume,
@@ -454,12 +456,18 @@ export class Compositor {
 
       if (want) {
         const target = Math.min(want.target, cap);
-        if (frozen || !allowPlay) {
+        // A clip's own rate multiplies the timeline's: a 2x clip inside a 0.5x
+        // Time Machine span runs at 1x, which is what both settings, read
+        // literally, ask for. A frozen clip is parked exactly like a Time
+        // Machine freeze — the element holds the one frame `clipSourceAt` keeps
+        // resolving to, so there is nothing to play.
+        const rate = speed * clipSpeed(clip);
+        if (frozen || isFrozen(clip) || !allowPlay) {
           if (!v.paused) v.pause();
           if (Math.abs(v.currentTime - target) > 0.05) v.currentTime = Math.max(0, target);
         } else {
-          const rate = Math.min(4, Math.max(0.0625, speed));
-          if (v.playbackRate !== rate) v.playbackRate = rate;
+          const r = Math.min(4, Math.max(0.0625, rate));
+          if (v.playbackRate !== r) v.playbackRate = r;
           if (v.paused) void v.play().catch(() => undefined);
           // Correct only large drift (a fresh clip start already lands on target).
           if (Math.abs(v.currentTime - target) > 0.3) v.currentTime = Math.max(0, target);
@@ -470,7 +478,11 @@ export class Compositor {
           // the crossfade / duck envelope. Overlapping clips each carry their own,
           // so they mix. Pitch-shifted / paused audio is still silenced on a
           // freeze or off-speed span, and mute wins outright.
-          const suppressed = frozen || Math.abs(speed - 1) > 0.02 || clip.muted === true;
+          // Off-rate audio is a chipmunk or a drone, and a held frame has no
+          // audio to speak of, so both are silenced — the same rule the Time
+          // Machine already applied, now reading the combined rate.
+          const suppressed =
+            frozen || isFrozen(clip) || Math.abs(rate - 1) > 0.02 || clip.muted === true;
           audio.gain.gain.setTargetAtTime(suppressed ? 0 : want.gain, when, 0.01);
         }
       } else {
