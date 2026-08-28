@@ -112,6 +112,41 @@ export const WARP_BY_ID: Record<WarpId, WarpDef> = Object.fromEntries(
   WARPS.map((w) => [w.id, w]),
 ) as Record<WarpId, WarpDef>;
 
+/**
+ * The four warps that lie about *direction* rather than about physics.
+ *
+ * Ice, Syrup, Tide and Wells all leave "right is right" intact — they change
+ * how much you slide, or drag you somewhere, but the mapping from hand to
+ * cursor still points the way you expect. These four break that mapping, which
+ * is a categorically harder thing to play through, and stacking two of them is
+ * where most runs end. They are what the console benches.
+ */
+export const HARD_WARPS: WarpId[] = ['mirror', 'flip', 'swap', 'spin'];
+
+const NONE: ReadonlySet<WarpId> = new Set<WarpId>();
+
+/**
+ * Which warps could legally engage right now, given what's already running.
+ *
+ * The rule lives here rather than in the scheduler so it can be checked without
+ * a canvas: a warp is eligible unless it's already active, benched, or excluded
+ * by something active. Exclusions are asserted mutual by the test suite, but
+ * both directions are checked anyway — this is the function that decides
+ * whether the game can hand you two contradictory lies at once.
+ */
+export function eligibleWarps(
+  active: ReadonlySet<WarpId>,
+  benched: ReadonlySet<WarpId> = NONE,
+): WarpDef[] {
+  return WARPS.filter((w) => {
+    if (benched.has(w.id)) return false;
+    if (active.has(w.id)) return false;
+    if (w.excludes.some((x) => active.has(x))) return false;
+    for (const id of active) if (WARP_BY_ID[id].excludes.includes(w.id)) return false;
+    return true;
+  });
+}
+
 /** Sensitivity multiplier applied by `zoom`. */
 const ZOOM_GAIN = 2.15;
 

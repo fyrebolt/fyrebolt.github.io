@@ -133,6 +133,52 @@ you can't see isn't a lesson, and a hunter you can't see is an ambush.
 banks its score: withholding the record for quitting would only teach players
 to sit in a corner waiting out the clock.
 
+## The console
+
+<kbd>⌘K</kbd> / <kbd>Ctrl</kbd>+<kbd>K</kbd> opens a terminal box over the arena.
+Nothing in the interface refers to it, the root README doesn't mention it, and
+it has no command listing — `help` is answered with `no.` The whole conceit is
+that somebody told you. It is documented *here*, and only here, because an
+undocumented cheat is a trap for whoever changes the scheduler next.
+
+One command so far: **`--yolo`**, which toggles a bench on the four warps that
+lie about *direction* — Mirror, Flip, Swap and Spin (`HARD_WARPS` in
+[`warps.ts`](warps.ts)). Ice, Syrup, Tide and Wells all leave "right is right"
+intact; those four don't, and stacking two of them is where most runs end.
+
+Three rules it follows, each for a reason:
+
+- **It applies from the next run, never the current one.** Benching mid-run
+  would let a run in trouble be rescued by opening a console, and the warps
+  already on screen would have to be torn down mid-flight. `start()` captures
+  the pending set; nothing else reads it.
+- **A benched run can't take the high score.** `banksScore()` gates both exits
+  from a run — game over and `toMenu`. Banking it would overwrite an honest
+  best with an easier one and leave no way to tell afterwards which it was.
+- **The tutorial is never benched.** A lesson is the real warp or it is nothing,
+  so `startTutorial` clears the active bench — and lessons arm their warp
+  directly anyway, without going through the scheduler.
+
+The command language is in [`cheats.ts`](cheats.ts), apart from the box that
+draws it, because what a command *does* is worth testing and a blinking caret
+isn't. The eligibility rule the bench feeds is `eligibleWarps` in
+[`warps.ts`](warps.ts), which is where the scheduler's filter now lives so it
+can be checked without a canvas.
+
+### Adding a command
+
+Add a branch to `execute` in [`cheats.ts`](cheats.ts) and a flag to
+`CheatState`. Keep the output terse and lower-case — the box is meant to read
+like something older and less friendly than the game around it — and **don't**
+add it to a help listing.
+
+Then cover it in [`test/game-cheats.test.mjs`](../../test/game-cheats.test.mjs)
+(the parse) and [`test/game-bench.test.mjs`](../../test/game-bench.test.mjs)
+(the consequence, by playing real runs headlessly). A console nobody can find is
+a console nobody will notice has broken: there's no button that stops working
+and no screen that looks wrong, so the tests are the only thing standing between
+a silent regression and a cheat that just quietly does nothing.
+
 ## Tuning
 
 All of it is the constant block at the top of [`engine.ts`](engine.ts).
