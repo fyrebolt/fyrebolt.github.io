@@ -10,7 +10,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { VideoClip } from './clips';
-import { baseDuration, clipGlyph, clipLen, isStill, MIN_CLIP_LEN } from './clips';
+import { baseDuration, clipGlyph, clipHold, clipLen, clipSpeed, isFrozen, isStill, MIN_CLIP_LEN } from './clips';
 import { glyphOf, labelOf, maxDurationAt, transitionAt, MIN_TRANSITION_DUR } from './transitions';
 
 const CARD_W = 150; // px, fixed
@@ -345,7 +345,33 @@ export default function ClipStrip({
                     </span>
                   );
                 })()}
-              <span>{fmt(clipLen(clip))}</span>
+              {/* A re-timed clip says so on its own card: the length alone
+                  can't distinguish "2 seconds of source" from "4 seconds run
+                  at 2x", and those cut very differently. */}
+              {(() => {
+                const speed = clipSpeed(clip);
+                if (isFrozen(clip)) {
+                  return (
+                    <span
+                      className="px-1 rounded bg-[var(--color-primary-cyan)]/20 text-[var(--color-primary-cyan)]"
+                      title={`Frozen — holds one frame for ${fmt(clipHold(clip))}`}
+                    >
+                      ❄ {fmt(clipHold(clip))}
+                    </span>
+                  );
+                }
+                if (Math.abs(speed - 1) > 0.02) {
+                  return (
+                    <span
+                      className="px-1 rounded bg-[var(--color-primary-green)]/20 text-[var(--color-primary-green)]"
+                      title={`Playing at ${speed}x`}
+                    >
+                      {speed}× · {fmt(clipLen(clip))}
+                    </span>
+                  );
+                }
+                return <span>{fmt(clipLen(clip))}</span>;
+              })()}
             </div>
           </div>,
         ];
