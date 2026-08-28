@@ -37,6 +37,8 @@ export default defineConfig({
         feed: resolve(__dirname, 'feed/index.html'),
         // GIF Shop → video-to-GIF converter (served at /gif/)
         gif: resolve(__dirname, 'gif/index.html'),
+        // Retake → recorded-takes puzzle platformer (served at /retake/)
+        retake: resolve(__dirname, 'retake/index.html'),
       },
     },
   },
