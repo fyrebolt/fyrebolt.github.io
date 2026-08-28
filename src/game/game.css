@@ -456,3 +456,99 @@ html.game-owns-cursor .ios-soft-cursor {
     animation: none;
   }
 }
+
+/* ===== The console (⌘K) =====
+   A terminal box over the arena. Nothing else in the interface refers to it,
+   so everything here is styled to look like it belongs to a different, older
+   program than the game around it. */
+.game-console-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(4, 6, 12, 0.62);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: game-console-in 0.16s ease-out both;
+}
+
+.game-console {
+  width: min(540px, 100%);
+  max-height: min(320px, 80%);
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #05070c;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(120, 255, 200, 0.16),
+    0 0 40px rgba(60, 255, 190, 0.06);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #7dffc4;
+}
+
+.game-console-bar {
+  display: flex;
+  gap: 6px;
+  padding: 9px 11px;
+  background: rgba(125, 255, 196, 0.05);
+  border-bottom: 1px solid rgba(125, 255, 196, 0.12);
+}
+.game-console-bar i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(125, 255, 196, 0.22);
+}
+
+.game-console-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 13px 4px;
+  scrollbar-width: thin;
+}
+.game-console-line {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.game-console-line.is-in { color: #d9fff0; }
+.game-console-line.is-ok { color: #7dffc4; }
+.game-console-line.is-err { color: #ff6b81; }
+.game-console-line.is-dim { color: rgba(125, 255, 196, 0.45); }
+
+.game-console-caret {
+  display: inline-block;
+  width: 1em;
+  color: rgba(125, 255, 196, 0.55);
+}
+
+.game-console-input {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 13px 12px;
+}
+.game-console-input input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  font: inherit;
+  color: #d9fff0;
+  caret-color: #7dffc4;
+}
+
+@keyframes game-console-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .game-console-scrim { animation: none; }
+}

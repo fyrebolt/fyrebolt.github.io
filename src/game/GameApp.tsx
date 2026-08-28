@@ -3,12 +3,15 @@ import AppShell from '../ios/AppShell';
 import { Button } from '../ios';
 import { createGame, type GameEvent, type GameHandle } from './engine';
 import { sfx } from './sfx';
-import { WARP_BY_ID } from './warps';
+import { HARD_WARPS, WARP_BY_ID } from './warps';
+import Console from './Console';
+import { NO_CHEATS, type CheatState } from './cheats';
 import { LESSONS } from './tutorial';
 import type { HudSnapshot } from './types';
 import './game.css';
 
 const MUTE_KEY = 'drift.muted.v1';
+const CHEAT_KEY = 'drift.yolo.v1';
 
 const EMPTY_HUD: HudSnapshot = {
   phase: 'menu',
@@ -36,6 +39,14 @@ export default function GameApp() {
 
   const [hud, setHud] = useState<HudSnapshot>(EMPTY_HUD);
   const [banner, setBanner] = useState<Banner | null>(null);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [cheats, setCheats] = useState<CheatState>(() => {
+    try {
+      return { yolo: localStorage.getItem(CHEAT_KEY) === '1' };
+    } catch {
+      return NO_CHEATS;
+    }
+  });
   const [muted, setMuted] = useState(() => {
     try {
       return localStorage.getItem(MUTE_KEY) === '1';
@@ -87,6 +98,21 @@ export default function GameApp() {
     };
   }, []);
 
+  // Declared after the engine effect on purpose: effects run in order, so on
+  // mount this fires once `gameRef` is populated and can do the arming itself.
+  //
+  // The flag outlives the tab, like the mute preference — a code you were told
+  // once shouldn't have to be re-entered after every reload. It reaches the
+  // engine as a set of benched warps, which only the next `start()` reads.
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHEAT_KEY, cheats.yolo ? '1' : '0');
+    } catch {
+      /* private mode — the flag just won't stick */
+    }
+    gameRef.current?.benchWarps(cheats.yolo ? HARD_WARPS : []);
+  }, [cheats]);
+
   // While the game owns the pointer, the site's soft trailing cursor would sit
   // frozen wherever the lock happened. Park it for the duration.
   useEffect(() => {
@@ -102,10 +128,28 @@ export default function GameApp() {
 
   // Keys mirror whatever the visible buttons do, so a run can be restarted —
   // or a lesson abandoned — without ever going back to the mouse.
+  // ⌘K / Ctrl+K anywhere in Drift. Nothing in the interface points at it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey) || e.altKey) return;
+      e.preventDefault();
+      setConsoleOpen((open) => {
+        // Typing into a box while the arena has your mouse and a clock running
+        // is nobody's idea of a good time — step out of the run first.
+        if (!open && gameRef.current && hud.phase === 'playing') gameRef.current.pause();
+        return !open;
+      });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [hud.phase]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const game = gameRef.current;
       if (!game) return;
+      // While the prompt is up it owns the keyboard.
+      if (consoleOpen) return;
 
       if (e.key === 'Escape') {
         // Under pointer lock the browser eats this keydown and releases the
@@ -130,7 +174,7 @@ export default function GameApp() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [hud.phase, hud.locked, hud.tutorial, toMenu, resumeRun, startRun]);
+  }, [hud.phase, hud.locked, hud.tutorial, consoleOpen, toMenu, resumeRun, startRun]);
 
   const overlayClick = hud.phase === 'paused' ? resumeRun : startRun;
 
@@ -250,6 +294,13 @@ export default function GameApp() {
                 <Over hud={hud} onAgain={startRun} onLearn={startTutorial} />
               ))}
           </div>
+        )}
+        {consoleOpen && (
+          <Console
+            state={cheats}
+            onState={setCheats}
+            onClose={() => setConsoleOpen(false)}
+          />
         )}
       </div>
 
