@@ -107,6 +107,7 @@ import HighlighterPanel from './project/panels/HighlighterPanel';
 import DramaticPanel from './project/panels/DramaticPanel';
 import StickerPanel from './project/panels/StickerPanel';
 import ClipPanel from './project/panels/ClipPanel';
+import ClipSpeedPanel from './project/panels/ClipSpeedPanel';
 import ClipPlacementPanel from './project/panels/ClipPlacementPanel';
 import TransitionPanel from './project/panels/TransitionPanel';
 import GradePanel from './project/panels/GradePanel';
@@ -4172,6 +4173,20 @@ export default function VideoEditor() {
                       </Section>
                     );
                   })()}
+
+                  {/* Speed is per-clip and only means anything for moving
+                      footage — a still is already a held frame. It sits above
+                      Audio because changing it changes the clip's length, which
+                      is a structural edit, not a mix one. */}
+                  {selectedClip.kind === 'video' && (
+                    <Section title="Speed">
+                      <ClipSpeedPanel
+                        key={selectedClip.id}
+                        clip={selectedClip}
+                        onEdit={(patch, discrete) => editClip(selectedClip.id, patch, discrete)}
+                      />
+                    </Section>
+                  )}
 
                   {selectedClip.kind === 'video' && (
                     <Section title="Audio">

@@ -90,6 +90,22 @@ The strip under the preview is the ordered list of clips that play back-to-back.
 - Select a clip to edit its **audio** (a volume-automation curve over the clip's
   original sound, plus mute) and its **colour** (per-clip brightness / contrast /
   saturation) in the right-hand panels.
+- **Speed** is per clip. Split a shot and slow down only the back half: presets
+  from 0.25× to 4×, or type an exact rate. Changing it changes how long the clip
+  runs — 4 seconds of source at 2× is 2 seconds of timeline — and the panel says
+  what it works out to. Off 1× the clip's own audio is silenced, since a
+  pitch-shifted voice is rarely what anyone wants.
+- **0× is a freeze**: the clip holds the frame at its in-point instead of
+  playing. A freeze is the one case where the length can't be derived (source
+  span over rate is infinite at rate zero), so it asks how long to hold — two
+  seconds by default. Split at the moment you want and freeze the second half
+  and the cut becomes a hold on exactly that frame. Re-timed clips are badged on
+  the strip (`2× · 4.0s`, `❄ 2.0s`) so a shortened clip is never a mystery.
+
+  This is a different mechanism from the **Time Machine** layer below. That
+  re-times the whole output; this re-times one clip's slice of it. They sit on
+  either side of the base clock and compose — a 2× clip inside a 0.5× Time
+  Machine span plays at 1×.
 
 #### Transitions between clips
 

@@ -113,6 +113,29 @@ export interface VideoClip {
   /** Silence this clip's ORIGINAL audio entirely, regardless of the curve. The
    *  curve is preserved so un-muting restores exactly what was there. */
   muted?: boolean;
+  /**
+   * How fast this clip's own source plays: 1 = normal, 2 = double, 0.5 = half,
+   * and **0 = freeze** (hold one frame — see `hold`). Absent == 1, so every
+   * existing clip and project lays out bit-for-bit as before.
+   *
+   * This is a SEPARATE mechanism from the Time Machine layer. That layer warps
+   * the OUTPUT clock onto the base clock (`outputT → baseT`) for the whole
+   * timeline; this warps one clip's slice of the base clock onto its own source
+   * (`baseT → sourceT`). They sit on either side of the base clock and compose
+   * without either knowing about the other, which is why the Time Machine did
+   * not have to change to make this work.
+   *
+   * Only meaningful for video: a still has no motion to re-rate, so `clipSpeed`
+   * reports 1 for images and blanks whatever is stored here.
+   */
+  speed?: number;
+  /**
+   * Seconds a FROZEN clip (`speed === 0`) holds its frame for. Meaningless
+   * otherwise. A freeze needs this because the usual arithmetic — source span
+   * divided by rate — is infinite at rate zero: the length has to be stated
+   * rather than derived. Absent == DEFAULT_HOLD.
+   */
+  hold?: number;
   /** Per-clip colour grade (brightness/contrast/saturation), applied to this
    *  clip's base frame in both preview and export. Absent == neutral. */
   grade?: ColorGrade;
@@ -211,9 +234,75 @@ export function applyOscillation(existing: VolumePoint[] | undefined, opts: Osci
   return sortedVolume([...kept, ...gen]);
 }
 
-/** Effective on-timeline length of a clip (trimmed), in seconds. */
-export function clipLen(c: VideoClip): number {
+// ---- per-clip speed ----
+
+/** Slowest and fastest a clip may run. 0 is separate: it means freeze. */
+export const SPEED_MIN = 0.1;
+export const SPEED_MAX = 4;
+/** Seconds a freeze holds for until someone says otherwise. */
+export const DEFAULT_HOLD = 2;
+/** Longest a single held frame may be stretched to. */
+export const HOLD_MAX = 60;
+
+/** Fold a raw rate into the editable range. Anything at or below 0 is a freeze. */
+export function clampSpeed(v: number): number {
+  if (!isFinite(v) || v <= 0) return 0;
+  return Math.max(SPEED_MIN, Math.min(SPEED_MAX, v));
+}
+
+export function clampHold(v: number): number {
+  if (!isFinite(v)) return DEFAULT_HOLD;
+  return Math.max(MIN_CLIP_LEN, Math.min(HOLD_MAX, v));
+}
+
+/**
+ * This clip's playback rate. Stills always report 1: an image has no motion to
+ * re-rate and is already, in effect, a held frame — so the whole notion of
+ * speed (and of freezing) only applies to video.
+ */
+export function clipSpeed(c: VideoClip): number {
+  if (isStill(c)) return 1;
+  return c.speed === undefined ? 1 : clampSpeed(c.speed);
+}
+
+/** A clip holding a single frame rather than playing. */
+export function isFrozen(c: VideoClip): boolean {
+  return clipSpeed(c) === 0;
+}
+
+/** How long a frozen clip holds. Only meaningful when `isFrozen`. */
+export function clipHold(c: VideoClip): number {
+  return clampHold(c.hold ?? DEFAULT_HOLD);
+}
+
+/** How much of the clip's SOURCE it uses, in source seconds (out − in). */
+export function clipSourceSpan(c: VideoClip): number {
   return Math.max(MIN_CLIP_LEN, c.out - c.in);
+}
+
+/**
+ * How long the clip occupies the TIMELINE, in seconds.
+ *
+ * At 1× this is the source span, which is what it always used to be and why
+ * every existing caller still means the right thing. Off 1× the two part
+ * company: a 4-second clip at 2× is 2 seconds of timeline, and a frozen one is
+ * however long its hold says, regardless of how much source it was trimmed to.
+ */
+export function clipLen(c: VideoClip): number {
+  if (isFrozen(c)) return clipHold(c);
+  return Math.max(MIN_CLIP_LEN, clipSourceSpan(c) / clipSpeed(c));
+}
+
+/**
+ * The source second this clip shows `local` seconds into its slot on the
+ * timeline. A freeze answers with its in-point forever — that is the whole of
+ * what freezing is: the layout gives it `hold` seconds and every one of them
+ * resolves to the same frame.
+ */
+export function clipSourceAt(c: VideoClip, local: number): number {
+  if (isFrozen(c)) return c.in;
+  const t = c.in + Math.max(0, local) * clipSpeed(c);
+  return Math.min(c.out, t);
 }
 
 /**
@@ -340,16 +429,23 @@ export interface BaseHit {
   clip: VideoClip;
   /** Base time where this clip starts. */
   clipStart: number;
-  /** Time from the clip's start (0 .. clipLen). */
+  /** Time from the clip's start on the TIMELINE (0 .. clipLen). */
   local: number;
-  /** SOURCE time inside the clip's media = clip.in + local. */
+  /** SOURCE time inside the clip's media. Equals `in + local` only at 1×; see
+   *  `clipSourceAt` for what speed and freezing do to that. */
   sourceT: number;
 }
 
 function hitOf(p: ClipPlacement, baseT: number): BaseHit {
   const len = clipLen(p.clip);
   const local = Math.max(0, Math.min(len, baseT - p.start));
-  return { index: p.index, clip: p.clip, clipStart: p.start, local, sourceT: p.clip.in + local };
+  return {
+    index: p.index,
+    clip: p.clip,
+    clipStart: p.start,
+    local,
+    sourceT: clipSourceAt(p.clip, local),
+  };
 }
 
 /**
@@ -421,16 +517,21 @@ export function splitClip(c: VideoClip, local: number): [VideoClip, VideoClip] |
   const firstVol = points.filter((p) => p.t < local);
   const secondVol = points.filter((p) => p.t >= local).map((p) => ({ ...p, t: p.t - local }));
 
-  // Split source seconds: for a still (in === 0) the "in" stays 0 and the length
-  // lives in `out`; for video the second clip picks up where the first left off.
+  // Where the cut lands in SOURCE seconds. `local` is a position on the
+  // timeline, so off 1× it is not the same number: half way along a 2× clip is
+  // twice as far into its source. A freeze has no source position to split at
+  // all — every instant of it is the same frame — so it splits its HOLD instead
+  // and both halves go on showing that frame.
   const still = isStill(c);
-  const cutSource = still ? local : c.in + local;
+  const frozen = isFrozen(c);
+  const cutSource = still ? local : c.in + local * clipSpeed(c);
 
   uid += 1;
   const first: VideoClip = {
     ...c,
     id: `clip-${Date.now().toString(36)}-${uid}`,
-    out: still ? local : cutSource,
+    out: frozen ? c.out : still ? local : cutSource,
+    hold: frozen ? local : c.hold,
     volume: firstVol.length ? firstVol : undefined,
     transform: c.transform ? { ...c.transform } : undefined,
     crop: c.crop ? { ...c.crop } : undefined,
@@ -439,8 +540,9 @@ export function splitClip(c: VideoClip, local: number): [VideoClip, VideoClip] |
   const second: VideoClip = {
     ...c,
     id: `clip-${Date.now().toString(36)}-${uid}`,
-    in: still ? 0 : cutSource,
-    out: still ? len - local : c.out,
+    in: frozen ? c.in : still ? 0 : cutSource,
+    out: frozen ? c.out : still ? len - local : c.out,
+    hold: frozen ? len - local : c.hold,
     volume: secondVol.length ? secondVol : undefined,
     // Placement travels to both halves (independent copies), and an explicitly
     // pinned clip hands the second half the pin it now starts at — an implicitly
