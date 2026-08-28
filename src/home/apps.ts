@@ -85,6 +85,14 @@ export const APPS: HomeApp[] = [
     blurb: 'Turn any video into a full-quality GIF, in the browser.',
   },
   {
+    id: 'retake',
+    label: 'Retake',
+    glyph: '🎬',
+    route: '/retake/',
+    gradient: 'linear-gradient(160deg, #1c1c1e 0%, #3a3f52 48%, #5ac8fa 100%)',
+    blurb: 'A platformer where you cooperate with your own past attempts.',
+  },
+  {
     id: 'instagram',
     label: 'Instagram',
     glyph: '📸',
