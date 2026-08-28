@@ -130,13 +130,28 @@ export function compileWarp(project: Project, clipDur: number, videoBase = true)
       bi += 1;
       continue;
     }
-    const s = trackSpeedAt(o, pts);
+    let s = trackSpeedAt(o, pts);
     if (s <= FREEZE_EPS) {
-      // Frozen. If nothing ahead ever resumes, this is a permanent end-freeze.
-      if (maxSpeedFrom(o, pts) <= FREEZE_EPS) break;
-      o += DT;
-      push(o, src, 0);
-      continue;
+      if (maxSpeedFrom(o, pts) > FREEZE_EPS) {
+        // An ordinary freeze: hold here, something ahead resumes.
+        o += DT;
+        push(o, src, 0);
+        continue;
+      }
+      // Nothing ahead ever resumes. The curve holds flat past its last point,
+      // so a trailing 0 asks the clip to freeze for the rest of time — which
+      // cannot be represented, and which this loop used to answer by stopping
+      // dead. That silently TRUNCATED the timeline: a 30-second recording with
+      // a stray 0 at 5s became a 4.9-second one, the remaining footage became
+      // unreachable at any output time, and — because the preview loop restarts
+      // when it reaches the end — the transport appeared to freeze and replay
+      // the same fragment forever.
+      //
+      // A speed curve is an effect over the footage; it must never be able to
+      // swallow it. So a freeze with no resume is not honoured as a freeze: the
+      // remainder plays at normal speed, which keeps the one invariant that
+      // matters — every source second has some output time that shows it.
+      s = NORMAL_SPEED;
     }
     // Advance one step, capping it to land exactly on the freeze / clip end.
     let step = DT;
