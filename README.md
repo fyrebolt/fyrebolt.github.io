@@ -28,6 +28,7 @@ frame becomes a full-screen surface, and on a desktop it sits centered as a devi
 | 🎯 **Drift** | `/game/` | A game that takes your cursor with Pointer Lock and hands back a warped one. |
 | 📱 **Doomscroll** | `/feed/` | A game that takes your scroll wheel. Stop to read, fly past the bait, relearn scrolling every ten seconds. |
 | 🎞️ **GIF Shop** | `/gif/` | Drop any video in, get a GIF back. Two-pass palette, full source quality by default, converted in the tab. |
+| 🎬 **Retake** | `/retake/` | A puzzle platformer where every attempt is recorded, and your past takes become platforms you stand on. |
 | 📸 **Instagram Tracker** | `/instagram/` | Who follows and unfollows you, diffed once a day from one committed history file. |
 | 💼 **LinkedIn Tracker** | `/linkedin/` | The same idea for LinkedIn, built around profile views. **Unfinished** — deliberately not on the home screen. |
 
@@ -266,6 +267,47 @@ land on you.
 <kbd>↑</kbd> <kbd>↓</kbd> and <kbd>PgUp</kbd> <kbd>PgDn</kbd> — all three feed
 the identical pipeline, so the game plays the same on a trackpad, a phone and a
 keyboard.
+
+### 🎬 Retake (`/retake/`)
+
+A puzzle platformer about cooperating with your own past attempts.
+
+Every take is recorded. When one ends — you fell on the spikes, the clock ran
+out, or you pressed <kbd>R</kbd> to **cut** — it doesn't reset the level. Your
+previous performance keeps playing alongside the new one, as a solid body: it
+blocks you, and you can stand on it. So the way you reach a shelf three tiles up
+is to spend a take walking to the right spot, cut, and then climb yourself.
+
+That makes **Cut** the real verb of the game. It isn't giving up; it's placing a
+stand-in. And because a past take replays *from the top* each time, where you
+leave it is a question about position and timing at once.
+
+Five shots, and each new one asks for one more storey — which is to say, one
+more take. The whole thing is on a soundstage: a slate before each take, a film
+strip counting what you've spent, and the mark taped on the floor.
+
+**Determinism is the load-bearing property.** The simulation
+([`src/retake/sim.ts`](src/retake/sim.ts)) has no wall clock, no randomness and
+no frame-rate term; the engine spends real time into whole fixed steps through
+an accumulator, so a 60 Hz display, a 144 Hz display and the test suite all
+advance the world identically. The player stands on a recorded path, so if the
+same inputs could produce two different runs, the ghosts would drift out from
+under their feet. [`test/retake-levels.test.mjs`](test/retake-levels.test.mjs)
+asserts it directly, position by position.
+
+Everything in the shot list is drawn against two numbers from
+[`src/retake/physics.ts`](src/retake/physics.ts): a jump rises about 2.55 tiles
+and carries about 5.67. That is exactly why a 3-tile shelf is out of reach alone
+and possible standing on one take, and why a 4-tile rise costs two.
+[`test/retake-physics.test.mjs`](test/retake-physics.test.mjs) pins both, so
+retuning the feel can't quietly make five levels trivial.
+
+The levels themselves are ASCII grids, and the test suite **plays every one of
+them** — a scripted campaign of takes per shot, driven through the same
+`stepSim` the browser calls, passing only if the performer ends up standing on
+the mark. A puzzle platformer with an impossible level isn't a hard game, it's a
+broken one, and nothing short of playing it proves otherwise. Notes for changing
+any of this are in [`src/retake/README.md`](src/retake/README.md).
 
 ### 🎞️ GIF Shop (`/gif/`)
 
@@ -844,6 +886,7 @@ src/
   game/        # Drift — pointer-lock cursor game (engine / render / warps / pointer)
   feed/        # Doomscroll — scroll-driven feed game (engine / render / quirks / scroll)
   gif/         # GIF Shop — video-to-GIF converter (two-pass palette via ffmpeg.wasm)
+  retake/      # Retake — recorded-takes puzzle platformer (physics / sim / levels / render)
   instagram/   # Instagram follower tracker
   linkedin/    # LinkedIn tracker (unfinished; not on the home screen)
   components/  # shared UI + section components
