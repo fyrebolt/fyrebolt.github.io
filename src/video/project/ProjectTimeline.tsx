@@ -24,6 +24,7 @@ import type { ZoomKeyframe } from '../zoom/types';
 import { sortedZooms } from '../zoom/types';
 import type { GuideSettings, TimeSnapTarget } from '../transform/snapEngine';
 import { snapTime } from '../transform/snapEngine';
+import { clockTime } from './constants';
 import type { Marker } from './markers';
 import SpeedCurveRow from './SpeedCurveRow';
 import ClipLane from './ClipLane';
@@ -63,12 +64,9 @@ const MUSIC_COLOR = '#7ee0d3';
 
 const ROW_COLORS = ['#8be9c7', '#74b9ff', '#ffeaa7', '#ff9ff3', '#ffa07a', '#81ecec'];
 
-function fmt(sec: number): string {
-  if (!isFinite(sec) || sec < 0) sec = 0;
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
+/** The transport clock. Shared with the rest of the editor — see constants.ts
+ *  for why it rounds to the millisecond before flooring. */
+const fmt = clockTime;
 
 function clamp(min: number, max: number, v: number): number {
   return Math.max(min, Math.min(Math.max(min, max), v));
