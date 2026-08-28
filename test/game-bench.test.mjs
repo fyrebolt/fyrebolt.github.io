@@ -169,7 +169,17 @@ test('benching mid-run does not rescue the run in progress', () => {
   assert.ok(hard.length > 0, 'a bench applied after start() must not take effect until the next run');
 });
 
-/** Play one run to its end, having scored `score`. Returns the best after it. */
+/**
+ * Play one run to its end, having scored at least `score`. Returns the best
+ * after it.
+ *
+ * "At least": the score is seeded and then the run carries on to its natural
+ * end, and a stationary player still occasionally has an orb drift onto them,
+ * which banks another ten. So nothing below compares the record to the literal
+ * that was seeded — it compares it to what the honest run actually finished
+ * with. The invariant under test is that a benched run doesn't *move* the
+ * record, not that any particular number reaches it.
+ */
 function runScoring(game, { bench, score }) {
   game.benchWarps(bench);
   game.start();
@@ -186,15 +196,15 @@ test('an honest run takes the high score, and a benched one cannot', () => {
   const game = createGame(canvas, { onHud() {}, onTick() {}, onEvent() {} });
 
   const honest = runScoring(game, { bench: [], score: 500 });
-  assert.equal(honest, 500, 'a normal run should set the record');
+  assert.ok(honest >= 500, `a normal run should set the record, got ${honest}`);
   game.toMenu();
 
-  // A much better score, with four warps benched. The record must not move:
+  // A far better score, with four warps benched. The record must not move:
   // banking it would overwrite an honest best with an easier one, and leave no
   // way to tell afterwards which it was.
   const after = runScoring(game, { bench: HARD_WARPS, score: 9999 });
-  assert.equal(after, 500, 'a benched run must not overwrite the best');
-  assert.equal(localStorage.getItem('drift.best.v1'), '500');
+  assert.equal(after, honest, 'a benched run must not overwrite the best');
+  assert.equal(localStorage.getItem('drift.best.v1'), String(honest));
   game.destroy();
 });
 
@@ -204,6 +214,8 @@ test('quitting a benched run to the menu cannot bank it either', () => {
   const game = createGame(canvas, { onHud() {}, onTick() {}, onEvent() {} });
   runScoring(game, { bench: [], score: 300 });
   game.toMenu();
+  const baseline = game.state().best;
+  assert.ok(baseline >= 300, `expected an honest record to bank, got ${baseline}`);
 
   game.benchWarps(HARD_WARPS);
   game.start();
@@ -211,7 +223,7 @@ test('quitting a benched run to the menu cannot bank it either', () => {
   game.state().score = 8888;
   for (let i = 0; i < 40; i++) frame();
   game.toMenu();                       // the other door out of a run
-  assert.equal(game.state().best, 300, 'toMenu must apply the same rule as game over');
+  assert.equal(game.state().best, baseline, 'toMenu must apply the same rule as game over');
   game.destroy();
 });
 
