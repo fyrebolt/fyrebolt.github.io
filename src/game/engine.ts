@@ -9,7 +9,7 @@
 import { createPointerInput } from './pointer';
 import { sfx } from './sfx';
 import { draw, type View } from './render';
-import { WARPS, WARP_BY_ID, transformDelta, type WarpDef, type WarpId } from './warps';
+import { WARP_BY_ID, eligibleWarps, transformDelta, type WarpDef, type WarpId } from './warps';
 import { LESSONS } from './tutorial';
 import { HUNTER_GRACE } from './types';
 import type { GameState, HudSnapshot, Hunter, Orb, Vec } from './types';
@@ -66,6 +66,14 @@ export interface GameHandle {
   startTutorial(): void;
   /** Abandon whatever is running — a run or a lesson — for the title card. */
   toMenu(): void;
+  /**
+   * Keep these warps out of the scheduler's pool, from the next run onward.
+   *
+   * Deliberately not retroactive: benching mid-run would let a run in trouble
+   * be rescued by opening a console, and the warps already on screen would
+   * have to be torn down mid-flight. The set is captured by `start()`.
+   */
+  benchWarps(ids: readonly WarpId[]): void;
   pause(): void;
   /** Resume a paused run, re-acquiring pointer lock. */
   resume(): void;
@@ -93,6 +101,10 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
   let hudAt = 0;
   /** The last few warps drawn, so the scheduler doesn't repeat itself. */
   const recentWarps: WarpId[] = [];
+  /** Benched by the console; armed now, applied by the next `start()`. */
+  let benchPending: ReadonlySet<WarpId> = new Set<WarpId>();
+  /** What the run in progress is actually playing without. */
+  let benchActive: ReadonlySet<WarpId> = new Set<WarpId>();
 
   // --- Sizing ---------------------------------------------------------------
 
@@ -149,6 +161,7 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
     st.player.p = { x: view.aspect / 2, y: 0.5 };
     st.phase = 'playing';
     recentWarps.length = 0;
+    benchActive = benchPending;
     for (let i = 0; i < 3; i++) spawnOrb();
     spawnHunter();
     pointer.consume();
@@ -184,7 +197,7 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
    */
   function toMenu() {
     if (st.phase === 'menu') return;
-    if (!st.tutorial && st.score > st.best) {
+    if (!st.tutorial && banksScore() && st.score > st.best) {
       st.best = st.score;
       saveBest(st.best);
     }
@@ -194,10 +207,17 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
     pushHud(true);
   }
 
+  /**
+   * A run played with warps benched isn't the same game, so it can't hold the
+   * record. Banking it would quietly overwrite an honest best with an easier
+   * one, and there'd be no way to tell afterwards which it was.
+   */
+  const banksScore = () => benchActive.size === 0;
+
   function gameOver() {
     if (st.phase === 'over') return;
     st.phase = 'over';
-    if (st.score > st.best) {
+    if (banksScore() && st.score > st.best) {
       st.best = st.score;
       saveBest(st.best);
     }
@@ -222,6 +242,9 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
   function startTutorial() {
     Object.assign(st, freshState(st.best));
     st.aspect = view.aspect;
+    // A lesson is the real warp or it is nothing — the tutorial teaches the
+    // whole catalogue however the console has been set.
+    benchActive = new Set<WarpId>();
     st.player.p = { x: view.aspect / 2, y: LESSON_TOP / 2 };
     st.phase = 'playing';
     st.tutorial = { step: 0 };
@@ -355,12 +378,7 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
   }
 
   function pickWarp(): WarpDef | null {
-    const active = activeIds();
-    const eligible = WARPS.filter((w) => {
-      if (active.has(w.id)) return false;
-      if (w.excludes.some((x) => active.has(x))) return false;
-      return !st.warps.some((a) => WARP_BY_ID[a.id].excludes.includes(w.id));
-    });
+    const eligible = eligibleWarps(activeIds(), benchActive);
     if (!eligible.length) return null;
     const fresh = eligible.filter((w) => !recentWarps.includes(w.id));
     const pool = fresh.length ? fresh : eligible;
@@ -739,6 +757,9 @@ export function createGame(canvas: HTMLCanvasElement, opts: GameOptions): GameHa
   return {
     start,
     startTutorial,
+    benchWarps(ids: readonly WarpId[]) {
+      benchPending = new Set(ids);
+    },
     toMenu,
     pause,
     resume,
