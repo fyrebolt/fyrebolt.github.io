@@ -1,7 +1,7 @@
 {
   "account": "hastinchen",
-  "generatedAt": "2026-08-16T16:27:21.539Z",
-  "pagedAt": "2026-08-16T03:55:36.339Z",
+  "generatedAt": "2026-08-30T05:20:05.379Z",
+  "pagedAt": "2026-08-30T05:20:05.379Z",
   "sample": false,
   "schedule": {
     "hours": [
@@ -1924,29 +1924,231 @@
       "t": "2026-08-16T16:27:21.539Z",
       "followers": 913,
       "following": 871
+    },
+    {
+      "t": "2026-08-30T05:20:05.379Z",
+      "followers": 912,
+      "following": 872
     }
   ],
   "events": [
     {
-      "username": "donovanmly",
+      "username": "nartatouille",
       "kind": "unfollow",
-      "t": "2026-08-16T03:55:36.339Z",
-      "name": "Donovan Ly",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "lard",
       "dir": "out"
+    },
+    {
+      "username": "m1nattto",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Adam Xiong",
+      "dir": "out"
+    },
+    {
+      "username": "harrysdunne",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "˚₊‧꒰ა Harry ໒꒱ ‧₊˚",
+      "dir": "out"
+    },
+    {
+      "username": "hanlinzhengg",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "郑翰林",
+      "dir": "out"
+    },
+    {
+      "username": "dylanchoppin1",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Dylan Choppin",
+      "dir": "out"
+    },
+    {
+      "username": "dino_on_pointe",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Rebekah S",
+      "dir": "out"
+    },
+    {
+      "username": "1ucas_j07",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Lucas",
+      "dir": "out"
+    },
+    {
+      "username": "_clarasera_",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "˚₊‧꒰ა Clara ໒꒱ ‧₊˚",
+      "dir": "out"
+    },
+    {
+      "username": "1ucas_wj07",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Lucas",
+      "dir": "out"
+    },
+    {
+      "username": "rrebekah.7",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Rebekah S",
+      "dir": "out"
+    },
+    {
+      "username": "zihanx0712",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Adam Xiong",
+      "dir": "out"
+    },
+    {
+      "username": "nttclaa",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "nart",
+      "dir": "out"
+    },
+    {
+      "username": "henryzhenghl",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Henry Zheng",
+      "dir": "out"
+    },
+    {
+      "username": "druvative",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Druhin Bhowal",
+      "dir": "out"
+    },
+    {
+      "username": "nartatouille",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "lard"
+    },
+    {
+      "username": "m1nattto",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Adam Xiong"
+    },
+    {
+      "username": "liun09721",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "C琪."
+    },
+    {
+      "username": "kirk.l.2",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "KirkL"
+    },
+    {
+      "username": "harrysdunne",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "˚₊‧꒰ა Harry ໒꒱ ‧₊˚"
+    },
+    {
+      "username": "hanlinzhengg",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "郑翰林"
+    },
+    {
+      "username": "dylanchoppin1",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Dylan Choppin"
+    },
+    {
+      "username": "dino_on_pointe",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Rebekah S"
+    },
+    {
+      "username": "bellesnoozers",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "RAWR"
+    },
+    {
+      "username": "1ucas_j07",
+      "kind": "unfollow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Lucas"
+    },
+    {
+      "username": "_clarasera_",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "˚₊‧꒰ა Clara ໒꒱ ‧₊˚"
+    },
+    {
+      "username": "rrebekah.7",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Rebekah S"
+    },
+    {
+      "username": "henryzhenghl",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Henry Zheng"
+    },
+    {
+      "username": "zihanx0712",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Adam Xiong"
+    },
+    {
+      "username": "1ucas_wj07",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Lucas"
+    },
+    {
+      "username": "nttclaa",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "nart"
+    },
+    {
+      "username": "druvative",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "Druhin Bhowal"
+    },
+    {
+      "username": "jacubma",
+      "kind": "follow",
+      "t": "2026-08-30T05:20:05.379Z",
+      "name": "jacob"
     },
     {
       "username": "anshugl",
       "kind": "follow",
       "t": "2026-08-16T03:55:36.339Z",
-      "name": "Rajeev Goel",
-      "dir": "out"
+      "name": "Rajeev Goel"
     },
     {
       "username": "ashtnwebb",
       "kind": "follow",
       "t": "2026-08-16T03:55:36.339Z",
-      "name": "ashton",
-      "dir": "out"
+      "name": "ashton"
     },
     {
       "username": "donovanmly",
@@ -1958,27 +2160,28 @@
       "username": "ashtnwebb",
       "kind": "follow",
       "t": "2026-08-16T03:55:36.339Z",
-      "name": "ashton"
+      "name": "ashton",
+      "dir": "out"
     },
     {
       "username": "anshugl",
       "kind": "follow",
       "t": "2026-08-16T03:55:36.339Z",
-      "name": "Rajeev Goel"
+      "name": "Rajeev Goel",
+      "dir": "out"
     },
     {
-      "username": "debchsn",
+      "username": "donovanmly",
       "kind": "unfollow",
-      "t": "2026-08-12T16:31:04.995Z",
-      "name": "Debbie",
+      "t": "2026-08-16T03:55:36.339Z",
+      "name": "Donovan Ly",
       "dir": "out"
     },
     {
       "username": "debyychen",
       "kind": "follow",
       "t": "2026-08-12T16:31:04.995Z",
-      "name": "Debbie",
-      "dir": "out"
+      "name": "Debbie"
     },
     {
       "username": "debchsn",
@@ -1990,26 +2193,15 @@
       "username": "debyychen",
       "kind": "follow",
       "t": "2026-08-12T16:31:04.995Z",
-      "name": "Debbie"
-    },
-    {
-      "username": "serenapokernews",
-      "kind": "unfollow",
-      "t": "2026-08-10T18:23:41.584Z",
-      "name": "serena"
-    },
-    {
-      "username": "serenapokernews",
-      "kind": "unfollow",
-      "t": "2026-08-10T18:23:41.584Z",
-      "name": "serena",
+      "name": "Debbie",
       "dir": "out"
     },
     {
-      "username": "tuckyoong_",
+      "username": "debchsn",
       "kind": "unfollow",
-      "t": "2026-08-10T18:23:41.584Z",
-      "name": "taek"
+      "t": "2026-08-12T16:31:04.995Z",
+      "name": "Debbie",
+      "dir": "out"
     },
     {
       "username": "tuckyoong_",
@@ -2019,17 +2211,29 @@
       "dir": "out"
     },
     {
-      "username": "hackmit",
+      "username": "tuckyoong_",
       "kind": "unfollow",
-      "t": "2026-08-10T18:20:05.240Z",
-      "name": "HackMIT",
+      "t": "2026-08-10T18:23:41.584Z",
+      "name": "taek"
+    },
+    {
+      "username": "serenapokernews",
+      "kind": "unfollow",
+      "t": "2026-08-10T18:23:41.584Z",
+      "name": "serena",
       "dir": "out"
     },
     {
-      "username": "estherjhlee",
+      "username": "serenapokernews",
+      "kind": "unfollow",
+      "t": "2026-08-10T18:23:41.584Z",
+      "name": "serena"
+    },
+    {
+      "username": "corgi.insure",
       "kind": "unfollow",
       "t": "2026-08-10T18:20:05.240Z",
-      "name": "⚡️⚡️",
+      "name": "Corgi Insurance",
       "dir": "out"
     },
     {
@@ -2040,17 +2244,25 @@
       "dir": "out"
     },
     {
-      "username": "corgi.insure",
+      "username": "estherjhlee",
       "kind": "unfollow",
       "t": "2026-08-10T18:20:05.240Z",
-      "name": "Corgi Insurance",
+      "name": "⚡️⚡️",
+      "dir": "out"
+    },
+    {
+      "username": "hackmit",
+      "kind": "unfollow",
+      "t": "2026-08-10T18:20:05.240Z",
+      "name": "HackMIT",
       "dir": "out"
     },
     {
       "username": "serenastacksss",
       "kind": "follow",
       "t": "2026-08-09T00:07:56.628Z",
-      "name": "serena"
+      "name": "serena",
+      "dir": "out"
     },
     {
       "username": "angela224277",
@@ -2062,21 +2274,37 @@
       "username": "serenastacksss",
       "kind": "follow",
       "t": "2026-08-09T00:07:56.628Z",
-      "name": "serena",
-      "dir": "out"
+      "name": "serena"
+    },
+    {
+      "username": "williamleung4",
+      "kind": "follow",
+      "t": "2026-08-08T18:15:13.070Z",
+      "name": "William Leung"
+    },
+    {
+      "username": "acaeducate",
+      "kind": "follow",
+      "t": "2026-08-08T18:15:13.070Z",
+      "name": "ACA Education x Community"
     },
     {
       "username": "sunnyxanand",
       "kind": "follow",
       "t": "2026-08-08T18:15:13.070Z",
-      "name": "🪬",
-      "dir": "out"
+      "name": "🪬"
     },
     {
       "username": "taek_kty",
       "kind": "follow",
       "t": "2026-08-08T18:15:13.070Z",
-      "name": "taek",
+      "name": "taek"
+    },
+    {
+      "username": "acaeducate",
+      "kind": "follow",
+      "t": "2026-08-08T18:15:13.070Z",
+      "name": "ACA Education x Community",
       "dir": "out"
     },
     {
@@ -2087,41 +2315,18 @@
       "dir": "out"
     },
     {
-      "username": "acaeducate",
-      "kind": "follow",
-      "t": "2026-08-08T18:15:13.070Z",
-      "name": "ACA Education x Community",
-      "dir": "out"
-    },
-    {
       "username": "taek_kty",
       "kind": "follow",
       "t": "2026-08-08T18:15:13.070Z",
-      "name": "taek"
+      "name": "taek",
+      "dir": "out"
     },
     {
       "username": "sunnyxanand",
       "kind": "follow",
       "t": "2026-08-08T18:15:13.070Z",
-      "name": "🪬"
-    },
-    {
-      "username": "acaeducate",
-      "kind": "follow",
-      "t": "2026-08-08T18:15:13.070Z",
-      "name": "ACA Education x Community"
-    },
-    {
-      "username": "williamleung4",
-      "kind": "follow",
-      "t": "2026-08-08T18:15:13.070Z",
-      "name": "William Leung"
-    },
-    {
-      "username": "sunnyxanand",
-      "kind": "unfollow",
-      "t": "2026-08-07T18:31:05.839Z",
-      "name": "🪬"
+      "name": "🪬",
+      "dir": "out"
     },
     {
       "username": "sunnyxanand",
@@ -2131,16 +2336,10 @@
       "dir": "out"
     },
     {
-      "username": "angela224277",
-      "kind": "follow",
-      "t": "2026-08-06T16:20:05.445Z",
-      "name": "Angela Bulk"
-    },
-    {
-      "username": "tony_fabrizio_",
-      "kind": "follow",
-      "t": "2026-08-06T16:20:05.445Z",
-      "name": "tony"
+      "username": "sunnyxanand",
+      "kind": "unfollow",
+      "t": "2026-08-07T18:31:05.839Z",
+      "name": "🪬"
     },
     {
       "username": "tony_fabrizio_",
@@ -2150,17 +2349,16 @@
       "dir": "out"
     },
     {
-      "username": "logangsta_spams",
-      "kind": "unfollow",
-      "t": "2026-08-05T16:23:35.261Z",
-      "name": "Logan T"
+      "username": "tony_fabrizio_",
+      "kind": "follow",
+      "t": "2026-08-06T16:20:05.445Z",
+      "name": "tony"
     },
     {
-      "username": "logangsta_spams",
-      "kind": "unfollow",
-      "t": "2026-08-05T16:23:35.261Z",
-      "name": "Logan T",
-      "dir": "out"
+      "username": "angela224277",
+      "kind": "follow",
+      "t": "2026-08-06T16:20:05.445Z",
+      "name": "Angela Bulk"
     },
     {
       "username": "quantprof_dot_org",
@@ -2170,11 +2368,17 @@
       "dir": "out"
     },
     {
-      "username": "tony_fabrizio_",
+      "username": "logangsta_spams",
       "kind": "unfollow",
-      "t": "2026-08-05T16:20:05.538Z",
-      "name": "tony",
+      "t": "2026-08-05T16:23:35.261Z",
+      "name": "Logan T",
       "dir": "out"
+    },
+    {
+      "username": "logangsta_spams",
+      "kind": "unfollow",
+      "t": "2026-08-05T16:23:35.261Z",
+      "name": "Logan T"
     },
     {
       "username": "tony_fabrizio_",
@@ -2183,65 +2387,89 @@
       "name": "tony"
     },
     {
+      "username": "tony_fabrizio_",
+      "kind": "unfollow",
+      "t": "2026-08-05T16:20:05.538Z",
+      "name": "tony",
+      "dir": "out"
+    },
+    {
       "username": "estherjhlee",
       "kind": "unfollow",
       "t": "2026-08-04T18:52:13.923Z",
       "name": "⚡️⚡️"
     },
     {
-      "username": "ownyourpage.co",
-      "kind": "unfollow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Logan Thomas",
-      "dir": "out"
-    },
-    {
-      "username": "ashtnwebb",
-      "kind": "unfollow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "ashton",
-      "dir": "out"
-    },
-    {
-      "username": "alexthepear",
+      "username": "rushil.arun",
       "kind": "follow",
       "t": "2026-08-04T05:34:19.605Z",
-      "name": "Alexander Peras",
-      "dir": "out"
+      "name": "Rushil Arun"
+    },
+    {
+      "username": "thewizardjoey",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "joey"
     },
     {
       "username": "gryffinnlol",
       "kind": "follow",
       "t": "2026-08-04T05:34:19.605Z",
-      "name": "Gryffinn",
-      "dir": "out"
+      "name": "Gryffinn"
     },
     {
-      "username": "hrite5h",
+      "username": "alexthepear",
       "kind": "follow",
       "t": "2026-08-04T05:34:19.605Z",
-      "name": "Hritesh",
-      "dir": "out"
-    },
-    {
-      "username": "sis.seren",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "sören ♡̶",
-      "dir": "out"
-    },
-    {
-      "username": "t1mmy_01",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Timothy",
-      "dir": "out"
+      "name": "Alexander Peras"
     },
     {
       "username": "loganthomas_music",
       "kind": "follow",
       "t": "2026-08-04T05:34:19.605Z",
-      "name": "Logan Thomas",
+      "name": "Logan Thomas"
+    },
+    {
+      "username": "sis.seren",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "sören ♡̶"
+    },
+    {
+      "username": "hrite5h",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Hritesh"
+    },
+    {
+      "username": "t1mmy_01",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Timothy"
+    },
+    {
+      "username": "aaronkpropst",
+      "kind": "unfollow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Aaron Propst"
+    },
+    {
+      "username": "ashtnwebb",
+      "kind": "unfollow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "ashton"
+    },
+    {
+      "username": "edwardkim459",
+      "kind": "unfollow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Edward Kim / working job"
+    },
+    {
+      "username": "rushil.arun",
+      "kind": "follow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Rushil Arun",
       "dir": "out"
     },
     {
@@ -2252,83 +2480,60 @@
       "dir": "out"
     },
     {
-      "username": "rushil.arun",
+      "username": "loganthomas_music",
       "kind": "follow",
       "t": "2026-08-04T05:34:19.605Z",
-      "name": "Rushil Arun",
+      "name": "Logan Thomas",
       "dir": "out"
-    },
-    {
-      "username": "edwardkim459",
-      "kind": "unfollow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Edward Kim / working job"
-    },
-    {
-      "username": "ashtnwebb",
-      "kind": "unfollow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "ashton"
-    },
-    {
-      "username": "aaronkpropst",
-      "kind": "unfollow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Aaron Propst"
     },
     {
       "username": "t1mmy_01",
       "kind": "follow",
       "t": "2026-08-04T05:34:19.605Z",
-      "name": "Timothy"
-    },
-    {
-      "username": "hrite5h",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Hritesh"
+      "name": "Timothy",
+      "dir": "out"
     },
     {
       "username": "sis.seren",
       "kind": "follow",
       "t": "2026-08-04T05:34:19.605Z",
-      "name": "sören ♡̶"
+      "name": "sören ♡̶",
+      "dir": "out"
     },
     {
-      "username": "loganthomas_music",
+      "username": "hrite5h",
       "kind": "follow",
       "t": "2026-08-04T05:34:19.605Z",
-      "name": "Logan Thomas"
-    },
-    {
-      "username": "alexthepear",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Alexander Peras"
+      "name": "Hritesh",
+      "dir": "out"
     },
     {
       "username": "gryffinnlol",
       "kind": "follow",
       "t": "2026-08-04T05:34:19.605Z",
-      "name": "Gryffinn"
+      "name": "Gryffinn",
+      "dir": "out"
     },
     {
-      "username": "thewizardjoey",
+      "username": "alexthepear",
       "kind": "follow",
       "t": "2026-08-04T05:34:19.605Z",
-      "name": "joey"
+      "name": "Alexander Peras",
+      "dir": "out"
     },
     {
-      "username": "rushil.arun",
-      "kind": "follow",
-      "t": "2026-08-04T05:34:19.605Z",
-      "name": "Rushil Arun"
-    },
-    {
-      "username": "t1mmy_01",
+      "username": "ashtnwebb",
       "kind": "unfollow",
-      "t": "2026-07-31T16:20:32.049Z",
-      "name": "Timothy"
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "ashton",
+      "dir": "out"
+    },
+    {
+      "username": "ownyourpage.co",
+      "kind": "unfollow",
+      "t": "2026-08-04T05:34:19.605Z",
+      "name": "Logan Thomas",
+      "dir": "out"
     },
     {
       "username": "t1mmy_01",
@@ -2336,6 +2541,12 @@
       "t": "2026-07-31T16:20:32.049Z",
       "name": "Timothy",
       "dir": "out"
+    },
+    {
+      "username": "t1mmy_01",
+      "kind": "unfollow",
+      "t": "2026-07-31T16:20:32.049Z",
+      "name": "Timothy"
     },
     {
       "username": "hrite5h",
@@ -2446,6 +2657,11 @@
       "since": "2026-02-07T15:01:28.000Z"
     },
     {
+      "username": "_clarasera_",
+      "name": "˚₊‧꒰ა Clara ໒꒱ ‧₊˚",
+      "since": "2026-08-30T05:20:05.379Z"
+    },
+    {
       "username": "_cwong__",
       "name": "Catherine Wong",
       "private": true,
@@ -2553,16 +2769,21 @@
       "since": "2026-02-20T04:52:15.000Z"
     },
     {
-      "username": "1ucas_j07",
+      "username": "1ucas_wj07",
       "name": "Lucas",
       "private": true,
-      "since": "2025-09-07T16:43:28.000Z"
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "2007parampatel",
       "name": "Param Patel",
       "private": true,
       "since": "2024-11-21T00:41:08.000Z"
+    },
+    {
+      "username": "2030_ucla",
+      "name": "OFFICIAL UCLA Class of 2030 🔵🟡",
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "22dot2",
@@ -2894,6 +3115,7 @@
     {
       "username": "alexx.nnguyen",
       "name": "Alex Nguyen",
+      "private": true,
       "since": "2026-04-25T00:13:36.000Z"
     },
     {
@@ -3115,6 +3337,7 @@
     },
     {
       "username": "antoun._.kha",
+      "private": true,
       "since": "2023-08-31T15:24:32.000Z"
     },
     {
@@ -3316,12 +3539,6 @@
       "since": "2026-02-20T19:17:14.000Z"
     },
     {
-      "username": "bellesnoozers",
-      "name": "RAWR",
-      "private": true,
-      "since": "2025-05-26T01:58:40.000Z"
-    },
-    {
       "username": "belleyyy_yip",
       "name": "bel",
       "private": true,
@@ -3364,7 +3581,6 @@
     {
       "username": "bhargavkotama",
       "name": "bhargav",
-      "private": true,
       "since": "2026-03-31T02:45:50.000Z"
     },
     {
@@ -3836,7 +4052,6 @@
     {
       "username": "derekliangg",
       "name": "Derek",
-      "private": true,
       "since": "2026-04-26T04:34:30.000Z"
     },
     {
@@ -3892,12 +4107,6 @@
       "since": "2026-01-26T23:15:36.000Z"
     },
     {
-      "username": "dino_on_pointe",
-      "name": "Rebekah S",
-      "private": true,
-      "since": "2024-05-02T03:58:45.000Z"
-    },
-    {
       "username": "divyaramu05",
       "name": "Divya",
       "private": true,
@@ -3936,6 +4145,12 @@
       "username": "dongasaur",
       "private": true,
       "since": "2026-02-23T08:48:59.000Z"
+    },
+    {
+      "username": "druvative",
+      "name": "Druhin Bhowal",
+      "private": true,
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "dspalumni_betagamma",
@@ -3981,12 +4196,6 @@
       "name": "Dylan",
       "private": true,
       "since": "2026-03-04T05:07:18.000Z"
-    },
-    {
-      "username": "dylanchoppin1",
-      "name": "Dylan Choppin",
-      "private": true,
-      "since": "2025-09-29T12:00:32.000Z"
     },
     {
       "username": "e_mongooose",
@@ -4152,7 +4361,6 @@
     {
       "username": "ethaantam12",
       "name": "Ethan Tam",
-      "private": true,
       "since": "2026-04-24T01:29:09.000Z"
     },
     {
@@ -4185,7 +4393,6 @@
     {
       "username": "evan__mathews_",
       "name": "Evan",
-      "private": true,
       "since": "2023-10-18T19:47:33.000Z"
     },
     {
@@ -4239,7 +4446,7 @@
     },
     {
       "username": "fraire.23",
-      "name": "Mortal Man 𓅊",
+      "name": "SΑβΙΝО𓅊",
       "since": "2025-12-24T00:01:15.000Z"
     },
     {
@@ -4386,12 +4593,6 @@
       "since": "2025-02-02T20:32:34.000Z"
     },
     {
-      "username": "hanlinzhengg",
-      "name": "郑翰林",
-      "private": true,
-      "since": "2025-04-13T23:10:22.000Z"
-    },
-    {
       "username": "hansoo046",
       "name": "🌼",
       "private": true,
@@ -4401,11 +4602,6 @@
       "username": "harkermusiccreation",
       "name": "Harker Music Creation Club",
       "since": "2024-09-10T03:49:10.000Z"
-    },
-    {
-      "username": "harrysdunne",
-      "name": "˚₊‧꒰ა Harry ໒꒱ ‧₊˚",
-      "since": "2023-11-12T20:53:12.000Z"
     },
     {
       "username": "harryzheng512",
@@ -4447,6 +4643,11 @@
       "name": "Henry Wei",
       "private": true,
       "since": "2025-10-18T02:48:37.000Z"
+    },
+    {
+      "username": "henryzhenghl",
+      "name": "Henry Zheng",
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "here.lyz.ane",
@@ -4650,7 +4851,7 @@
     },
     {
       "username": "jacky.caao",
-      "name": "jacky cao",
+      "name": "jacky",
       "private": true,
       "since": "2025-10-17T04:06:33.000Z"
     },
@@ -4671,6 +4872,11 @@
       "name": "Jacob Horne",
       "private": true,
       "since": "2023-08-02T16:01:52.000Z"
+    },
+    {
+      "username": "jacubma",
+      "name": "jacob",
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "jadapascual6",
@@ -4782,6 +4988,7 @@
     {
       "username": "jay_jh7",
       "name": "jj",
+      "private": true,
       "since": "2024-09-23T06:48:53.000Z"
     },
     {
@@ -4908,6 +5115,7 @@
     {
       "username": "jolie._.bw",
       "name": "jolie",
+      "private": true,
       "since": "2025-10-17T22:15:29.000Z"
     },
     {
@@ -5205,12 +5413,6 @@
       "since": "2023-07-29T06:00:13.000Z"
     },
     {
-      "username": "kirk.l.2",
-      "name": "KirkL",
-      "private": true,
-      "since": "2025-04-30T03:32:32.000Z"
-    },
-    {
       "username": "kiwimiho_",
       "name": "Summer Shen",
       "private": true,
@@ -5264,7 +5466,7 @@
     },
     {
       "username": "kylee_grandov",
-      "name": "kylee ann",
+      "name": "Kylee Ann",
       "since": "2025-01-16T03:27:50.000Z"
     },
     {
@@ -5379,11 +5581,6 @@
       "since": "2023-09-03T23:10:30.000Z"
     },
     {
-      "username": "liun09721",
-      "name": "C琪.",
-      "since": "2025-05-10T04:05:10.000Z"
-    },
-    {
       "username": "liv.iapark",
       "name": "liv",
       "since": "2025-06-27T03:47:29.000Z"
@@ -5397,6 +5594,7 @@
     {
       "username": "lix.arn",
       "name": "Jayden Lin",
+      "private": true,
       "since": "2025-09-03T23:04:24.000Z"
     },
     {
@@ -5470,12 +5668,6 @@
       "name": "Mia | 서연 🍓",
       "verified": true,
       "since": "2026-05-10T16:31:42.000Z"
-    },
-    {
-      "username": "m1nattto",
-      "name": "Adam Xiong",
-      "private": true,
-      "since": "2025-09-07T02:01:09.000Z"
     },
     {
       "username": "mainquestsucla",
@@ -5786,11 +5978,6 @@
       "since": "2026-01-13T00:38:54.000Z"
     },
     {
-      "username": "nartatouille",
-      "name": "lard",
-      "since": "2026-06-26T06:14:30.000Z"
-    },
-    {
       "username": "natalie.nngo",
       "name": "natalie",
       "private": true,
@@ -5946,6 +6133,11 @@
       "username": "not_aarnav_",
       "name": "Aarnav",
       "since": "2026-02-08T00:07:57.000Z"
+    },
+    {
+      "username": "nttclaa",
+      "name": "nart",
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "nuribaxamusa",
@@ -6253,7 +6445,6 @@
     {
       "username": "rolandyangg",
       "name": "roland 楊",
-      "private": true,
       "since": "2025-10-12T02:46:12.000Z"
     },
     {
@@ -6271,6 +6462,12 @@
       "name": "Roy Jeong",
       "private": true,
       "since": "2026-04-25T01:24:37.000Z"
+    },
+    {
+      "username": "rrebekah.7",
+      "name": "Rebekah S",
+      "private": true,
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "rrichardli_",
@@ -6436,7 +6633,7 @@
     },
     {
       "username": "samhitamk",
-      "name": "Samhita",
+      "name": "Sam",
       "private": true,
       "since": "2025-10-18T19:02:11.000Z"
     },
@@ -6780,6 +6977,7 @@
     {
       "username": "studios.xin",
       "name": "yuxin ⊹₊⟡",
+      "verified": true,
       "since": "2026-06-10T21:22:16.000Z"
     },
     {
@@ -7391,8 +7589,6 @@
     },
     {
       "username": "zayfouur",
-      "name": "zay",
-      "private": true,
       "since": "2025-09-29T17:51:23.000Z"
     },
     {
@@ -7416,6 +7612,12 @@
       "name": "Ziad Mohammed",
       "private": true,
       "since": "2023-09-24T03:54:14.000Z"
+    },
+    {
+      "username": "zihanx0712",
+      "name": "Adam Xiong",
+      "private": true,
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "zoy.ailou",
@@ -7508,6 +7710,11 @@
       "name": "Billy Phan",
       "private": true,
       "since": "2025-02-03T09:25:55.000Z"
+    },
+    {
+      "username": "_clarasera_",
+      "name": "˚₊‧꒰ა Clara ໒꒱ ‧₊˚",
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "_cwong__",
@@ -7612,10 +7819,10 @@
       "since": "2026-02-20T04:51:49.000Z"
     },
     {
-      "username": "1ucas_j07",
+      "username": "1ucas_wj07",
       "name": "Lucas",
       "private": true,
-      "since": "2025-09-07T16:43:29.000Z"
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "2007parampatel",
@@ -7947,6 +8154,7 @@
     {
       "username": "alexx.nnguyen",
       "name": "Alex Nguyen",
+      "private": true,
       "since": "2026-04-25T00:17:51.000Z"
     },
     {
@@ -8152,6 +8360,7 @@
     },
     {
       "username": "antoun._.kha",
+      "private": true,
       "since": "2023-08-30T04:58:13.000Z"
     },
     {
@@ -8446,6 +8655,11 @@
       "since": "2026-01-08T10:19:46.000Z"
     },
     {
+      "username": "bruinbash",
+      "name": "bruin bash @ ucla",
+      "since": "2026-08-30T05:20:05.379Z"
+    },
+    {
       "username": "bruinconsulting",
       "name": "Bruin Consulting",
       "since": "2025-12-31T03:15:41.000Z"
@@ -8482,7 +8696,7 @@
     },
     {
       "username": "bruinsupermileage",
-      "name": "Bruin Supermileage",
+      "name": "Bruin Supermileage @ UCLA",
       "since": "2026-01-08T10:20:00.000Z"
     },
     {
@@ -8909,7 +9123,6 @@
     {
       "username": "derekliangg",
       "name": "Derek",
-      "private": true,
       "since": "2026-04-26T04:34:30.000Z"
     },
     {
@@ -8948,12 +9161,6 @@
       "username": "diegosilva90_",
       "name": "Diego Silva",
       "since": "2024-08-31T06:23:43.000Z"
-    },
-    {
-      "username": "dino_on_pointe",
-      "name": "Rebekah S",
-      "private": true,
-      "since": "2024-05-02T04:51:09.000Z"
     },
     {
       "username": "divyaramu05",
@@ -8996,6 +9203,12 @@
       "since": "2026-02-23T08:49:15.000Z"
     },
     {
+      "username": "druvative",
+      "name": "Druhin Bhowal",
+      "private": true,
+      "since": "2026-08-30T05:20:05.379Z"
+    },
+    {
       "username": "dspalumni_betagamma",
       "name": "𝚫𝚺𝚽 - Beta Gamma Alumni",
       "private": true,
@@ -9034,12 +9247,6 @@
       "name": "Dylan",
       "private": true,
       "since": "2026-03-04T20:52:02.000Z"
-    },
-    {
-      "username": "dylanchoppin1",
-      "name": "Dylan Choppin",
-      "private": true,
-      "since": "2025-09-30T22:08:31.000Z"
     },
     {
       "username": "e_mongooose",
@@ -9190,7 +9397,6 @@
     {
       "username": "ethaantam12",
       "name": "Ethan Tam",
-      "private": true,
       "since": "2026-04-24T01:29:07.000Z"
     },
     {
@@ -9218,7 +9424,6 @@
     {
       "username": "evan__mathews_",
       "name": "Evan",
-      "private": true,
       "since": "2023-10-20T01:58:30.000Z"
     },
     {
@@ -9272,7 +9477,7 @@
     },
     {
       "username": "fraire.23",
-      "name": "Mortal Man 𓅊",
+      "name": "SΑβΙΝО𓅊",
       "since": "2025-12-24T00:01:05.000Z"
     },
     {
@@ -9384,21 +9589,10 @@
       "since": "2025-02-03T00:27:31.000Z"
     },
     {
-      "username": "hanlinzhengg",
-      "name": "郑翰林",
-      "private": true,
-      "since": "2025-04-13T23:10:28.000Z"
-    },
-    {
       "username": "hanseny_11",
       "name": "杨瀚森Yang Hansen",
       "verified": true,
       "since": "2025-06-29T15:13:35.000Z"
-    },
-    {
-      "username": "harrysdunne",
-      "name": "˚₊‧꒰ა Harry ໒꒱ ‧₊˚",
-      "since": "2023-11-12T20:53:10.000Z"
     },
     {
       "username": "harryzheng512",
@@ -9440,6 +9634,11 @@
       "name": "Henry Wei",
       "private": true,
       "since": "2025-10-18T02:48:38.000Z"
+    },
+    {
+      "username": "henryzhenghl",
+      "name": "Henry Zheng",
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "here.lyz.ane",
@@ -9631,7 +9830,7 @@
     },
     {
       "username": "jacky.caao",
-      "name": "jacky cao",
+      "name": "jacky",
       "private": true,
       "since": "2025-10-17T04:06:33.000Z"
     },
@@ -9753,6 +9952,7 @@
     {
       "username": "jay_jh7",
       "name": "jj",
+      "private": true,
       "since": "2024-09-23T05:56:23.000Z"
     },
     {
@@ -9879,6 +10079,7 @@
     {
       "username": "jolie._.bw",
       "name": "jolie",
+      "private": true,
       "since": "2025-10-17T22:15:29.000Z"
     },
     {
@@ -10190,7 +10391,7 @@
     },
     {
       "username": "kylee_grandov",
-      "name": "kylee ann",
+      "name": "Kylee Ann",
       "since": "2025-01-16T03:27:47.000Z"
     },
     {
@@ -10312,6 +10513,7 @@
     {
       "username": "lix.arn",
       "name": "Jayden Lin",
+      "private": true,
       "since": "2026-04-18T07:53:13.000Z"
     },
     {
@@ -10368,12 +10570,6 @@
       "username": "lyzane.wang",
       "name": "lyzane",
       "since": "2025-10-23T16:19:26.000Z"
-    },
-    {
-      "username": "m1nattto",
-      "name": "Adam Xiong",
-      "private": true,
-      "since": "2025-09-07T02:08:31.000Z"
     },
     {
       "username": "mandascai",
@@ -10663,11 +10859,6 @@
       "since": "2026-01-13T00:38:48.000Z"
     },
     {
-      "username": "nartatouille",
-      "name": "lard",
-      "since": "2026-06-21T22:15:19.000Z"
-    },
-    {
       "username": "natalie.nngo",
       "name": "natalie",
       "private": true,
@@ -10822,6 +11013,11 @@
       "username": "nsdcucla",
       "name": "National Student Data Corps at UCLA",
       "since": "2026-01-25T04:34:17.000Z"
+    },
+    {
+      "username": "nttclaa",
+      "name": "nart",
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "nuribaxamusa",
@@ -11094,7 +11290,6 @@
     {
       "username": "rolandyangg",
       "name": "roland 楊",
-      "private": true,
       "since": "2025-10-12T02:46:11.000Z"
     },
     {
@@ -11112,6 +11307,12 @@
       "name": "Roy Jeong",
       "private": true,
       "since": "2026-04-25T01:24:35.000Z"
+    },
+    {
+      "username": "rrebekah.7",
+      "name": "Rebekah S",
+      "private": true,
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "rrichardli_",
@@ -11267,7 +11468,7 @@
     },
     {
       "username": "samhitamk",
-      "name": "Samhita",
+      "name": "Sam",
       "private": true,
       "since": "2025-10-18T19:02:10.000Z"
     },
@@ -11458,8 +11659,7 @@
     {
       "username": "solomons6927",
       "name": "Solomon",
-      "since": "2026-07-30T16:55:40.095Z",
-      "missing": 1
+      "since": "2026-07-30T16:55:40.095Z"
     },
     {
       "username": "sonsynewt",
@@ -11595,6 +11795,7 @@
     {
       "username": "studios.xin",
       "name": "yuxin ⊹₊⟡",
+      "verified": true,
       "since": "2026-06-11T20:26:35.000Z"
     },
     {
@@ -12233,8 +12434,6 @@
     },
     {
       "username": "zayfouur",
-      "name": "zay",
-      "private": true,
       "since": "2025-09-29T18:25:00.000Z"
     },
     {
@@ -12263,6 +12462,12 @@
       "name": "Ziad Mohammed",
       "private": true,
       "since": "2023-09-24T03:54:12.000Z"
+    },
+    {
+      "username": "zihanx0712",
+      "name": "Adam Xiong",
+      "private": true,
+      "since": "2026-08-30T05:20:05.379Z"
     },
     {
       "username": "zoy.ailou",
